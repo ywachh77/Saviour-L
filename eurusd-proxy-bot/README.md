@@ -104,7 +104,7 @@ ingest ──▶ data gate ──▶ features ──▶ regime ──▶ strateg
 | A scalp that cannot pay its own spread stays quiet | `charter.scalp_cost_ok`, `tests/test_scalping.py` |
 | The replay learns the council as the live bot does | `backtest.run_backtest`, `tests/test_backtest.py` |
 
-Run `python -m unittest discover -s tests -t .` — 266 tests. If one fails, the
+Run `python -m unittest discover -s tests -t .` — 285 tests. If one fails, the
 charter is broken; do not ship it.
 
 ---
@@ -271,6 +271,28 @@ keys **you have legitimately provisioned**. The pool reserves quota before each
 HTTP call, refunds on network failure, cools a key down on HTTP 429, disables it
 on 401/403, and reports exhaustion honestly instead of looping.
 
+### Adding keys
+
+Do not hand-edit thirty lines — use the helper:
+
+```bash
+python scripts/set_keys.py              # paste keys, one per line, blank line to finish
+python scripts/set_keys.py keys.txt     # or point it at a file
+python scripts/set_keys.py --show       # what is configured, masked
+python scripts/set_keys.py --clear      # remove every key
+```
+
+It de-duplicates, caps at 30, rewrites only the Twelve Data block (your Supabase
+and Telegram lines are untouched), and chmods `.env` to owner-only. It never
+prints a key in full — `--show` and the summary both use masked labels. Running
+it repeatedly is safe; the block is replaced, not appended.
+
+With 30 keys at the free tier's 8 credits/minute the pool has ~240 req/min of
+headroom. That is capacity, not accuracy: more keys raise your rate limit, they
+do not make the strategy profitable.
+
+If you rotate keys, push them to Actions afterwards with `./scripts/push_secrets.sh`.
+
 Deliberately **not** supported: registering multiple free accounts to work
 around a provider's rate limit. That breaks the provider's terms and gets keys
 banned. One free key gives 8 credits/minute, which is far more than one pair on
@@ -349,6 +371,7 @@ eurusd-proxy-bot/
 │   ├── fallback.py          Actions stand-in, heartbeat-gated
 │   ├── backtest.py          purged walk-forward replay of the full system
 │   ├── backfill.py          history import (BACKFILL=1, env-flagged on purpose)
+│   ├── set_keys.py          add/replace the Twelve Data keys in .env
 │   └── termux_boot.sh       optional auto-start + restart-on-crash for Termux
 ├── docs/
 │   ├── FUSION_BOT_BLUEPRINT.md   architecture record: why each piece exists
@@ -356,7 +379,7 @@ eurusd-proxy-bot/
 ├── supabase/migrations/     0001_init.sql — 13 tables, RLS on all
 │                            0002_add_missing_columns.sql — runtime columns
 ├── .github/workflows/       tests.yml, nightly.yml, fallback.yml
-└── tests/                   266 tests, many of them charter guards
+└── tests/                   285 tests, many of them charter guards
 ```
 
 ## Useful extras
