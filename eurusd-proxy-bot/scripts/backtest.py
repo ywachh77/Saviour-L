@@ -92,6 +92,14 @@ def main(argv: list[str]) -> int:
               f"{fold['wins']}W/{fold['losses']}L, net {fold['net_pips']:+.1f} pips")
 
     print()
+    if payload["learned_weights"]:
+        print("  prototypes that earned a voice")
+        for name, weight in sorted(payload["learned_weights"].items(), key=lambda item: -item[1]):
+            print(f"    {name:24s} {weight:.3f}")
+    else:
+        print("  no prototype earned a voice — the core gate decided alone throughout.")
+
+    print()
     print("  " + payload["note"])
     print()
     if payload["signals"] < MIN_SIGNALS_FOR_A_VIEW:

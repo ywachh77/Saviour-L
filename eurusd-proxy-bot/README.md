@@ -65,14 +65,17 @@ ingest ──▶ data gate ──▶ features ──▶ regime ──▶ strateg
 1. **Data gate** — refuse to reason about data that is stale (>180 s), gappy, or
    too wide. A blocked bar is reported, not hidden.
 2. **Features** — EMA, RSI, ADX/±DI, ATR, momentum, candle quality, breakout
-   distance. Computed from completed candles only; tests prove there is no
-   look-ahead.
+   distance, plus scalping microstructure (5-bar range, range compression, body
+   ratio, signed impulse, stochastic, CCI, distance from VWAP). Computed from
+   completed candles only; tests prove there is no look-ahead.
 3. **Regime** — TREND / RANGE / VOLATILE, which decides which prototype
-   families are allowed to speak.
+   families are allowed to speak. Continuation scalps sit out a range;
+   reversion scalps sit out a trend or a volatility spike.
 4. **Strategy council** — the core 6-check gate decides whether there is a
    signal. Prototypes start silent (weight 0) and only earn a voice after 30
    real settled outcomes. Learned prototypes can **veto** the core, never
-   outvote it.
+   outvote it. The scalping members are prototypes too, so they can never start
+   trading before live data proves them.
 5. **Meta-model** — a prequential online logistic model. In `VETO` mode (the
    default) it can only block. Nightly walk-forward gates can promote it to
    `ADVISORY`, where agreement is also required. It never creates a signal.
@@ -98,9 +101,56 @@ ingest ──▶ data gate ──▶ features ──▶ regime ──▶ strateg
 | RLS on all 13 Supabase tables | `supabase/migrations/` |
 | A win rate always travels with its Wilson interval | `digest.py`, `tests/test_digest.py` |
 | Bot payloads and the SQL schema cannot drift apart | `tests/test_schema_contract.py` |
+| A scalp that cannot pay its own spread stays quiet | `charter.scalp_cost_ok`, `tests/test_scalping.py` |
+| The replay learns the council as the live bot does | `backtest.run_backtest`, `tests/test_backtest.py` |
 
-Run `python -m unittest discover -s tests -t .` — 234 tests. If one fails, the
+Run `python -m unittest discover -s tests -t .` — 266 tests. If one fails, the
 charter is broken; do not ship it.
+
+---
+
+## Scalping
+
+Six scalping methods are wired in, and they come in through **both** doors.
+
+**Into the prediction engine.** The model used 24 inputs. It now uses 32. The
+eight new ones describe things a scalp actually lives on: 5-bar range, range
+compression, body ratio, signed impulse, stochastic %K/%D, CCI, and distance
+from VWAP. Bumping `FEATURE_VERSION` to 4 invalidates any stored model rather
+than letting it be silently reinterpreted, so the next nightly refits from
+scratch.
+
+**Into the strategy council**, as six new prototypes:
+
+| Member | Idea |
+|---|---|
+| `scalp_impulse` | Body covers half an ATR and closes on its extreme — continuation |
+| `scalp_reversion` | CCI and stochastic both stretched, and %K has turned back |
+| `scalp_micro_breakout` | Close escapes a *tight* 5-bar box |
+| `scalp_stoch_cross` | Fresh stochastic cross that agrees with the EMA trend |
+| `scalp_vwap_reversion` | Price stretched from VWAP and this bar is already closing back |
+| `scalp_pivot_fade` | 5-bar pivot swept, then rejected back inside |
+
+Two mechanisms keep them honest.
+
+**A cost floor.** Scalping is where the spread does the most damage — a 4-pip
+scalp keeps 2.8 pips, and the same 4 pips is noise on a swing trade. So a
+scalping member refuses to speak unless the bar's ATR projects a gross move of
+at least `SCALP_MIN_REWARD_TO_COST` (1.5×) the spread. On a normal 1.2-pip
+spread that means roughly 3.6 pips of ATR. Widening the spread to 4 pips
+silences the entire family.
+
+**They are prototypes, not core.** A scalping rule cannot create a signal. It
+sits at weight 0 until learning has seen 30 real, cost-charged outcomes for it,
+is capped at 0.30, and can only veto the core when the opposition mass passes
+0.35. An unproven scalp therefore cannot start trading on its own no matter how
+good it looks on paper.
+
+On the synthetic replay they behaved exactly that way: `scalp_impulse` became
+the highest-weighted learned rule at 0.169, and the family's combined mass never
+reached the veto threshold, so it changed no signal. That is the design working,
+not a shortfall — but it also means **no scalping rule here has been shown to
+make money**, and on this synthetic history nothing does.
 
 ### Measuring whether it actually works
 
@@ -272,6 +322,11 @@ eurusd-proxy-bot/
 │   ├── charter.py           the rules, as executable constants
 │   ├── engine.py            the per-minute pipeline
 │   ├── council.py           core gate + learned prototypes
+│   ├── strategies.py        the rule sets, including the core 6-check gate
+│   ├── scalping.py          six scalping members + the spread cost floor
+│   ├── features.py          32 model inputs + strategy-facing indicator levels
+│   ├── indicators.py        EMA/RSI/ATR/ADX/stochastic/CCI/VWAP, no look-ahead
+│   ├── regime.py            TREND / RANGE / VOLATILE gating
 │   ├── model.py             prequential logistic + bootstrap ensemble
 │   ├── backtest.py          purged walk-forward replay of the gated system
 │   ├── calibration.py       isotonic (PAVA) calibration
@@ -301,7 +356,7 @@ eurusd-proxy-bot/
 ├── supabase/migrations/     0001_init.sql — 13 tables, RLS on all
 │                            0002_add_missing_columns.sql — runtime columns
 ├── .github/workflows/       tests.yml, nightly.yml, fallback.yml
-└── tests/                   234 tests, many of them charter guards
+└── tests/                   266 tests, many of them charter guards
 ```
 
 ## Useful extras

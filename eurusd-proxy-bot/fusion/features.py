@@ -14,10 +14,35 @@ from __future__ import annotations
 import math
 from typing import Sequence
 
+from . import charter
 from .domain import Candle
-from .indicators import adx, atr, autocorrelation, ema, mean, median, pstdev, rolling_std, rsi, streak
+from .indicators import (
+    adx,
+    atr,
+    autocorrelation,
+    cci,
+    ema,
+    mean,
+    median,
+    pstdev,
+    rolling_std,
+    rsi,
+    stochastic,
+    streak,
+    vwap,
+)
 
-FEATURE_VERSION = 3
+# Scalping needs a rolling "fair value" anchor. 30 one-minute bars is half an
+# hour — long enough to mean something, short enough to still be a scalp.
+VWAP_PERIOD = 30
+STOCH_PERIOD = 14
+STOCH_SMOOTH = 3
+CCI_PERIOD = 20
+# How many bars back a scalping "micro pivot" looks. Shorter than the 20-bar
+# swing the swing strategies use, because a scalp targets a few pips, not a leg.
+MICRO_PIVOT_BARS = 5
+
+FEATURE_VERSION = 4
 
 FEATURE_NAMES = (
     "return_1",
@@ -44,6 +69,17 @@ FEATURE_NAMES = (
     "autocorr_20",
     "hour_sin",
     "hour_cos",
+    # --- scalping microstructure (v4) -------------------------------------
+    # A scalp lives or dies on the shape of the last few bars and on how far
+    # price has strayed from value, none of which the v3 inputs described.
+    "micro_range_5",
+    "range_compression",
+    "body_ratio",
+    "impulse",
+    "stoch_k_scaled",
+    "stoch_d_scaled",
+    "cci_scaled",
+    "vwap_dev",
 )
 
 FEATURE_LABELS = {
@@ -71,6 +107,14 @@ FEATURE_LABELS = {
     "autocorr_20": "Return autocorrelation",
     "hour_sin": "Hour of day (sin)",
     "hour_cos": "Hour of day (cos)",
+    "micro_range_5": "5-bar range",
+    "range_compression": "5-bar vs 20-bar range",
+    "body_ratio": "Body as share of range",
+    "impulse": "Signed body vs ATR",
+    "stoch_k_scaled": "Stochastic %K (centred)",
+    "stoch_d_scaled": "Stochastic %D (centred)",
+    "cci_scaled": "CCI (scaled)",
+    "vwap_dev": "Distance from VWAP",
 }
 
 # How many bars are needed before a feature row is complete.
@@ -90,6 +134,9 @@ def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]
     rsi_values = rsi(closes, 14)
     atr_values = atr(candles, 14)
     adx_values, plus_di_values, minus_di_values = adx(candles, 14)
+    stoch_k_values, stoch_d_values = stochastic(candles, STOCH_PERIOD, STOCH_SMOOTH)
+    cci_values = cci(candles, CCI_PERIOD)
+    vwap_values = vwap(candles, VWAP_PERIOD)
 
     returns: list[float] = [0.0]
     for index in range(1, len(closes)):
@@ -106,6 +153,10 @@ def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]
             or adx_values[index] is None
             or plus_di_values[index] is None
             or minus_di_values[index] is None
+            or stoch_k_values[index] is None
+            or stoch_d_values[index] is None
+            or cci_values[index] is None
+            or vwap_values[index] is None
         ):
             result.append(None)
             continue
@@ -147,6 +198,19 @@ def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]
         body = candle.close - candle.open
         current_streak = streak(closes, index)
 
+        # --- scalping microstructure -------------------------------------
+        # Everything here describes the last few bars, which is the only place
+        # a few-pip move can be seen forming.
+        micro_window = candles[index - MICRO_PIVOT_BARS + 1 : index + 1]
+        micro_high = max(item.high for item in micro_window)
+        micro_low = min(item.low for item in micro_window)
+        micro_range = micro_high - micro_low
+        # Excludes the current bar, so a breakout is measured against a level
+        # that was already known before this bar printed.
+        micro_prior = candles[index - MICRO_PIVOT_BARS : index]
+        micro_prior_high = max(item.high for item in micro_prior)
+        micro_prior_low = min(item.low for item in micro_prior)
+
         feature = {
             # model inputs (ordered in FEATURE_NAMES)
             "return_1": returns[index],
@@ -173,6 +237,15 @@ def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]
             "autocorr_20": autocorrelation(returns[index - 19 : index + 1]),
             "hour_sin": math.sin(angle),
             "hour_cos": math.cos(angle),
+            # scalping microstructure
+            "micro_range_5": _safe_ratio(micro_range, candle.close),
+            "range_compression": _safe_ratio(micro_range, range_span, 1.0),
+            "body_ratio": _safe_ratio(abs(body), candle_range),
+            "impulse": _safe_ratio(body, atr_values[index]),
+            "stoch_k_scaled": (stoch_k_values[index] - 50.0) / 50.0,
+            "stoch_d_scaled": (stoch_d_values[index] - 50.0) / 50.0,
+            "cci_scaled": max(-1.0, min(1.0, cci_values[index] / 200.0)),
+            "vwap_dev": _safe_ratio(candle.close - vwap_values[index], candle.close) * 1000.0,
             # strategy-facing values
             "ema_fast": ema_fast[index],
             "ema_slow": ema_slow[index],
@@ -190,6 +263,20 @@ def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]
             "bb_lower": band_mid - band_width,
             "prior_high_20": prior_high,
             "prior_low_20": prior_low,
+            # scalping levels
+            "stoch_k": stoch_k_values[index],
+            "stoch_d": stoch_d_values[index],
+            "stoch_k_previous": (
+                stoch_k_values[index - 1] if stoch_k_values[index - 1] is not None else stoch_k_values[index]
+            ),
+            "stoch_d_previous": (
+                stoch_d_values[index - 1] if stoch_d_values[index - 1] is not None else stoch_d_values[index]
+            ),
+            "cci": cci_values[index],
+            "vwap": vwap_values[index],
+            "prior_high_5": micro_prior_high,
+            "prior_low_5": micro_prior_low,
+            "atr_pips": atr_values[index] / charter.PIP,
         }
         if not all(math.isfinite(float(value)) for value in feature.values()):
             result.append(None)

@@ -184,6 +184,7 @@ class FusionEngine:
         ensemble: BootstrapEnsemble | None = None,
         weights: CouncilWeights | None = None,
         regime_state: RegimeState | None = None,
+        spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
     ) -> Verdict:
         """Run regime, council and meta-model. No data gate, no sealing."""
         config = self.config
@@ -205,6 +206,7 @@ class FusionEngine:
             regime=regime.name,
             min_checks=config.min_confluence_checks,
             calibrated=bool(read and read.calibrated),
+            spread_pips=spread_pips,
         )
         if not council.actionable:
             return Verdict("NO SIGNAL", council.reason, regime.name, read=read, council=council)
@@ -260,6 +262,7 @@ class FusionEngine:
             ensemble=ensemble,
             weights=weights,
             regime_state=regime_state,
+            spread_pips=gate.spread_pips,
         )
         return self._seal(
             verdict, gate=gate, source=source, at=stamp, spread=gate.spread_pips, features=features
@@ -294,6 +297,7 @@ class FusionEngine:
             ensemble=ensemble,
             weights=weights,
             regime_state=regime_state,
+            spread_pips=gate.spread_pips,
         )
         return self._seal(
             verdict,

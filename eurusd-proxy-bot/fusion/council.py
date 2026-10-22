@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from . import strategies
+from . import charter, strategies
 from .domain import Candle, Decision
 from .regime import regime_allows
 
@@ -155,8 +155,13 @@ def run_council(
     regime: str = "UNKNOWN",
     min_checks: int = 5,
     calibrated: bool = False,
+    spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
 ) -> CouncilResult:
-    """Run every member and fold them into one honest decision."""
+    """Run every member and fold them into one honest decision.
+
+    ``spread_pips`` is the cost the scalping members must clear before they are
+    allowed an opinion. It is the live spread when the quote supplied one.
+    """
     weights = weights or CouncilWeights()
     core: Decision = strategies.REGISTRY[strategies.CORE](
         candle, previous_close, features, probability_up, min_checks=min_checks
@@ -175,6 +180,7 @@ def run_council(
             features,
             probability_up,
             calibrated=calibrated,
+            spread_pips=spread_pips,
         )
         if not heard:
             # Still recorded for learning bookkeeping, but it carries no weight.

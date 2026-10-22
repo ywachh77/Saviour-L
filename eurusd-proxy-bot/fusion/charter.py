@@ -85,9 +85,33 @@ def real_outcome_label(label: str | None) -> bool:
     return label in (WIN, LOSS)
 
 
+# --- scalping guard ----------------------------------------------------------
+# Scalping is the most cost-sensitive family in this bot: a scalp's entire edge
+# can be smaller than the spread it has to pay. A scalping setup may only speak
+# when the move it projects is at least this many times the cost of taking it.
+# Below that the setup is not a trade, it is a donation.
+SCALP_MIN_REWARD_TO_COST = 1.5
+# A one-minute scalp realistically captures this fraction of the current ATR rather
+# than all of it. Used to project the gross move a setup can hope for, so the
+# projection is pessimistic on purpose.
+SCALP_ATR_CAPTURE = 0.5
+
+
 def net_pips(gross_pips: float, spread_pips: float = DEFAULT_SPREAD_PIPS) -> float:
     """Gross move minus the round-turn spread cost, in pips."""
     return float(gross_pips) - float(spread_pips)
+
+
+def scalp_cost_ok(atr_pips: float, spread_pips: float = DEFAULT_SPREAD_PIPS) -> bool:
+    """True when a scalp's projected gross move clears its cost by enough.
+
+    ``atr_pips`` is the current ATR in pips. A scalp is assumed to capture
+    SCALP_ATR_CAPTURE of it, and that must beat SCALP_MIN_REWARD_TO_COST times
+    the spread. Without this filter the scalping members fire happily into
+    bars too quiet to pay for their own entry.
+    """
+    projected = SCALP_ATR_CAPTURE * float(atr_pips)
+    return projected >= SCALP_MIN_REWARD_TO_COST * float(spread_pips)
 
 
 def wilson_interval(successes: int, total: int, z: float = 1.96) -> tuple[float, float]:

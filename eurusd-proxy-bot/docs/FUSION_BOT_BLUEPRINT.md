@@ -114,6 +114,37 @@ A prototype's weight is `max(0, net / (seen + 40))`, capped and scaled. A
 prototype that loses money stays silent. Prototypes can block the core; they
 can never replace it.
 
+### 4b. Scalping members
+
+Six scalping methods were added in two places at once, because a scalping
+method that only exists as a rule set never reaches the model and one that only
+exists as a feature never gets a transparent opinion.
+
+**As model inputs (24 → 32, `FEATURE_VERSION` 3 → 4):** 5-bar range, range
+compression, body ratio, signed impulse, stochastic %K/%D, CCI, distance from
+VWAP. Bumping the version invalidates stored models on purpose rather than
+letting them be silently reinterpreted.
+
+**As six new prototypes:** `scalp_impulse`, `scalp_reversion`,
+`scalp_micro_breakout`, `scalp_stoch_cross`, `scalp_vwap_reversion`,
+`scalp_pivot_fade`.
+
+Two guards are specific to this family:
+
+1. **A spread cost floor.** Scalping is the horizon where cost dominates: a
+   4-pip scalp keeps 2.8 pips after a 1.2-pip spread, and the same 4 pips is
+   noise on a swing trade. A scalping member abstains unless the ATR projects
+   `SCALP_ATR_CAPTURE` (0.5) × ATR ≥ `SCALP_MIN_REWARD_TO_COST` (1.5) × spread.
+2. **Regime gating.** Continuation scalps (`impulse`, `micro_breakout`) sit out
+   RANGE; reversion scalps (`reversion`, `pivot_fade`) sit out TREND and
+   VOLATILE. Fading a move in a volatility spike is how accounts die.
+
+They are prototypes, so they start at weight 0 and cannot create a signal. On
+the synthetic replay `scalp_impulse` became the highest-weighted learned rule at
+0.169 and the family's combined mass never reached the 0.35 veto threshold, so
+it changed no signal — the gate working as designed, and equally a statement
+that no scalping rule here has yet been shown to make money.
+
 ---
 
 ## 5. Storage (Supabase, 13 tables, RLS on all)
@@ -172,6 +203,9 @@ key; 5xx → short cooldown. Slots exist for legitimately provisioned keys only.
 | every win rate carries a Wilson interval | `digest.py`, `test_digest.py` |
 | backtest folds are purged | `backtest.py`, `test_backtest.py` |
 | calibration fitted out-of-sample only | `learning.run_nightly`, `test_backtest.py` |
+| a scalp that cannot pay its own spread stays quiet | `charter.scalp_cost_ok`, `test_scalping.py` |
+| bot payloads and the SQL schema cannot drift apart | `test_schema_contract.py` |
+| the replay learns the council as the live bot does | `backtest.run_backtest`, `test_backtest.py` |
 
 ---
 

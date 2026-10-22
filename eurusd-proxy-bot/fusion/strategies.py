@@ -9,10 +9,21 @@ from __future__ import annotations
 
 from typing import Callable
 
+from . import scalping
 from .domain import Candle, Decision
 
 CORE = "orbix_confluence"
-PROTOTYPES = ("trend_pullback", "range_reversal", "breakout", "ml_consensus", "orbix_cadence")
+
+# The scalping family is appended last and stays last: it is the newest, the
+# least proven, and the most exposed to spread. Order here is documentation of
+# that, not a ranking the code depends on.
+PROTOTYPES = (
+    "trend_pullback",
+    "range_reversal",
+    "breakout",
+    "ml_consensus",
+    "orbix_cadence",
+) + scalping.SCALPING_PROTOTYPES
 
 MEMBERS = {
     CORE: "Orbix Confluence Gate (6 checks, 5-of-6 with mandatory trend + ADX)",
@@ -22,6 +33,7 @@ MEMBERS = {
     "ml_consensus": "Model and short-term trend must agree",
     "orbix_cadence": "Calibrated model read with EMA context",
 }
+MEMBERS.update(scalping.SCALPING_MEMBERS)
 
 # Volatility band the core gate was written for. Outside it the gate abstains
 # rather than pretending a rule set tuned on calm bars still applies.
@@ -238,3 +250,10 @@ REGISTRY: dict[str, Callable[..., Decision]] = {
     "ml_consensus": ml_consensus,
     "orbix_cadence": orbix_cadence,
 }
+REGISTRY.update(scalping.SCALPING_REGISTRY)
+
+# Every member must be either the core gate or a prototype, and every prototype
+# must have a rule and a human-readable description. A member registered in one
+# place but not the others would be invisible to learning, or unvotable.
+assert set(REGISTRY) == set(MEMBERS), "a member is missing its description"
+assert set(PROTOTYPES) == set(REGISTRY) - {CORE}, "a prototype is not registered"

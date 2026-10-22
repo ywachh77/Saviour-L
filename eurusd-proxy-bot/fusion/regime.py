@@ -91,15 +91,36 @@ def classify(
     )
 
 
+# Continuation scalps need something to continue. Reversal scalps need
+# something to revert from. Letting each family speak only in the conditions it
+# was written for is most of the value of having a regime at all.
+CONTINUATION_SCALPS = frozenset({"scalp_impulse", "scalp_micro_breakout"})
+REVERSION_SCALPS = frozenset({"scalp_reversion", "scalp_vwap_reversion", "scalp_pivot_fade"})
+TREND_SCALPS = frozenset({"scalp_stoch_cross"})
+
+ALLOWED = {
+    # Too early to know anything: only the model-backed reads may speak.
+    UNKNOWN: frozenset({"orbix_confluence", "ml_consensus"}),
+    # Elevated volatility: breakouts and impulses can ride it, but fading a
+    # move in a volatile tape is how accounts die, so the reversion scalps sit out.
+    VOLATILE: frozenset({"orbix_confluence", "breakout"}) | CONTINUATION_SCALPS,
+    # Directional pressure present: continuation plus pullback-to-value.
+    TREND: frozenset(
+        {"orbix_confluence", "ml_consensus", "trend_pullback", "breakout", "orbix_cadence"}
+    )
+    | CONTINUATION_SCALPS
+    | TREND_SCALPS
+    | frozenset({"scalp_vwap_reversion"}),
+    # No directional pressure: this is where fading the edges belongs.
+    RANGE: frozenset({"orbix_confluence", "ml_consensus", "range_reversal", "orbix_cadence"})
+    | REVERSION_SCALPS
+    | TREND_SCALPS,
+}
+
+
 def regime_allows(regime: str, strategy_id: str) -> bool:
     """Which prototype families are allowed to speak in which regime."""
-    if regime == UNKNOWN:
-        return strategy_id in ("orbix_confluence", "ml_consensus")
-    if regime == VOLATILE:
-        return strategy_id in ("orbix_confluence", "breakout")
-    if regime == TREND:
-        return strategy_id in ("orbix_confluence", "ml_consensus", "trend_pullback", "breakout", "orbix_cadence")
-    return strategy_id in ("orbix_confluence", "ml_consensus", "range_reversal", "orbix_cadence")
+    return strategy_id in ALLOWED.get(regime, ALLOWED[UNKNOWN])
 
 
 def detect_regime(candles: Sequence[Candle], features: dict[str, float] | None) -> RegimeState:

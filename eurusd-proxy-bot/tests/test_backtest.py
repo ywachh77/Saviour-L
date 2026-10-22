@@ -12,7 +12,7 @@ from fusion.backtest import (
     run_backtest,
 )
 from fusion.config import Config
-from fusion.council import CouncilWeights
+from fusion.council import PER_PROTOTYPE_WEIGHT_CAP, CouncilWeights
 from fusion.engine import FusionEngine
 from fusion.features import compute_features
 from fusion.learning import promotion_gate, run_nightly, walk_forward
@@ -231,6 +231,57 @@ class TestPromotionUsesTheReplay(unittest.TestCase):
         _model, _ensemble, report = run_nightly(candles, [], config=cfg, champion=None)
         self.assertIsNotNone(report.system)
         self.assertIn("system", report.to_dict())
+
+
+class TestReplayLearnsTheCouncil(unittest.TestCase):
+    """A replay must learn the council, or it is measuring a different bot.
+
+    The live runner credits and blames prototypes on every settled outcome. A
+    replay that skipped that would be measuring a bot that never learns, and no
+    prototype could ever earn a voice in a backtest — an entire family of
+    strategies would be invisible here while fully live in production.
+    """
+
+    def _replay(self, **overrides):
+        candles = synthetic_series(900, seed=20260101)
+        weights = CouncilWeights()
+        report = run_backtest(candles, config(**overrides), folds=3, weights=weights)
+        return report, weights
+
+    def test_the_replay_credits_settled_outcomes_to_the_council(self) -> None:
+        report, weights = self._replay()
+        self.assertGreater(report.signals, 0)
+        self.assertTrue(
+            any(seen > 0 for seen in weights.seen.values()),
+            "the replay settled signals but the council never saw any of them",
+        )
+
+    def test_a_prototype_can_earn_a_voice_during_a_replay(self) -> None:
+        _report, weights = self._replay()
+        active = weights.active()
+        self.assertTrue(active, "no prototype earned a voice across the whole replay")
+        for name, weight in active.items():
+            with self.subTest(member=name):
+                self.assertGreater(weight, 0.0)
+                self.assertLessEqual(weight, PER_PROTOTYPE_WEIGHT_CAP)
+
+    def test_the_report_carries_the_learned_weights(self) -> None:
+        report, weights = self._replay()
+        self.assertEqual(
+            {name: round(value, 4) for name, value in weights.active().items()},
+            report.to_dict()["learned_weights"],
+        )
+
+    def test_a_replay_that_fires_nothing_teaches_the_council_nothing(self) -> None:
+        """No settled outcome means no observation, not an observation of zero."""
+        candles = synthetic_series(900, seed=20260101)
+        weights = CouncilWeights()
+        # The core gate can pass at most 6 of 6 checks, so asking for 7 makes
+        # it fire nothing at all — a clean way to isolate the learning step.
+        report = run_backtest(candles, config(min_confluence_checks=7), folds=3, weights=weights)
+        self.assertEqual(0, report.signals)
+        self.assertEqual(0, sum(weights.seen.values()))
+        self.assertEqual({}, weights.active())
 
 
 if __name__ == "__main__":

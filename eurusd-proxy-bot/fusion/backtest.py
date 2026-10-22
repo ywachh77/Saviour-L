@@ -34,7 +34,7 @@ from typing import Sequence
 
 from . import charter, datagate
 from .config import Config
-from .council import CouncilWeights
+from .council import CouncilWeights, spoken_votes
 from .domain import Candle
 from .engine import FusionEngine
 from .features import compute_features
@@ -64,6 +64,7 @@ class BacktestReport:
     coverage: float = 0.0
     model_accuracy: float | None = None
     model_points: int = 0
+    learned_weights: dict[str, float] = field(default_factory=dict)
     per_fold: list[dict] = field(default_factory=list)
     note: str = ""
 
@@ -94,6 +95,7 @@ class BacktestReport:
             "coverage": round(self.coverage, 5),
             "model_accuracy": self.model_accuracy,
             "model_points": self.model_points,
+            "learned_weights": {k: round(v, 4) for k, v in self.learned_weights.items()},
             "enough_for_a_view": self.enough_for_a_view,
             "per_fold": self.per_fold,
             "note": self.note,
@@ -251,6 +253,15 @@ def run_backtest(
                 fold_losses += 1
             report.gross_pips += gross_pips
 
+            # Learn the council exactly the way the live runner does: every
+            # settled, non-tied outcome credits or blames the prototypes that
+            # spoke. Without this the replay measures a bot that never learns,
+            # so no prototype can ever earn a voice in a backtest — the scalping
+            # family would be invisible here while fully live in production.
+            winning_side = "BUY" if move > 0 else "SELL" if move < 0 else None
+            if result.council is not None and winning_side is not None:
+                weights.observe(spoken_votes(result.council.votes), winning_side)
+
         report.folds += 1
         report.signals += fold_signals
         report.net_pips += fold_net
@@ -271,6 +282,7 @@ def run_backtest(
         report.win_rate = report.wins / decided
         report.wilson_low, report.wilson_high = charter.wilson_interval(report.wins, decided)
     report.coverage = (report.signals / len(usable)) if usable else 0.0
+    report.learned_weights = dict(weights.active())
     if model_points:
         report.model_points = len(model_points)
         report.model_accuracy = (

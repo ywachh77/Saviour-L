@@ -192,3 +192,73 @@ def bollinger(closes: Sequence[float], period: int = 20, multiplier: float = 2.0
     middle = mean(window)
     width = multiplier * pstdev(window)
     return middle - width, middle, middle + width
+
+
+def typical_prices(candles: Sequence[Candle]) -> list[float]:
+    return [(candle.high + candle.low + candle.close) / 3.0 for candle in candles]
+
+
+def stochastic(
+    candles: Sequence[Candle], period: int = 14, smooth: int = 3
+) -> tuple[list[float | None], list[float | None]]:
+    """Return (fast %K, %D) where %K is smoothed over ``smooth`` bars.
+
+    The classic scalping oscillator: where the close sits inside the recent
+    high-low envelope. 50.0 is returned when the envelope has collapsed to
+    nothing rather than dividing by zero.
+    """
+    size = len(candles)
+    raw: list[float | None] = [None] * size
+    for index in range(period - 1, size):
+        window = candles[index - period + 1 : index + 1]
+        highest = max(candle.high for candle in window)
+        lowest = min(candle.low for candle in window)
+        span = highest - lowest
+        raw[index] = 50.0 if span <= 1e-15 else 100.0 * (candles[index].close - lowest) / span
+
+    k_values: list[float | None] = [None] * size
+    d_values: list[float | None] = [None] * size
+    for index in range(size):
+        window = [value for value in raw[index - smooth + 1 : index + 1] if value is not None]
+        if len(window) == smooth:
+            k_values[index] = mean(window)
+    for index in range(size):
+        window = [value for value in k_values[index - smooth + 1 : index + 1] if value is not None]
+        if len(window) == smooth:
+            d_values[index] = mean(window)
+    return k_values, d_values
+
+
+def cci(candles: Sequence[Candle], period: int = 20) -> list[float | None]:
+    """Commodity Channel Index: distance from the mean, in mean deviations."""
+    typical = typical_prices(candles)
+    size = len(candles)
+    result: list[float | None] = [None] * size
+    for index in range(period - 1, size):
+        window = typical[index - period + 1 : index + 1]
+        centre = mean(window)
+        mean_deviation = mean([abs(value - centre) for value in window])
+        result[index] = 0.0 if mean_deviation <= 1e-15 else (typical[index] - centre) / (0.015 * mean_deviation)
+    return result
+
+
+def vwap(candles: Sequence[Candle], period: int = 30) -> list[float | None]:
+    """Rolling volume-weighted average of the typical price.
+
+    Falls back to the plain mean when the window carries no volume, which is
+    what a synthetic feed looks like. That fallback is honest: with zero
+    volume every weight is equal, so the mean *is* the volume-weighted mean.
+    """
+    typical = typical_prices(candles)
+    size = len(candles)
+    result: list[float | None] = [None] * size
+    for index in range(period - 1, size):
+        start = index - period + 1
+        weights = [max(float(candle.volume), 0.0) for candle in candles[start : index + 1]]
+        total = sum(weights)
+        window = typical[start : index + 1]
+        if total <= 0.0:
+            result[index] = mean(window)
+        else:
+            result[index] = sum(price * weight for price, weight in zip(window, weights)) / total
+    return result
