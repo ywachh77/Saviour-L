@@ -19,7 +19,7 @@ import signal
 import time
 import traceback
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Sequence
 
 from . import charter, digest, heartbeat, learning, settle
@@ -31,7 +31,7 @@ from .model import MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
 from .provider import TwelveDataProvider
 from .store import Store, build_store
 from .telegram import HELP_TEXT, TelegramClient
-from .timeutil import floor_minute, minute_bucket, now, parse_datetime, seconds_until_next_minute
+from .timeutil import minute_bucket, now, parse_datetime, seconds_until_next_minute
 
 # How far past the minute boundary the pipeline is allowed to seal before the
 # signal is considered late and dropped.
@@ -242,6 +242,13 @@ class FusionBot:
             self.telegram.send(text)
         return text
 
+    def _latest_system_report(self) -> dict | None:
+        versions = self.store.load_model_versions(limit=1)
+        if not versions:
+            return None
+        report = versions[-1].get("report") or {}
+        return report.get("system")
+
     def status_text(self) -> str:
         settlements = [
             row for row in self.store.load_settlements(limit=2000) if not charter.is_synthetic(row.get("source"))
@@ -265,6 +272,7 @@ class FusionBot:
             key_pool=self.store.load_key_pool() or {},
             last_cycle=self.last_cycle.to_dict() if self.last_cycle else None,
             store_errors=self.store.errors[-5:],
+            system=self._latest_system_report(),
         )
 
     # ---------------------------------------------------------- minute cycle
@@ -422,14 +430,17 @@ class FusionBot:
                 signal = Signal.from_dict(row)
             except (KeyError, ValueError, TypeError):
                 continue
-            if parse_datetime(signal.expiry_time) > stamp:
+            expiry = parse_datetime(signal.expiry_time)
+            if expiry > stamp:
                 continue
-            if not self._has_candle(signal.entry_time) or not self._has_candle(
-                _exit_stamp(signal)
-            ):
-                # Prices are missing. Leave it pending; UNRESOLVED is decided by
-                # the settlement sweep, not guessed here.
-                continue
+            prices_ready = self._has_candle(signal.entry_time) and self._has_candle(_exit_stamp(signal))
+            if not prices_ready:
+                grace = timedelta(minutes=charter.UNRESOLVE_AFTER_MINUTES)
+                if stamp - expiry < grace:
+                    # Prices may still land (late-arriving bars, a restart that
+                    # skipped an ingest). Keep waiting rather than guessing.
+                    continue
+                # Grace expired. settle() records UNRESOLVED rather than a number.
             self._settle_one(signal)
             count += 1
         return count
@@ -554,7 +565,7 @@ class FusionBot:
         today = stamp.strftime("%Y-%m-%d")
         signals = [
             row
-            for row in self.store._read("signals", limit=2000)
+            for row in self.store.load_signals(limit=2000)
             if str(row.get("generated_at", "")).startswith(today)
         ]
         settlement_rows = self.store.load_settlements(limit=2000)

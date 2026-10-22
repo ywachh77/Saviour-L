@@ -142,6 +142,7 @@ def fit_validated(
     *,
     minimum_for_holdout: int = 140,
     train_fraction: float = 0.7,
+    minimum_points: int = MIN_CALIBRATION_POINTS,
 ) -> tuple[IsotonicCalibrator, dict]:
     """Fit isotonic calibration, validating it when there are enough rows.
 
@@ -152,7 +153,7 @@ def fit_validated(
     """
     rows = [(float(probability), int(label)) for probability, label in points if label in (0, 1)]
     if len(rows) < minimum_for_holdout:
-        calibrator = IsotonicCalibrator.fit(rows)
+        calibrator = IsotonicCalibrator.fit(rows, minimum_points=minimum_points)
         if not calibrator.fitted:
             return calibrator, {
                 "accepted": False,
@@ -182,7 +183,7 @@ def fit_validated(
 
     split = max(60, int(len(rows) * train_fraction))
     training, evaluation = rows[:split], rows[split:]
-    calibrator = IsotonicCalibrator.fit(training)
+    calibrator = IsotonicCalibrator.fit(training, minimum_points=minimum_points)
     if not calibrator.fitted:
         return calibrator, {
             "accepted": False,

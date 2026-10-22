@@ -4,7 +4,7 @@ import unittest
 from datetime import timedelta
 
 from fusion import datagate
-from fusion.datagate import BLOCKED, DEGRADED, OK, count_gaps, evaluate, modelled_spread_pips
+from fusion.datagate import DEGRADED, OK, count_gaps, evaluate, modelled_spread_pips
 
 from .helpers import make_candles
 

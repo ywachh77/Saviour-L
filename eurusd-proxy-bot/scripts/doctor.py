@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from fusion.config import load_config  # noqa: E402
-from fusion.doctor import FAIL, PASS, run_checks, summarise  # noqa: E402
+from fusion.doctor import run_checks, summarise  # noqa: E402
 
 BOUNDARY = (
     "Reminder: this bot is research and paper-settlement only. "

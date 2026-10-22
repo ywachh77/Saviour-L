@@ -120,6 +120,7 @@ def build_status(
     key_pool: dict,
     last_cycle: dict | None,
     store_errors: Sequence[str],
+    system: dict | None = None,
 ) -> str:
     age = heartbeat.heartbeat_age_seconds(heartbeat_row)
     lines = [
@@ -140,6 +141,17 @@ def build_status(
         rows = key_pool.get("slots") or []
         enabled = sum(1 for row in rows if row.get("enabled"))
         lines.append(f"  key pool: {enabled}/{len(rows)} slots enabled")
+    if system and system.get("signals"):
+        lines.append(
+            f"  system replay: {system['signals']} gated signals, net {system.get('net_pips', 0):+.1f} pips"
+            f" · win rate {format_rate(system.get('win_rate'))}"
+            + ("" if system.get("enough_for_a_view") else " (too few to judge)")
+        )
+        expectancy = system.get("expectancy_pips")
+        if expectancy is not None:
+            lines.append(f"    expectancy {expectancy:+.3f} pips per signal after costs")
+    elif system:
+        lines.append(f"  system replay: {system.get('note', 'not run yet')[:120]}")
     if last_cycle:
         lines.append(f"  last cycle: {last_cycle.get('seal_state', 'n/a')} — {last_cycle.get('reason', '')[:160]}")
     if store_errors:

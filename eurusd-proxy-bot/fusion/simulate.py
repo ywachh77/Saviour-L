@@ -13,7 +13,7 @@ from typing import Sequence
 
 from fusion.domain import Candle
 
-from .timeutil import UTC, now
+from .timeutil import now
 
 
 def synthetic_series(

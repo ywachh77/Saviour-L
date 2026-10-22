@@ -98,8 +98,21 @@ ingest ──▶ data gate ──▶ features ──▶ regime ──▶ strateg
 | RLS on all 13 Supabase tables | `supabase/migrations/0001_init.sql` |
 | A win rate always travels with its Wilson interval | `digest.py`, `tests/test_digest.py` |
 
-Run `python -m unittest discover -s tests -t .` — 191 tests. If one fails, the
+Run `python -m unittest discover -s tests -t .` — 229 tests. If one fails, the
 charter is broken; do not ship it.
+
+### Measuring whether it actually works
+
+```bash
+python scripts/backtest.py            # purged walk-forward replay of the full system
+python scripts/backtest.py 5000       # most recent 5000 bars
+```
+
+This is **not** the model's score on every bar. It replays the bars that survive
+the data gate, the regime filter, the council and the meta-model veto, and
+charges the spread on every one. Folds are purged, so a label that looks ahead
+is never trained on. If it reports fewer than 200 signals, it says so and
+declines to call the number evidence.
 
 ---
 
@@ -257,6 +270,7 @@ eurusd-proxy-bot/
 │   ├── engine.py            the per-minute pipeline
 │   ├── council.py           core gate + learned prototypes
 │   ├── model.py             prequential logistic + bootstrap ensemble
+│   ├── backtest.py          purged walk-forward replay of the gated system
 │   ├── calibration.py       isotonic (PAVA) calibration
 │   ├── learning.py          online updates, walk-forward, promotion gates
 │   ├── keypool.py           reserve / refund / rotate / cooldown
@@ -275,8 +289,12 @@ eurusd-proxy-bot/
 │   ├── smoke.py             offline pipeline demo  (python scripts/smoke.py 420)
 │   ├── nightly.py           walk-forward + gates
 │   ├── fallback.py          Actions stand-in, heartbeat-gated
+│   ├── backtest.py          purged walk-forward replay of the full system
 │   ├── backfill.py          history import (BACKFILL=1, env-flagged on purpose)
 │   └── termux_boot.sh       optional auto-start + restart-on-crash for Termux
+├── docs/
+│   ├── FUSION_BOT_BLUEPRINT.md   architecture record: why each piece exists
+│   └── vortex-orbix-topics.md    research notebook from the two source repos
 ├── supabase/migrations/     0001_init.sql — 13 tables, RLS on all
 ├── .github/workflows/       tests.yml, nightly.yml, fallback.yml
 └── tests/                   177 tests, many of them charter guards
@@ -289,6 +307,7 @@ python -m unittest discover -s tests -t .   # the charter, asserted
 python scripts/smoke.py 420                 # watch it work offline
 python scripts/doctor.py                    # is my setup actually correct?
 python scripts/doctor.py --send             # ...and prove delivery works
+python scripts/backtest.py                  # does the gated system pay its costs?
 BACKFILL=1 BACKFILL_MINUTES=20000 python scripts/backfill.py
 ```
 

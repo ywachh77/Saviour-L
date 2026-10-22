@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 from . import charter
+from .backtest import BacktestReport, run_backtest
 from .calibration import (
     IsotonicCalibrator,
     brier_score,
@@ -134,7 +135,7 @@ def online_step(
 
 def refit_calibration(model: OnlineLogisticModel, points: Sequence[tuple[float, int]], minimum_points: int) -> dict:
     """Refit isotonic calibration on real, confirmed outcomes only."""
-    calibrator, report = fit_validated(points)
+    calibrator, report = fit_validated(points, minimum_points=minimum_points)
     if calibrator.fitted and report.get("accepted"):
         model.calibrator = calibrator
     model.calibration_report = report
@@ -159,9 +160,21 @@ class WalkForwardReport:
     reason: str = ""
     champion: dict = field(default_factory=dict)
     candidate: dict = field(default_factory=dict)
+    system: BacktestReport | None = None
+    # Out-of-sample (probability, label) pairs collected across the folds. They
+    # are the ONLY points a calibrator may be fitted on: scoring the bars a
+    # model was trained on produces a flatter, overconfident map.
+    oos_points: list = field(default_factory=list)
+    calibration_points: int = 0
+    calibration_fitted: bool = False
+    calibration_flat: bool = False
 
     def to_dict(self) -> dict:
         return {
+            "oos_points": len(self.oos_points),
+            "calibration_points": self.calibration_points,
+            "calibration_fitted": self.calibration_fitted,
+            "calibration_flat": self.calibration_flat,
             "samples": self.samples,
             "folds": self.folds,
             "brier": self.brier,
@@ -177,6 +190,7 @@ class WalkForwardReport:
             "reason": self.reason,
             "champion": self.champion,
             "candidate": self.candidate,
+            "system": self.system.to_dict() if self.system else None,
         }
 
 
@@ -255,6 +269,7 @@ def walk_forward(
     report.ece = expected_calibration_error(points)
     report.net_pips = gross_total
     report.trades = trades
+    report.oos_points = list(points)
     report.candidate = {
         "brier": report.brier,
         "brier_skill": report.brier_skill,
@@ -274,8 +289,17 @@ def walk_forward(
     return report
 
 
-def promotion_gate(report: WalkForwardReport, champion: OnlineLogisticModel | None) -> tuple[bool, str]:
-    """All gates must pass. One failure and the champion stays."""
+def promotion_gate(
+    report: WalkForwardReport,
+    champion: OnlineLogisticModel | None,
+    system: BacktestReport | None = None,
+) -> tuple[bool, str]:
+    """All gates must pass. One failure and the champion stays.
+
+    ``system`` is the purged replay of the full gated pipeline. When it has
+    enough signals to speak, it has the final say: the model can look good on
+    every bar and still lose money on the handful the gate actually trades.
+    """
     if report.folds < MIN_WALK_FORWARD_FOLDS:
         return False, "Walk-forward produced too few folds to judge."
     if report.accuracy is None or report.accuracy < PROMOTION_MIN_ACCURACY:
@@ -297,6 +321,12 @@ def promotion_gate(report: WalkForwardReport, champion: OnlineLogisticModel | No
             return False, (
                 f"Candidate Brier {report.brier:.4f} is worse than the champion's {champion_brier:.4f}."
             )
+    if system is not None and system.enough_for_a_view and system.net_pips <= 0:
+        return False, (
+            f"System replay blocked promotion: {system.signals} gated signals netted "
+            f"{system.net_pips:.1f} pips after costs. The model looks fine on every bar; "
+            "the bars it actually trades do not pay for the spread."
+        )
     return True, "All promotion gates passed."
 
 
@@ -342,7 +372,30 @@ def run_nightly(
             champion.mode = MODE_VETO
         return champion, BootstrapEnsemble([]), report
 
-    promoted, gate_reason = promotion_gate(report, champion)
+    system = run_backtest(candles, config, folds=4)
+    report.system = system
+
+    # Promotion is not a one-way door. If the gated system is losing money after
+    # costs on enough signals, the model loses its advisory authority even when
+    # its own bar-level metrics still look fine.
+    if (
+        champion is not None
+        and champion.trained
+        and system.enough_for_a_view
+        and system.net_pips <= 0
+        and champion.mode != MODE_VETO
+    ):
+        champion.mode = MODE_VETO
+        report.rolled_back = True
+        report.reason = (
+            f"Demoted to VETO: the system replay netted {system.net_pips:.1f} pips over "
+            f"{system.signals} gated signals. The model may still veto, but it no longer "
+            "needs to agree before a signal goes out."
+        )
+        _save_demotion_note(report)
+        return champion, BootstrapEnsemble([]), report
+
+    promoted, gate_reason = promotion_gate(report, champion, system)
     if not promoted:
         report.promoted = False
         report.reason = gate_reason
@@ -356,10 +409,15 @@ def run_nightly(
         return champion, BootstrapEnsemble([]), report
 
     model.trained_at = format_datetime(now())
-    # Calibration is fitted on prequential-style points from the walk-forward
-    # path: real, confirmed, and produced before any promotion decision.
-    calibration_points = _prequential_points(model, samples)
-    model.calibrator = IsotonicCalibrator.fit(calibration_points)
+    # Calibration MUST come from out-of-sample scores. Fitting an isotonic map
+    # on the bars the model was trained on makes it look sharper than it is, so
+    # the walk-forward fold predictions are used instead of a re-score.
+    model.calibrator = IsotonicCalibrator.fit(
+        report.oos_points, minimum_points=config.min_calibration_points
+    )
+    report.calibration_points = len(report.oos_points)
+    report.calibration_fitted = model.calibrator.fitted
+    report.calibration_flat = model.calibrator.flat
     if model.calibrator.fitted and not model.calibrator.flat:
         model.mode = MODE_ADVISORY
     report.promoted = True
@@ -373,14 +431,10 @@ def run_nightly(
     return model, ensemble, report
 
 
-def _prequential_points(model: OnlineLogisticModel, samples: Sequence[Sample], cap: int = 1200) -> list[tuple[float, int]]:
-    points: list[tuple[float, int]] = []
-    for sample in samples[-cap:]:
-        try:
-            points.append((model.predict_up(sample.features), sample.label))
-        except ValueError:
-            continue
-    return points
+def _save_demotion_note(report: WalkForwardReport) -> None:
+    """Keep the demotion reason on the report so the digest can show it."""
+    report.promoted = False
+    report.mode = MODE_VETO
 
 
 def outcome_of(gross_pips: float) -> str:

@@ -44,22 +44,24 @@ class RegimeState:
         }
 
 
-def detect_regime(candles: Sequence[Candle], features: dict[str, float] | None) -> RegimeState:
-    """Classify the current bar from completed candles only."""
-    candles = list(candles)
-    if features is None or len(candles) < 30:
-        return RegimeState(UNKNOWN, 0.0, 0.0, 0.0, 0.0, "Not enough completed bars to read the regime.")
+def classify(
+    *,
+    atr_value: float,
+    atr_pct: float,
+    atr_baseline: float,
+    adx_value: float,
+    close: float,
+    ema_fast: float,
+    ema_slow: float,
+) -> RegimeState:
+    """Pure classification from already-computed values.
 
-    adx_value = float(features["adx"])
-    atr_pct = float(features["atr_pct"])
-    close = candles[-1].close
-    ema_separation = abs(features["ema_fast"] - features["ema_slow"]) / close if close else 0.0
-
-    # Volatility wins: a spike invalidates both the trend and range plays.
-    atr_values = atr(candles, 14)
-    recent = [value for value in atr_values[-30:] if value is not None]
-    baseline = mean(recent) if recent else 0.0
-    spike = baseline > 0 and float(features["atr"]) > 1.8 * baseline
+    Split out from {@link detect_regime} so a backtest can call it per bar
+    without recomputing an ATR series each time, which would make a replay
+    quadratic. The live path and the backtest therefore share one rule.
+    """
+    ema_separation = abs(ema_fast - ema_slow) / close if close else 0.0
+    spike = atr_baseline > 0 and atr_value > 1.8 * atr_baseline
 
     if spike or atr_pct > ATR_PCT_VOLATILE:
         return RegimeState(
@@ -98,3 +100,24 @@ def regime_allows(regime: str, strategy_id: str) -> bool:
     if regime == TREND:
         return strategy_id in ("orbix_confluence", "ml_consensus", "trend_pullback", "breakout", "orbix_cadence")
     return strategy_id in ("orbix_confluence", "ml_consensus", "range_reversal", "orbix_cadence")
+
+
+def detect_regime(candles: Sequence[Candle], features: dict[str, float] | None) -> RegimeState:
+    """Classify the current bar from completed candles only."""
+    candles = list(candles)
+    if features is None or len(candles) < 30:
+        return RegimeState(UNKNOWN, 0.0, 0.0, 0.0, 0.0, "Not enough completed bars to read the regime.")
+
+    atr_values = atr(candles, 14)
+    recent = [value for value in atr_values[-30:] if value is not None]
+    baseline = mean(recent) if recent else 0.0
+    close = candles[-1].close
+    return classify(
+        atr_value=float(features["atr"]),
+        atr_pct=float(features["atr_pct"]),
+        atr_baseline=baseline,
+        adx_value=float(features["adx"]),
+        close=close,
+        ema_fast=float(features["ema_fast"]),
+        ema_slow=float(features["ema_slow"]),
+    )

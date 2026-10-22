@@ -61,6 +61,12 @@ class LocalStore:
         for row in self.read("job_runs"):
             self._claimed.add(f"{row.get('job')}|{row.get('bucket')}")
 
+    def _remember_claim(self, key: str, cap: int = 20_000) -> None:
+        """Remember a claimed slot without letting the set grow without bound."""
+        self._claimed.add(key)
+        if len(self._claimed) > cap:
+            self._claimed = set(list(self._claimed)[-cap // 2 :])
+
     def write(self, table: str, rows: Sequence[dict]) -> int:
         if not rows:
             return 0
@@ -225,18 +231,28 @@ class Store:
         else:
             self.local.write(table, rows)
 
-    def _read(self, table: str, limit: int | None = None, **filters) -> list[dict]:
+    def _read(
+        self,
+        table: str,
+        limit: int | None = None,
+        order: str | None = None,
+        **filters,
+    ) -> list[dict]:
         if self.supabase is not None:
-            remote = self.supabase.select(table, filters=filters or None, limit=limit)
+            remote = self.supabase.select(table, filters=filters or None, order=order, limit=limit)
             if remote:
                 return remote
-        rows = self.local.read(table, limit)
+        rows = self.local.read(table)
         if filters:
-            rows = [
-                row
-                for row in rows
-                if all(str(row.get(key)) == _filter_value(value) for key, value in filters.items())
-            ]
+            rows = [row for row in rows if all(_matches(row, key, value) for key, value in filters.items())]
+        if order:
+            # Ordered reads are best-first, so the slice comes off the front.
+            rows = _apply_order(rows, order)
+            if limit is not None and limit > 0:
+                rows = rows[:limit]
+            return rows
+        if limit is not None and limit > 0:
+            rows = rows[-limit:]
         return rows
 
     # --------------------------------------------------------------- candles
@@ -244,7 +260,12 @@ class Store:
         self._write("candles_m1", list(candles), on_conflict="timestamp,pair")
 
     def load_candles(self, pair: str, limit: int = 400) -> list[dict]:
-        rows = self._read("candles_m1", limit=limit * 2, **{"pair": f"eq.{pair}"})
+        # Without an explicit order PostgREST may return any slice of the table,
+        # and slicing "the newest N" off an unordered page silently drops the
+        # bars that actually matter.
+        rows = self._read(
+            "candles_m1", limit=limit, order="timestamp.desc", **{"pair": f"eq.{pair}"}
+        )
         rows.sort(key=lambda row: str(row.get("timestamp", "")))
         return rows[-limit:]
 
@@ -262,9 +283,17 @@ class Store:
                 row.update(patch)
         self.local.replace("signals", rows)
 
-    def pending_signals(self, pair: str) -> list[dict]:
-        rows = self._read("signals", limit=500, **{"pair": f"eq.{pair}"})
+    def pending_signals(self, pair: str, limit: int = 500) -> list[dict]:
+        rows = self._read(
+            "signals",
+            limit=limit,
+            order="entry_time.desc",
+            **{"pair": f"eq.{pair}", "settled": "eq.false"},
+        )
         return [row for row in rows if row.get("settled") in (None, False, "false")]
+
+    def load_signals(self, limit: int = 2000) -> list[dict]:
+        return self._read("signals", limit=limit, order="entry_time.desc")
 
     # ----------------------------------------------------------- settlements
     def save_settlement(self, payload: dict) -> None:
@@ -272,7 +301,7 @@ class Store:
         self.update_signal(str(payload["signal_id"]), {"settled": True})
 
     def load_settlements(self, limit: int = 2000) -> list[dict]:
-        return self._read("settlements", limit=limit)
+        return self._read("settlements", limit=limit, order="settled_at.desc")
 
     # ------------------------------------------------------------ model state
     def save_model_state(self, payload: dict) -> None:
@@ -314,7 +343,7 @@ class Store:
         self._write("learning_events", [row])
 
     def load_events(self, limit: int = 200) -> list[dict]:
-        return self._read("learning_events", limit=limit)
+        return self._read("learning_events", limit=limit, order="created_at.desc")
 
     # ------------------------------------------------------------- job slots
     def claim_job(self, job: str, bucket: str, *, runner: str = "termux") -> bool:
@@ -322,7 +351,7 @@ class Store:
         key = f"{job}|{bucket}"
         if key in self.local._claimed:
             return False
-        self.local._claimed.add(key)
+        self.local._remember_claim(key)
         row = {"job": job, "bucket": bucket, "runner": runner, "created_at": format_datetime(_utcnow())}
         if self.supabase is not None:
             # A unique index on (job, bucket) makes the second writer fail.
@@ -338,9 +367,12 @@ class Store:
         self._write("heartbeats", [row])
 
     def latest_heartbeat(self, runner: str | None = None) -> dict | None:
-        rows = self._read("heartbeats", limit=50)
-        if runner:
-            rows = [row for row in rows if row.get("runner") == runner]
+        rows = self._read(
+            "heartbeats",
+            limit=50,
+            order="created_at.desc",
+            **({"runner": f"eq.{runner}"} if runner else {}),
+        )
         rows.sort(key=lambda item: str(item.get("created_at", "")))
         return rows[-1] if rows else None
 
@@ -389,7 +421,35 @@ class Store:
         )
 
     def recent_alerts(self, limit: int = 50) -> list[dict]:
-        return self._read("alerts", limit=limit)
+        return self._read("alerts", limit=limit, order="created_at.desc")
+
+
+def _matches(row: dict, key: str, value: str) -> bool:
+    """Compare a row value against a PostgREST filter, booleans included.
+
+    Python stringifies False as "False" while PostgREST spells it "false", so a
+    naive equality check silently drops every pending-signal row.
+    """
+    left = row.get(key)
+    right = _filter_value(value)
+    if isinstance(left, bool) or right.lower() in ("true", "false"):
+        return str(left).lower() == right.lower()
+    return str(left) == right
+
+
+def _apply_order(rows: list[dict], order: str) -> list[dict]:
+    """Sort rows by a PostgREST-style 'field.direction' key.
+
+    The local mirror has to honour the same ordering the remote query asked for,
+    otherwise "the newest N rows" silently means "some N rows".
+    """
+    field_name, _, direction = str(order).partition(".")
+    if not field_name:
+        return rows
+    rows.sort(key=lambda row: str(row.get(field_name, "")))
+    if direction.lower() == "desc":
+        rows.reverse()
+    return rows
 
 
 def _filter_value(value: str) -> str:

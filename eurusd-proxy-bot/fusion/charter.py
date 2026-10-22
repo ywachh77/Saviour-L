@@ -34,6 +34,11 @@ SEAL_SIGNAL = "SIGNAL"
 # boundary, the signal is discarded instead of being backdated.
 MAX_SEAL_LATENCY_SECONDS = 10
 
+# A pending signal is declared UNRESOLVED once this many minutes have passed
+# since its expiry. Waiting longer would leave rows pending forever; resolving
+# earlier would risk calling a result unresolved while prices could still land.
+UNRESOLVE_AFTER_MINUTES = 120
+
 # --- learning guard -----------------------------------------------------------
 # Synthetic/replay data is for watching the pipeline fire. It must never update
 # a weight, fit a calibrator, or promote a model.

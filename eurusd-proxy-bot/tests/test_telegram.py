@@ -4,7 +4,7 @@ import unittest
 from urllib.error import URLError
 
 from fusion import charter
-from fusion.telegram import COMMANDS, TelegramClient, TelegramClient as Client
+from fusion.telegram import COMMANDS, TelegramClient as Client
 
 
 class FakeResponse:

@@ -1,7 +1,6 @@
 """Settlement: real prices only, costs always, UNRESOLVED never invented."""
 
 import unittest
-from datetime import timedelta
 
 from fusion import charter, settle
 from fusion.domain import Candle, Signal
