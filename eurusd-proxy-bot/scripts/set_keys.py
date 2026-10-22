@@ -24,7 +24,6 @@ rate limits. After changing keys, push them to Actions with:
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sys
 from pathlib import Path
@@ -32,6 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from fusion import envfile  # noqa: E402
 from fusion.keypool import MAX_SLOTS, mask_key  # noqa: E402
 
 ENV_PATH = ROOT / ".env"
@@ -158,15 +158,8 @@ def read_keys_from_env(path: Path) -> list[str]:
 
 
 def write_env(path: Path, lines: list[str]) -> None:
-    """Write .env atomically and lock it down to the owner."""
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
-    os.replace(temp, path)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        # Some filesystems (notably Android's) refuse chmod; not fatal.
-        pass
+    """Write .env through the shared writer: atomic, and owner-only."""
+    envfile.write(path, lines)
 
 
 # ------------------------------------------------------------------------ main

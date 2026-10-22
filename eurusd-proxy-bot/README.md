@@ -104,7 +104,7 @@ ingest ──▶ data gate ──▶ features ──▶ regime ──▶ strateg
 | A scalp that cannot pay its own spread stays quiet | `charter.scalp_cost_ok`, `tests/test_scalping.py` |
 | The replay learns the council as the live bot does | `backtest.run_backtest`, `tests/test_backtest.py` |
 
-Run `python -m unittest discover -s tests -t .` — 285 tests. If one fails, the
+Run `python -m unittest discover -s tests -t .` — 322 tests. If one fails, the
 charter is broken; do not ship it.
 
 ---
@@ -228,14 +228,22 @@ secret can ever be pushed.)
 ### Step 4 — Telegram
 
 1. Message [@BotFather](https://t.me/BotFather), `/newbot`, follow the prompts,
-   copy the token → `TELEGRAM_BOT_TOKEN`.
-2. Message [@userinfobot](https://t.me/userinfobot), copy your **numeric** id →
-   `TELEGRAM_OWNER_CHAT_ID`.
-3. Send `/start` to your bot. Any other chat id is ignored silently — this bot
+   copy the token — it looks like `123456789:AAF…`.
+2. Message [@userinfobot](https://t.me/userinfobot), copy your **numeric** id.
+3. Put both in `.env` with the helper, which checks the shape of each before it
+   stores them and never prints the token back in full:
+
+   ```bash
+   python scripts/set_telegram.py                      # asks for both
+   python scripts/set_telegram.py --token T --chat C   # non-interactive
+   python scripts/set_telegram.py --show               # what is set, masked
+   ```
+
+4. Send `/start` to your bot. Any other chat id is ignored silently — this bot
    is owner-only and does not talk to strangers. A bot cannot message you first,
    so this step is not optional.
 
-4. Check it: `python scripts/doctor.py --send`. It puts one test message in your
+5. Check it: `python scripts/doctor.py --send`. It puts one test message in your
    chat and confirms the message id came back, which is the same proof the bot
    requires before it ever records a signal as `SENT`.
 
@@ -372,6 +380,7 @@ eurusd-proxy-bot/
 │   ├── backtest.py          purged walk-forward replay of the full system
 │   ├── backfill.py          history import (BACKFILL=1, env-flagged on purpose)
 │   ├── set_keys.py          add/replace the Twelve Data keys in .env
+│   ├── set_telegram.py      put the bot token and owner chat id in .env
 │   └── termux_boot.sh       optional auto-start + restart-on-crash for Termux
 ├── docs/
 │   ├── FUSION_BOT_BLUEPRINT.md   architecture record: why each piece exists
@@ -379,7 +388,7 @@ eurusd-proxy-bot/
 ├── supabase/migrations/     0001_init.sql — 13 tables, RLS on all
 │                            0002_add_missing_columns.sql — runtime columns
 ├── .github/workflows/       tests.yml, nightly.yml, fallback.yml
-└── tests/                   285 tests, many of them charter guards
+└── tests/                   322 tests, many of them charter guards
 ```
 
 ## Useful extras

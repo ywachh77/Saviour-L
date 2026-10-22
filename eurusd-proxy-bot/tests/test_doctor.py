@@ -142,6 +142,33 @@ class TestTelegramCheck(unittest.TestCase):
         self.assertEqual(check.status, FAIL)
         self.assertIn("token", check.action)
 
+    def test_a_network_failure_does_not_blame_the_token(self):
+        """No route to host is not a revoked token, and must not be reported as one."""
+        from fusion.telegram import TelegramClient
+
+        original = TelegramClient._call
+        TelegramClient._call = lambda self, method, payload: (None, "network: <urlopen error timed out>")
+        try:
+            check = check_telegram(Config(telegram_token="t", telegram_owner_chat_id="1"))
+        finally:
+            TelegramClient._call = original
+        self.assertEqual(check.status, FAIL)
+        self.assertIn("connection", check.action)
+        self.assertNotIn("revoked", check.action)
+        self.assertNotIn("wrong", check.action)
+
+    def test_an_unexpected_getme_error_blames_neither(self):
+        from fusion.telegram import TelegramClient
+
+        original = TelegramClient._call
+        TelegramClient._call = lambda self, method, payload: (None, "bad json: unexpected token")
+        try:
+            check = check_telegram(Config(telegram_token="t", telegram_owner_chat_id="1"))
+        finally:
+            TelegramClient._call = original
+        self.assertEqual(check.status, FAIL)
+        self.assertNotIn("revoked", check.action)
+
     def test_an_undelivered_test_message_explains_the_first_message_rule(self):
         from fusion import charter
         from fusion.telegram import SendResult, TelegramClient

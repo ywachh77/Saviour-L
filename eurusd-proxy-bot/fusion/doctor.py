@@ -142,11 +142,28 @@ def check_telegram(config, *, send_test: bool = False) -> Check:
     client = TelegramClient(config.telegram_token, config.telegram_owner_chat_id)
     result, error = client._call("getMe", {})
     if error:
+        # "Wrong token" and "no route to host" need different advice. Telling
+        # someone to regenerate a working token because their wifi dropped sends
+        # them chasing a problem they do not have.
+        if error.startswith("network:"):
+            return Check(
+                "Telegram",
+                FAIL,
+                f"could not reach Telegram: {error[:160]}",
+                "the token was not tested — check the connection and run this again",
+            )
+        if "HTTP 401" in error or "HTTP 404" in error:
+            return Check(
+                "Telegram",
+                FAIL,
+                f"getMe failed: {error[:160]}",
+                "the token is wrong or revoked; ask BotFather for a new one",
+            )
         return Check(
             "Telegram",
             FAIL,
             f"getMe failed: {error[:160]}",
-            "the token is wrong or revoked; ask BotFather for a new one",
+            "Telegram refused the call; the token and the network both look present",
         )
     username = ((result or {}).get("result") or {}).get("username", "?")
     if not send_test:
