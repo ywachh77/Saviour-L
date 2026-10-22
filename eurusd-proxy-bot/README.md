@@ -137,22 +137,27 @@ when the win rate looks good. That is the point: gross direction is not profit.
 
 ### Step 3 — GitHub (private repo)
 
+One command, run from `eurusd-proxy-bot/`:
+
 ```bash
-git init
-git add .
-git commit -m "FUSION BOT"
-git branch -M main
-git remote add origin git@github.com:YOUR-USERNAME/eurusd-proxy-bot.git
-git push -u origin main
+./scripts/publish_repo.sh
 ```
 
-Keep the repository **private** — it holds your `.gitignore`d secrets on the
-Actions side, and private costs nothing.
+It creates a **private** `eurusd-proxy-bot` repo in your account and pushes this
+folder as its root. Pass a different name if you prefer:
+`./scripts/publish_repo.sh my-bot-name`.
 
-Then add the same values under **Settings → Secrets and variables → Actions →
-Secrets**: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-`TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_CHAT_ID`, and at least one
-`TWELVE_DATA_API_KEY`.
+Prefer to do it by hand? Then:
+
+```bash
+git init && git add . && git commit -m "FUSION BOT"
+git remote add origin git@github.com:YOUR-USERNAME/eurusd-proxy-bot.git
+git branch -M main && git push -u origin main
+```
+
+Keep the repository **private** — private costs nothing, and it keeps your bot's
+code and schedule out of public view. (`.env` is git-ignored either way, so no
+secret can ever be pushed.)
 
 ### Step 4 — Telegram
 
@@ -228,6 +233,21 @@ does act, its rows are tagged `actions-fallback`.
 
 ---
 
+### Step 6 — GitHub Actions secrets
+
+One command, from `eurusd-proxy-bot/`:
+
+```bash
+./scripts/push_secrets.sh
+```
+
+It reads your `.env`, sends **only** the genuinely secret values to GitHub
+Actions, and prints their lengths — never the values themselves. Use
+`./scripts/push_secrets.sh owner/repo` if the bot repo is not the one you are
+standing in, and `--dry-run` first if you want to see the list.
+
+Nothing here ever asks you to paste a key into a chat window.
+
 ## Layout
 
 ```
@@ -250,10 +270,13 @@ eurusd-proxy-bot/
 ├── scripts/
 │   ├── run_bot.py           the one command you run
 │   ├── doctor.py            check your setup: python scripts/doctor.py
+│   ├── publish_repo.sh      Step 3 in one command (private repo + push)
+│   └── push_secrets.sh      Step 6 in one command (.env → Actions secrets)
 │   ├── smoke.py             offline pipeline demo  (python scripts/smoke.py 420)
 │   ├── nightly.py           walk-forward + gates
 │   ├── fallback.py          Actions stand-in, heartbeat-gated
-│   └── backfill.py          history import (BACKFILL=1, env-flagged on purpose)
+│   ├── backfill.py          history import (BACKFILL=1, env-flagged on purpose)
+│   └── termux_boot.sh       optional auto-start + restart-on-crash for Termux
 ├── supabase/migrations/     0001_init.sql — 13 tables, RLS on all
 ├── .github/workflows/       tests.yml, nightly.yml, fallback.yml
 └── tests/                   177 tests, many of them charter guards

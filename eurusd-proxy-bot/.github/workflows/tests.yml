@@ -3,6 +3,8 @@ name: fusion-tests
 # The honesty charter is enforced here. If a change makes synthetic data train
 # the model, lets a late signal be backdated, or stops charging costs, these
 # tests fail and the commit should not be merged.
+#
+# Works whether the bot is the whole repository or a folder inside one.
 
 on:
   push:
@@ -20,12 +22,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Run the suite
+      - name: Locate the bot directory
+        id: locate
         run: |
-          cd eurusd-proxy-bot
-          python -m unittest discover -s tests -t .
+          if [ -d eurusd-proxy-bot/fusion ]; then
+            echo "dir=eurusd-proxy-bot" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the suite
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: python -m unittest discover -s tests -t .
 
       - name: Offline smoke run
-        run: |
-          cd eurusd-proxy-bot
-          python scripts/smoke.py 420
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: python scripts/smoke.py 420

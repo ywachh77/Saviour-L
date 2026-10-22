@@ -26,6 +26,15 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Locate the bot directory
+        id: locate
+        run: |
+          if [ -d eurusd-proxy-bot/fusion ]; then
+            echo "dir=eurusd-proxy-bot" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Walk-forward, promote or roll back
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -33,6 +42,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
           SIGNAL_HORIZON_MINUTES: ${{ vars.SIGNAL_HORIZON_MINUTES }}
+        working-directory: ${{ steps.locate.outputs.dir }}
         run: |
-          cd eurusd-proxy-bot
           python scripts/nightly.py
