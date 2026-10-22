@@ -174,9 +174,9 @@ def main(argv: list[str]) -> int:
     print("FUSION BOT — Twelve Data keys")
     print("=" * 62)
 
-    if not ENV_PATH.is_file():
-        print(f"  no .env at {ENV_PATH}")
-        print("  copy .env.example to .env first, then run this again.")
+    if not envfile.ensure_exists(ENV_PATH, ENV_PATH.with_name(".env.example")):
+        print(f"  neither .env nor .env.example exists at {ENV_PATH.parent}")
+        print("  are you running this from inside the eurusd-proxy-bot folder?")
         print()
         return 1
 
