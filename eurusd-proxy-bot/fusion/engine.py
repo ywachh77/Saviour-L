@@ -1,0 +1,383 @@
+"""The per-minute pipeline: gate -> features -> regime -> council -> model -> seal.
+
+Order matters and is fixed:
+
+1. data gate  — refuse to reason about data that is stale, gappy or too wide;
+2. features   — indicators from completed candles only;
+3. regime     — context, never a signal on its own;
+4. council    — the core 6-check gate decides; learned prototypes may veto;
+5. meta-model — VETO by default, ADVISORY only after nightly gates promote it;
+6. calibration — RAW below 60 real outcomes, CALIBRATED at or above, FLAT abstains;
+7. seal       — entry is the open of the forming candle, or the signal is dropped.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Sequence
+
+from . import charter, datagate
+from .calibration import IsotonicCalibrator
+from .council import CouncilResult, CouncilWeights, run_council
+from .domain import Candle, ModelRead, Signal
+from .features import compute_features
+from .model import MODE_ADVISORY, MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
+from .regime import RegimeState, detect_regime
+from .timeutil import add_minutes, floor_minute, now as utcnow
+
+# Meta-model margins. VETO only blocks a read it confidently disagrees with;
+# ADVISORY (promoted) additionally requires agreement, with a tighter bar on a
+# calibrated score than on a raw one.
+VETO_MARGIN = 0.03
+AGREE_MARGIN_CALIBRATED = 0.01
+AGREE_MARGIN_RAW = 0.02
+
+RAW = "RAW"
+CALIBRATED = "CALIBRATED"
+FLAT = "FLAT"
+
+
+def build_read(
+    model: OnlineLogisticModel | None,
+    ensemble: BootstrapEnsemble | None,
+    features: dict[str, float],
+    *,
+    max_uncertainty: float = 0.10,
+) -> ModelRead | None:
+    """Turn the model into an honest probability read, or None when untrained."""
+    if model is None or not model.trained or features is None:
+        return None
+    raw = model.predict_up(features)
+    uncertainty: float | None = None
+    members = 0
+    if ensemble is not None and ensemble.ready:
+        _, spread = ensemble.predict(features)
+        uncertainty = spread
+        members = len(ensemble.members)
+
+    calibrator: IsotonicCalibrator = model.calibrator
+    if calibrator.fitted:
+        probability = calibrator.transform(raw)
+        state = FLAT if calibrator.flat else CALIBRATED
+    else:
+        probability = raw
+        state = RAW
+
+    reason = None
+    if state == FLAT:
+        reason = (
+            "Calibration is flat: the score has no usable rank signal on recorded "
+            "outcomes, so the gate abstains instead of trading a constant probability."
+        )
+    elif uncertainty is not None and uncertainty > max_uncertainty:
+        reason = (
+            f"Ensemble disagreement is {uncertainty:.3f}, wider than the {max_uncertainty:.2f} "
+            "stability limit; abstaining instead of guessing."
+        )
+    return ModelRead(
+        raw=raw,
+        probability=probability,
+        calibrated=state == CALIBRATED,
+        calibration_state=state,
+        uncertainty=uncertainty,
+        members=members,
+        contributions=tuple(model.contributions(features, top=6)),
+        abstain_reason=reason,
+    )
+
+
+def model_verdict(side: str, read: ModelRead | None, *, mode: str = MODE_VETO) -> tuple[bool, str]:
+    """Does the meta-model allow this side? Returns (allowed, reason)."""
+    if read is None:
+        return True, "No trained model yet; the rule gate decided alone."
+    if not read.usable:
+        return False, read.abstain_reason or "The model read is not usable on this bar."
+    if read.uncertainty is not None and read.abstain_reason:
+        return False, read.abstain_reason
+
+    edge = read.probability - 0.5
+    agrees = edge > 0 if side == "BUY" else edge < 0
+    label = "calibrated" if read.calibrated else "raw"
+
+    if mode == MODE_ADVISORY:
+        margin = AGREE_MARGIN_CALIBRATED if read.calibrated else AGREE_MARGIN_RAW
+        if not agrees:
+            return False, (
+                f"Promoted model veto: {label} read {read.probability:.3f} is on the other side of {side}."
+            )
+        if abs(edge) < margin:
+            return False, (
+                f"Promoted model abstains: {label} edge {edge:+.3f} is inside the {margin:.3f} agreement margin."
+            )
+        return True, f"Promoted model agrees ({label} {read.probability:.3f})."
+
+    if not agrees and abs(edge) >= VETO_MARGIN:
+        return False, (
+            f"Model veto: {label} read {read.probability:.3f} disagrees with {side} "
+            f"by more than {VETO_MARGIN:.2f}."
+        )
+    return True, f"Model does not object ({label} {read.probability:.3f})."
+
+
+@dataclass(frozen=True, slots=True)
+class Verdict:
+    """The decision itself: council -> model -> allow or refuse.
+
+    Split out from the seal step so the backtest can drive exactly this code.
+    A backtest that re-implemented the rules would be measuring something the
+    bot does not actually do.
+    """
+
+    side: str
+    reason: str
+    regime: str = "UNKNOWN"
+    read: ModelRead | None = None
+    council: CouncilResult | None = None
+    model_reason: str = ""
+
+    @property
+    def actionable(self) -> bool:
+        return self.side in ("BUY", "SELL")
+
+
+@dataclass(frozen=True, slots=True)
+class EngineResult:
+    seal_state: str
+    signal: Signal | None
+    reason: str
+    gate: datagate.GateResult | None = None
+    regime: str = "UNKNOWN"
+    read: ModelRead | None = None
+    council: CouncilResult | None = None
+    model_reason: str = ""
+
+    @property
+    def actionable(self) -> bool:
+        return self.seal_state == charter.SEAL_SIGNAL and self.signal is not None
+
+    def to_dict(self) -> dict:
+        return {
+            "seal_state": self.seal_state,
+            "reason": self.reason,
+            "regime": self.regime,
+            "gate": self.gate.to_dict() if self.gate else None,
+            "read": self.read.to_dict() if self.read else None,
+            "council": self.council.to_dict() if self.council else None,
+            "model_reason": self.model_reason,
+            "signal": self.signal.to_dict() if self.signal else None,
+        }
+
+
+class FusionEngine:
+    def __init__(self, config):
+        self.config = config
+
+    # --------------------------------------------------------------- decision
+    def decide(
+        self,
+        candle: Candle,
+        previous_close: float,
+        features: dict[str, float] | None,
+        *,
+        model: OnlineLogisticModel | None = None,
+        ensemble: BootstrapEnsemble | None = None,
+        weights: CouncilWeights | None = None,
+        regime_state: RegimeState | None = None,
+        spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
+    ) -> Verdict:
+        """Run regime, council and meta-model. No data gate, no sealing."""
+        config = self.config
+        if features is None:
+            return Verdict("NO SIGNAL", "Not enough completed candles to calculate indicators.")
+
+        regime = regime_state or RegimeState("UNKNOWN", 0.0, 0.0, 0.0, 0.0, "Regime not supplied.")
+
+        read = build_read(model, ensemble, features, max_uncertainty=config.max_uncertainty)
+        if read is not None and read.abstain_reason:
+            return Verdict("NO SIGNAL", read.abstain_reason, regime.name, read=read)
+
+        council = run_council(
+            candle,
+            previous_close,
+            features,
+            read.probability if read else None,
+            weights=weights,
+            regime=regime.name,
+            min_checks=config.min_confluence_checks,
+            calibrated=bool(read and read.calibrated),
+            spread_pips=spread_pips,
+        )
+        if not council.actionable:
+            return Verdict("NO SIGNAL", council.reason, regime.name, read=read, council=council)
+
+        mode = model.mode if model is not None else MODE_VETO
+        allowed, model_reason = model_verdict(council.side, read, mode=mode)
+        if not allowed:
+            return Verdict(
+                "NO SIGNAL", model_reason, regime.name, read=read, council=council, model_reason=model_reason
+            )
+        return Verdict(
+            council.side, council.reason, regime.name, read=read, council=council, model_reason=model_reason
+        )
+
+    # ----------------------------------------------------------------- minute
+    def evaluate(
+        self,
+        candles: Sequence[Candle],
+        *,
+        model: OnlineLogisticModel | None = None,
+        ensemble: BootstrapEnsemble | None = None,
+        weights: CouncilWeights | None = None,
+        source: str = "LIVE",
+        quote: dict | None = None,
+        at: datetime | None = None,
+    ) -> EngineResult:
+        """Data gate -> features -> decision -> seal, for one live minute."""
+        config = self.config
+        stamp = at or utcnow()
+        candles = list(candles)
+
+        gate = datagate.evaluate(
+            candles,
+            now=stamp,
+            max_age_seconds=config.max_candle_age_seconds,
+            max_spread_pips=config.max_spread_pips,
+            quote=quote,
+        )
+        if not gate.usable:
+            return EngineResult(charter.SEAL_ABSTAIN, None, f"Data gate: {gate.reason}", gate=gate)
+
+        feature_rows = compute_features(candles)
+        features = feature_rows[-1] if feature_rows else None
+
+        latest = candles[-1]
+        previous_close = candles[-2].close if len(candles) > 1 else latest.close
+        regime_state = detect_regime(candles, features)
+        verdict = self.decide(
+            latest,
+            previous_close,
+            features,
+            model=model,
+            ensemble=ensemble,
+            weights=weights,
+            regime_state=regime_state,
+            spread_pips=gate.spread_pips,
+        )
+        return self._seal(
+            verdict, gate=gate, source=source, at=stamp, spread=gate.spread_pips, features=features
+        )
+
+    def evaluate_prepared(
+        self,
+        candles: Sequence[Candle],
+        *,
+        features: dict[str, float] | None,
+        gate: datagate.GateResult,
+        regime_state: RegimeState,
+        model: OnlineLogisticModel | None = None,
+        ensemble: BootstrapEnsemble | None = None,
+        weights: CouncilWeights | None = None,
+        source: str = "BACKTEST",
+        at: datetime | None = None,
+    ) -> EngineResult:
+        """Decision + seal with the gate, features and regime supplied.
+
+        Used by the backtest, which precomputes those once for the whole series
+        instead of per bar. The decision and seal code is identical to live.
+        """
+        candles = list(candles)
+        latest = candles[-1]
+        previous_close = candles[-2].close if len(candles) > 1 else latest.close
+        verdict = self.decide(
+            latest,
+            previous_close,
+            features,
+            model=model,
+            ensemble=ensemble,
+            weights=weights,
+            regime_state=regime_state,
+            spread_pips=gate.spread_pips,
+        )
+        return self._seal(
+            verdict,
+            gate=gate,
+            source=source,
+            at=at or latest.timestamp,
+            spread=gate.spread_pips,
+            features=features,
+        )
+
+    def _seal(
+        self,
+        verdict: Verdict,
+        *,
+        gate: datagate.GateResult,
+        source: str,
+        at: datetime,
+        spread: float,
+        features: dict[str, float] | None = None,
+    ) -> EngineResult:
+        if not verdict.actionable:
+            return EngineResult(
+                charter.SEAL_ABSTAIN,
+                None,
+                verdict.reason,
+                gate=gate,
+                regime=verdict.regime,
+                read=verdict.read,
+                council=verdict.council,
+                model_reason=verdict.model_reason,
+            )
+
+        entry_time = floor_minute(at)
+        latency = (at - entry_time).total_seconds()
+        if latency > self.config.max_seal_latency_seconds:
+            # The entry is already in the past. A backdated signal would be a lie.
+            return EngineResult(
+                charter.SEAL_DISCARDED_LATE,
+                None,
+                f"Sealed {latency:.1f}s after the minute opened, past the "
+                f"{self.config.max_seal_latency_seconds}s limit; discarded, not backdated.",
+                gate=gate,
+                regime=verdict.regime,
+                read=verdict.read,
+                council=verdict.council,
+                model_reason=verdict.model_reason,
+            )
+
+        read = verdict.read
+        signal = Signal.create(
+            pair=self.config.pair,
+            side=verdict.side,
+            entry_time=entry_time,
+            strategy="fusion_council",
+            reason=verdict.reason,
+            source=source,
+            generated_at=at,
+            horizon_minutes=self.config.horizon_minutes,
+            probability_up=read.probability if read else None,
+            probability_raw=read.raw if read else None,
+            calibration_state=read.calibration_state if read else RAW,
+            uncertainty=read.uncertainty if read else None,
+            regime=verdict.regime,
+            council=tuple(vote.to_dict() for vote in verdict.council.votes) if verdict.council else (),
+            # Kept so the outcome can be learned from later; without it the
+            # settlement cannot update the model and the bar is wasted.
+            features=dict(features or {}),
+            spread_pips=spread,
+        )
+        return EngineResult(
+            charter.SEAL_SIGNAL,
+            signal,
+            verdict.reason,
+            gate=gate,
+            regime=verdict.regime,
+            read=read,
+            council=verdict.council,
+            model_reason=verdict.model_reason,
+        )
+
+
+def expiry_of(signal: Signal) -> datetime:
+    return add_minutes(signal.entry_time, signal.horizon_minutes)

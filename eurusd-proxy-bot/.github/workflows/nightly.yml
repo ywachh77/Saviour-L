@@ -1,0 +1,47 @@
+name: fusion-nightly
+
+# Nightly walk-forward at 23:55 UTC.
+#
+# The bot runs this itself from Termux. This job exists so the nightly still
+# happens if the phone was offline at 23:55; job slots make a double-run
+# harmless (the second one is skipped).
+
+on:
+  schedule:
+    - cron: "55 23 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fusion-nightly
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Locate the bot directory
+        id: locate
+        run: |
+          if [ -d eurusd-proxy-bot/fusion ]; then
+            echo "dir=eurusd-proxy-bot" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Walk-forward, promote or roll back
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+          SIGNAL_HORIZON_MINUTES: ${{ vars.SIGNAL_HORIZON_MINUTES }}
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: |
+          python scripts/nightly.py

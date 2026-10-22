@@ -1,0 +1,37 @@
+name: fusion-tests
+
+# CI for the FUSION BOT code that lives in eurusd-proxy-bot/.
+#
+# GitHub only reads workflows from the repository root, so this file has to sit
+# here even though the bot is a subdirectory. The bot's OWN copies of
+# nightly.yml and fallback.yml stay inside eurusd-proxy-bot/.github/ and become
+# active once scripts/publish_repo.sh pushes that folder as a standalone repo —
+# which is the right place for scheduled jobs anyway.
+#
+# The honesty charter is enforced here: if a change lets synthetic data train
+# the model, backdates a late signal, or stops charging costs, this fails.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: eurusd-proxy-bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run the suite
+        run: python -m unittest discover -s tests -t .
+
+      - name: Offline smoke run
+        run: python scripts/smoke.py 420

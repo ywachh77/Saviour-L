@@ -1,0 +1,5 @@
+# Portable copies of the bot (kept on disk, not in git)
+*.zip
+
+# Local runtime state
+var/

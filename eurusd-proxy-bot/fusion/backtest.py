@@ -1,0 +1,311 @@
+"""Purged walk-forward backtest of the system the bot actually runs.
+
+Why this exists: judging the bot on the *model's* numbers is misleading. The
+model scores every bar; the bot trades only the bars that survive the data gate,
+the regime filter, the six-check council and the meta-model veto. Those are
+different populations, and only the second one pays the spread.
+
+So this replays the real thing:
+
+* features are computed once over the whole series (no per-bar recomputation, so
+  a month of M1 bars stays linear);
+* folds are **purged** — a training sample whose label reaches into the test
+  window is dropped, because a one-minute label looks `horizon` bars ahead;
+* each fold trains on the past only, then drives the live decision path
+  (`FusionEngine.evaluate_prepared`) bar by bar, so the backtest cannot drift
+  from production;
+* every replayed signal pays the spread and is settled from real candle opens
+  and closes.
+
+Two honesty notes that travel with every report:
+
+1. Fewer than ~200 replayed signals means the confidence interval is wide enough
+   that the number is entertainment, not evidence. The report says so.
+2. This measures one path through one random-looking history. It is not a
+   Monte Carlo and it is not a promise.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from datetime import timedelta
+from typing import Sequence
+
+from . import charter, datagate
+from .config import Config
+from .council import CouncilWeights, spoken_votes
+from .domain import Candle
+from .engine import FusionEngine
+from .features import compute_features
+from .indicators import atr, mean
+from .model import OnlineLogisticModel
+from .regime import classify
+
+MIN_TRAIN_PER_FOLD = 150
+MIN_BARS_FOR_BACKTEST = 600
+MIN_SIGNALS_FOR_A_VIEW = 200
+
+
+@dataclass
+class BacktestReport:
+    bars: int = 0
+    folds: int = 0
+    signals: int = 0
+    wins: int = 0
+    losses: int = 0
+    ties: int = 0
+    unresolved: int = 0
+    gross_pips: float = 0.0
+    net_pips: float = 0.0
+    win_rate: float | None = None
+    wilson_low: float = 0.0
+    wilson_high: float = 0.0
+    coverage: float = 0.0
+    model_accuracy: float | None = None
+    model_points: int = 0
+    learned_weights: dict[str, float] = field(default_factory=dict)
+    per_fold: list[dict] = field(default_factory=list)
+    note: str = ""
+
+    @property
+    def enough_for_a_view(self) -> bool:
+        return self.signals >= MIN_SIGNALS_FOR_A_VIEW
+
+    @property
+    def expectancy_pips(self) -> float | None:
+        """Average net pips per replayed signal."""
+        decided = self.wins + self.losses
+        return (self.net_pips / decided) if decided else None
+
+    def to_dict(self) -> dict:
+        return {
+            "bars": self.bars,
+            "folds": self.folds,
+            "signals": self.signals,
+            "wins": self.wins,
+            "losses": self.losses,
+            "ties": self.ties,
+            "unresolved": self.unresolved,
+            "gross_pips": round(self.gross_pips, 2),
+            "net_pips": round(self.net_pips, 2),
+            "expectancy_pips": (None if self.expectancy_pips is None else round(self.expectancy_pips, 4)),
+            "win_rate": self.win_rate,
+            "wilson": [round(self.wilson_low, 4), round(self.wilson_high, 4)],
+            "coverage": round(self.coverage, 5),
+            "model_accuracy": self.model_accuracy,
+            "model_points": self.model_points,
+            "learned_weights": {k: round(v, 4) for k, v in self.learned_weights.items()},
+            "enough_for_a_view": self.enough_for_a_view,
+            "per_fold": self.per_fold,
+            "note": self.note,
+        }
+
+
+def _purged_splits(indices: Sequence[int], folds: int, horizon: int) -> list[tuple[list[int], list[int]]]:
+    """Expanding-window folds with a purge of `horizon` bars before each test.
+
+    A sample at bar j is labelled by the close of bar j+horizon, so training on
+    any j whose label lands inside the test window is leakage. Those are dropped.
+    """
+    total = len(indices)
+    folds = max(2, min(int(folds), 6))
+    if total < folds * 60:
+        return []
+    bounds = [int(round(total * step / (folds + 1))) for step in range(1, folds + 2)]
+
+    splits: list[tuple[list[int], list[int]]] = []
+    for fold in range(folds):
+        train_end = bounds[fold]
+        test_start, test_end = bounds[fold], bounds[fold + 1]
+        first_test_bar = indices[test_start]
+        train = [j for j in indices[:train_end] if j + horizon < first_test_bar]
+        test = indices[test_start:test_end]
+        if len(train) >= MIN_TRAIN_PER_FOLD and test:
+            splits.append((train, test))
+    return splits
+
+
+def _label(candles: Sequence[Candle], index: int, horizon: int) -> int | None:
+    entry_index = index + 1
+    exit_index = index + horizon
+    if exit_index >= len(candles):
+        return None
+    move = candles[exit_index].close - candles[entry_index].open
+    if math.isclose(move, 0.0, abs_tol=1e-12):
+        return None  # a tie carries no direction; dropped, not guessed
+    return 1 if move > 0 else 0
+
+
+def run_backtest(
+    candles: Sequence[Candle],
+    config: Config,
+    *,
+    folds: int = 4,
+    horizon: int | None = None,
+    spread_pips: float | None = None,
+    weights: CouncilWeights | None = None,
+    min_bars: int = MIN_BARS_FOR_BACKTEST,
+) -> BacktestReport:
+    """Replay the full pipeline over history and settle every signal with costs."""
+    candles = sorted(candles, key=lambda candle: candle.timestamp)
+    horizon = int(horizon if horizon is not None else config.horizon_minutes)
+    spread = float(spread_pips if spread_pips is not None else config.spread_pips)
+    report = BacktestReport(bars=len(candles))
+
+    if len(candles) < min_bars:
+        report.note = (
+            f"Only {len(candles)} bars stored; {min_bars} are needed before a replay means anything."
+        )
+        return report
+
+    feature_rows = compute_features(candles)
+    atr_values = atr(candles, 14)
+    usable = [
+        index
+        for index in range(len(candles))
+        if index > 0 and feature_rows[index] is not None and index + horizon < len(candles)
+    ]
+    if len(usable) < min_bars // 2:
+        report.note = "Not enough bars with complete indicators to build folds."
+        return report
+
+    splits = _purged_splits(usable, folds, horizon)
+    if not splits:
+        report.note = "Not enough data to build purged walk-forward folds."
+        return report
+
+    engine = FusionEngine(config)
+    weights = weights or CouncilWeights()
+    model_points: list[tuple[float, int]] = []
+
+    for fold_index, (train_idx, test_idx) in enumerate(splits, start=1):
+        pairs: list[tuple[dict, int]] = []
+        for index in train_idx:
+            label = _label(candles, index, horizon)
+            if label is not None:
+                pairs.append((feature_rows[index], label))
+        if len(pairs) < MIN_TRAIN_PER_FOLD:
+            continue
+        try:
+            model = OnlineLogisticModel().fit(pairs, epochs=90, validation_fraction=0.0)
+        except ValueError:
+            continue
+
+        fold_signals = fold_wins = fold_losses = 0
+        fold_net = 0.0
+
+        for index in test_idx:
+            features = feature_rows[index]
+            candle = candles[index]
+            recent = [value for value in atr_values[max(0, index - 29) : index + 1] if value is not None]
+            regime = classify(
+                atr_value=float(features["atr"]),
+                atr_pct=float(features["atr_pct"]),
+                atr_baseline=mean(recent) if recent else 0.0,
+                adx_value=float(features["adx"]),
+                close=candle.close,
+                ema_fast=float(features["ema_fast"]),
+                ema_slow=float(features["ema_slow"]),
+            )
+            # Historical bars cannot be checked for freshness, so the gate is
+            # reduced to the spread test. The report says this out loud.
+            gate = datagate.GateResult(
+                datagate.OK, "OK", 0.0, spread, "modelled", 0, index + 1,
+                "Replay: the feed is assumed to have been healthy at the time.",
+            )
+            result = engine.evaluate_prepared(
+                candles[: index + 1],
+                features=features,
+                gate=gate,
+                regime_state=regime,
+                model=model,
+                weights=weights,
+                source="BACKTEST",
+                at=candle.timestamp + timedelta(minutes=1),
+            )
+
+            label = _label(candles, index, horizon)
+            if label is not None:
+                try:
+                    model_points.append((model.predict_up(features), label))
+                except ValueError:
+                    pass
+
+            if not result.actionable:
+                continue
+
+            entry = candles[index + 1].open
+            exit_price = candles[index + horizon].close
+            move = exit_price - entry
+            gross_pips = (move if result.signal.side == "BUY" else -move) / charter.PIP
+            net_pips = gross_pips - spread
+
+            fold_signals += 1
+            fold_net += net_pips
+            if math.isclose(gross_pips, 0.0, abs_tol=1e-12):
+                report.ties += 1
+            elif gross_pips > 0:
+                report.wins += 1
+                fold_wins += 1
+            else:
+                report.losses += 1
+                fold_losses += 1
+            report.gross_pips += gross_pips
+
+            # Learn the council exactly the way the live runner does: every
+            # settled, non-tied outcome credits or blames the prototypes that
+            # spoke. Without this the replay measures a bot that never learns,
+            # so no prototype can ever earn a voice in a backtest — the scalping
+            # family would be invisible here while fully live in production.
+            winning_side = "BUY" if move > 0 else "SELL" if move < 0 else None
+            if result.council is not None and winning_side is not None:
+                weights.observe(spoken_votes(result.council.votes), winning_side)
+
+        report.folds += 1
+        report.signals += fold_signals
+        report.net_pips += fold_net
+        report.per_fold.append(
+            {
+                "fold": fold_index,
+                "train_bars": len(train_idx),
+                "test_bars": len(test_idx),
+                "signals": fold_signals,
+                "wins": fold_wins,
+                "losses": fold_losses,
+                "net_pips": round(fold_net, 2),
+            }
+        )
+
+    decided = report.wins + report.losses
+    if decided:
+        report.win_rate = report.wins / decided
+        report.wilson_low, report.wilson_high = charter.wilson_interval(report.wins, decided)
+    report.coverage = (report.signals / len(usable)) if usable else 0.0
+    report.learned_weights = dict(weights.active())
+    if model_points:
+        report.model_points = len(model_points)
+        report.model_accuracy = (
+            sum(1 for probability, label in model_points if (probability >= 0.5) == bool(label))
+            / len(model_points)
+        )
+    report.note = _note(report, spread)
+    return report
+
+
+def _note(report: BacktestReport, spread: float) -> str:
+    parts = [
+        f"{report.signals} signals replayed across {report.folds} purged folds; "
+        f"every one charged {spread:.2f} pips of spread."
+    ]
+    if not report.enough_for_a_view:
+        parts.append(
+            f"Fewer than {MIN_SIGNALS_FOR_A_VIEW} signals: the interval is too wide to call this evidence."
+        )
+    if report.net_pips <= 0:
+        parts.append("Net expectancy is not positive after costs — the gate should stay in VETO mode.")
+    parts.append(
+        "Replay assumes the feed was healthy (freshness cannot be checked historically) and "
+        "measures one path through one history, not a distribution."
+    )
+    return " ".join(parts)
