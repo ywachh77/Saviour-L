@@ -104,7 +104,7 @@ ingest ──▶ data gate ──▶ features ──▶ regime ──▶ strateg
 | A scalp that cannot pay its own spread stays quiet | `charter.scalp_cost_ok`, `tests/test_scalping.py` |
 | The replay learns the council as the live bot does | `backtest.run_backtest`, `tests/test_backtest.py` |
 
-Run `python -m unittest discover -s tests -t .` — 322 tests. If one fails, the
+Run `python -m unittest discover -s tests -t .` — 339 tests. If one fails, the
 charter is broken; do not ship it.
 
 ---
@@ -381,6 +381,7 @@ eurusd-proxy-bot/
 │   ├── backfill.py          history import (BACKFILL=1, env-flagged on purpose)
 │   ├── set_keys.py          add/replace the Twelve Data keys in .env
 │   ├── set_telegram.py      put the bot token and owner chat id in .env
+│   └── set_supabase.py      put the project URL and service_role key in .env
 │   └── termux_boot.sh       optional auto-start + restart-on-crash for Termux
 ├── docs/
 │   ├── FUSION_BOT_BLUEPRINT.md   architecture record: why each piece exists
@@ -388,7 +389,7 @@ eurusd-proxy-bot/
 ├── supabase/migrations/     0001_init.sql — 13 tables, RLS on all
 │                            0002_add_missing_columns.sql — runtime columns
 ├── .github/workflows/       tests.yml, nightly.yml, fallback.yml
-└── tests/                   322 tests, many of them charter guards
+└── tests/                   339 tests, many of them charter guards
 ```
 
 ## Useful extras

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -98,6 +99,28 @@ def remove_key(lines: Sequence[str], key: str) -> list[str]:
         for line in lines
         if not (_ASSIGNMENT.match(line) and _ASSIGNMENT.match(line).group(3) == key)
     ]
+
+
+def ensure_exists(target: str | Path, example: str | Path) -> bool:
+    """Create ``target`` from ``example`` when it is missing.
+
+    A fresh clone ships only .env.example, because .env is git-ignored and holds
+    real credentials. Asking someone to remember `cp .env.example .env` before
+    every other command is exactly the kind of fiddly step that goes wrong, so
+    the credential scripts do it for them.
+    """
+    target_path = Path(target)
+    if target_path.is_file():
+        return True
+    example_path = Path(example)
+    if not example_path.is_file():
+        return False
+    shutil.copyfile(example_path, target_path)
+    try:
+        os.chmod(target_path, 0o600)
+    except OSError:
+        pass
+    return True
 
 
 def write(path: str | Path, lines: Sequence[str]) -> None:
