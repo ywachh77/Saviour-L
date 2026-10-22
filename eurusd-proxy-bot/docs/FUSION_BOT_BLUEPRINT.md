@@ -167,7 +167,8 @@ key; 5xx → short cooldown. Slots exist for legitimately provisioned keys only.
 | spread charged on every settled trade | `charter.net_pips`, `test_charter.py` |
 | synthetic data trains nothing | `learning.online_step`, `test_runner.py` |
 | heartbeat-only liveness | `heartbeat.py`, `test_heartbeat.py` |
-| RLS on all 13 tables | `supabase/migrations/0001_init.sql` |
+| RLS on all 13 tables | `supabase/migrations/` |
+| bot payloads and the SQL schema cannot drift apart | `tests/test_schema_contract.py` |
 | every win rate carries a Wilson interval | `digest.py`, `test_digest.py` |
 | backtest folds are purged | `backtest.py`, `test_backtest.py` |
 | calibration fitted out-of-sample only | `learning.run_nightly`, `test_backtest.py` |

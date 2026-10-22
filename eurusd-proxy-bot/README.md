@@ -95,10 +95,11 @@ ingest ──▶ data gate ──▶ features ──▶ regime ──▶ strateg
 | The spread is charged on every settled trade | `charter.net_pips`, `tests/test_charter.py` |
 | Synthetic / replay data trains nothing | `learning.online_step`, `tests/test_learning.py` |
 | Liveness is heartbeats only; Actions stands in after 90 s | `heartbeat.py`, `tests/test_heartbeat.py` |
-| RLS on all 13 Supabase tables | `supabase/migrations/0001_init.sql` |
+| RLS on all 13 Supabase tables | `supabase/migrations/` |
 | A win rate always travels with its Wilson interval | `digest.py`, `tests/test_digest.py` |
+| Bot payloads and the SQL schema cannot drift apart | `tests/test_schema_contract.py` |
 
-Run `python -m unittest discover -s tests -t .` — 229 tests. If one fails, the
+Run `python -m unittest discover -s tests -t .` — 234 tests. If one fails, the
 charter is broken; do not ship it.
 
 ### Measuring whether it actually works
@@ -135,9 +136,11 @@ when the win rate looks good. That is the point: gross direction is not profit.
 ### Step 2 — Supabase (free tier is fine)
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor → New query**, paste the whole of
-   `supabase/migrations/0001_init.sql`, and run it. It creates 13 tables with
-   row-level security enabled and no public policies.
+2. Open **SQL Editor → New query** and run the migrations in order —
+   `supabase/migrations/0001_init.sql` first, then
+   `0002_add_missing_columns.sql`. Together they create 13 tables with
+   row-level security enabled and no public policies. Both are idempotent, so
+   re-running them is safe.
 3. Go to **Project Settings → API** and copy:
    - **Project URL** → `SUPABASE_URL`
    - **service_role key** → `SUPABASE_SERVICE_ROLE_KEY`
@@ -296,8 +299,9 @@ eurusd-proxy-bot/
 │   ├── FUSION_BOT_BLUEPRINT.md   architecture record: why each piece exists
 │   └── vortex-orbix-topics.md    research notebook from the two source repos
 ├── supabase/migrations/     0001_init.sql — 13 tables, RLS on all
+│                            0002_add_missing_columns.sql — runtime columns
 ├── .github/workflows/       tests.yml, nightly.yml, fallback.yml
-└── tests/                   177 tests, many of them charter guards
+└── tests/                   234 tests, many of them charter guards
 ```
 
 ## Useful extras
