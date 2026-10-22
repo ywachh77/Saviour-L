@@ -11,14 +11,22 @@
 # rest of the night. The bot's own job slots make a restart safe: any minute
 # already processed is skipped, never processed twice.
 
-BOT_DIR="$HOME/eurusd-proxy-bot/eurusd-proxy-bot"
-LOG_DIR="$HOME/eurusd-proxy-bot/var"
+# publish_repo.sh pushes the bot folder as the ROOT of the new repo, so a clone
+# lands at ~/eurusd-proxy-bot with scripts/ directly inside it. Older layouts
+# nested it one level deeper; both are accepted so this works either way, and
+# FUSION_BOT_DIR overrides everything.
+BOT_DIR="${FUSION_BOT_DIR:-$HOME/eurusd-proxy-bot}"
+if [ ! -f "$BOT_DIR/scripts/run_bot.py" ] && [ -f "$BOT_DIR/eurusd-proxy-bot/scripts/run_bot.py" ]; then
+  BOT_DIR="$BOT_DIR/eurusd-proxy-bot"
+fi
+LOG_DIR="${FUSION_BOT_LOG:-$HOME/eurusd-proxy-bot/var}"
 PYTHON="$(command -v python3 || command -v python)"
 
 mkdir -p "$LOG_DIR"
 
-if [ -z "$PYTHON" ] || [ ! -d "$BOT_DIR" ]; then
-  echo "FUSION BOT: python or $BOT_DIR is missing; not starting." >> "$LOG_DIR/boot.log"
+if [ -z "$PYTHON" ] || [ ! -f "$BOT_DIR/scripts/run_bot.py" ]; then
+  echo "FUSION BOT: python or $BOT_DIR/scripts/run_bot.py is missing; not starting." >> "$LOG_DIR/boot.log"
+  echo "  set FUSION_BOT_DIR if you cloned somewhere else." >> "$LOG_DIR/boot.log"
   exit 1
 fi
 
