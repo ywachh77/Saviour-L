@@ -98,7 +98,7 @@ ingest ──▶ data gate ──▶ features ──▶ regime ──▶ strateg
 | RLS on all 13 Supabase tables | `supabase/migrations/0001_init.sql` |
 | A win rate always travels with its Wilson interval | `digest.py`, `tests/test_digest.py` |
 
-Run `python -m unittest discover -s tests -t .` — 177 tests. If one fails, the
+Run `python -m unittest discover -s tests -t .` — 191 tests. If one fails, the
 charter is broken; do not ship it.
 
 ---
@@ -132,6 +132,9 @@ when the win rate looks good. That is the point: gross direction is not profit.
    The service_role key bypasses RLS. It stays in `.env` and in GitHub secrets.
    Never in chat, never in a commit.
 
+4. Check it: `python scripts/doctor.py`. It queries all 13 tables and will tell
+   you which ones are missing if the migration did not finish.
+
 ### Step 3 — GitHub (private repo)
 
 ```bash
@@ -158,7 +161,12 @@ Secrets**: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
 2. Message [@userinfobot](https://t.me/userinfobot), copy your **numeric** id →
    `TELEGRAM_OWNER_CHAT_ID`.
 3. Send `/start` to your bot. Any other chat id is ignored silently — this bot
-   is owner-only and does not talk to strangers.
+   is owner-only and does not talk to strangers. A bot cannot message you first,
+   so this step is not optional.
+
+4. Check it: `python scripts/doctor.py --send`. It puts one test message in your
+   chat and confirms the message id came back, which is the same proof the bot
+   requires before it ever records a signal as `SENT`.
 
 ### Step 5 — Termux (the 24/7 primary)
 
@@ -172,6 +180,9 @@ python scripts/run_bot.py
 ```
 
 That is the only command you need. The bot then owns its own schedule.
+
+If something is wrong, `python scripts/doctor.py` checks all four services for
+real (not just "is the variable set?") and prints one next action per problem.
 
 Recommended, so the phone does not kill it:
 
@@ -232,11 +243,13 @@ eurusd-proxy-bot/
 │   ├── provider.py          Twelve Data over urllib
 │   ├── settle.py            cost-charged paper settlement
 │   ├── store.py             Supabase REST + local JSON-lines fallback
+│   └── doctor.py            setup self-check (which step is broken, and why)
 │   ├── telegram.py          owner-only delivery with honest states
 │   ├── runner.py            the zero-touch loop
 │   └── simulate.py          deterministic offline replay
 ├── scripts/
 │   ├── run_bot.py           the one command you run
+│   ├── doctor.py            check your setup: python scripts/doctor.py
 │   ├── smoke.py             offline pipeline demo  (python scripts/smoke.py 420)
 │   ├── nightly.py           walk-forward + gates
 │   ├── fallback.py          Actions stand-in, heartbeat-gated
@@ -251,6 +264,8 @@ eurusd-proxy-bot/
 ```bash
 python -m unittest discover -s tests -t .   # the charter, asserted
 python scripts/smoke.py 420                 # watch it work offline
+python scripts/doctor.py                    # is my setup actually correct?
+python scripts/doctor.py --send             # ...and prove delivery works
 BACKFILL=1 BACKFILL_MINUTES=20000 python scripts/backfill.py
 ```
 

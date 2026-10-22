@@ -179,6 +179,18 @@ class SupabaseStore:
             self.errors.append(str(error))
             return []
 
+    def probe(self, table: str) -> str | None:
+        """Reachability check for one table: None when it answers, else the error.
+
+        Used by the setup doctor to tell "table missing" apart from "table
+        empty", which an empty select result cannot do.
+        """
+        try:
+            self._call("GET", f"{table}?select=*&limit=1")
+            return None
+        except StoreError as error:
+            return str(error)
+
     def update(self, table: str, filters: dict[str, str], patch: dict) -> int:
         params = "&".join(f"{key}={urllib.parse.quote(str(value))}" for key, value in filters.items())
         try:
