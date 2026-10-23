@@ -2,7 +2,7 @@
 """A small local web form for entering every credential at once.
 
     python scripts/setup_web.py            # prints a URL with a one-time token
-    python scripts/setup_web.py --local    # bind to 127.0.0.1 only (Termux)
+    python scripts/setup_web.py --local    # bind to 127.0.0.1 only
     python scripts/setup_web.py --port 9000
 
 Why a token
@@ -29,7 +29,7 @@ What it deliberately does not do
 * **Validates before writing.** A rejected field writes nothing at all, so a
   typo cannot clobber a working key.
 
-Stdlib only, so it runs unchanged on Termux.
+Stdlib only, so it runs unchanged anywhere Python does.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ ENV_PATH = ROOT / ".env"
 # Off by default. The random path is what keeps this safe on a shared network;
 # serving the form at / as well removes that, so it is opt-in and only sensible
 # somewhere the host itself is already private (a sandbox preview, a loopback
-# bind). On Termux over shared wifi, leave it off and use --local.
+# bind). On a shared or public network, leave it off and use --local.
 ALLOW_ROOT = False
 
 
@@ -461,7 +461,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--local", action="store_true",
-                        help="bind to 127.0.0.1 only; use this on Termux or shared wifi")
+                        help="bind to 127.0.0.1 only; use this on a shared or public network")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--allow-root", action="store_true",
                         help="also serve the form at / — only safe where the "

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Nightly job: walk-forward, promote or roll back, then report.
 
-Runs automatically at 23:55 UTC from scripts/run_bot.py and, if the primary
-runner is quiet, from GitHub Actions (see scripts/fallback.py).
+Runs automatically at 23:55 UTC, from scripts/run_bot.py on an always-on
+host or from GitHub Actions (see scripts/actions_cycle.py).
 
     python scripts/nightly.py
 """

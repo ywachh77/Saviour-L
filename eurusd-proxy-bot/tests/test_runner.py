@@ -49,7 +49,7 @@ def make_bot(directory: Path, **overrides) -> FusionBot:
         pair="EUR/USD",
         horizon_minutes=3,
         local_state_dir=str(directory),
-        runner="termux",
+        runner="github-actions",
         max_candle_age_seconds=180,
         min_calibration_points=60,
     )
@@ -103,7 +103,7 @@ class TestDeliveryInTheLoop(unittest.TestCase):
         shutil.rmtree(self.directory, ignore_errors=True)
 
     def _bot(self, transport) -> FusionBot:
-        config = Config(local_state_dir=str(self.directory), runner="termux", horizon_minutes=3)
+        config = Config(local_state_dir=str(self.directory), runner="github-actions", horizon_minutes=3)
         client = TelegramClient("t", "1", opener=transport)
         return FusionBot(
             config=config,

@@ -1,0 +1,69 @@
+name: fusion-cycle
+
+# The runner. Wakes on a cron, does one cycle, disappears.
+#
+# CADENCE IS A COST SETTING, NOT A PERFORMANCE ONE.
+#
+# A private repo on the free plan gets 2,000 Actions minutes a month. Every
+# wake-up costs roughly one to two billed minutes (checkout + interpreter +
+# the cycle itself), so:
+#
+#     */5    ~8,640 runs/mo   ~13,000 min   far over the free tier
+#     */15   ~2,880 runs/mo   ~4,300 min    over
+#     */30   ~1,440 runs/mo   ~2,200 min    at the limit  <-- default
+#     0 * *  ~  720 runs/mo   ~1,100 min    comfortable
+#
+# The default is */30. If GitHub emails you about quota, change the cron below
+# to "0 * * * *" (hourly) and the problem goes away. Nothing else needs editing.
+#
+# Cadence also caps how often a signal can be emitted: the bot evaluates the
+# minute it wakes into and never backdates, so */30 means at most 48 evaluated
+# minutes a day. That is a research cadence, not a latency-critical one, which
+# is what this bot is for.
+#
+# Want true minute-by-minute coverage? Make the repo public (Actions minutes
+# are then free and unlimited), buy more minutes, or run scripts/run_bot.py on
+# any always-on host. There is no fourth option that stays inside the free
+# private tier.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fusion-cycle
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate the bot directory
+        id: locate
+        run: |
+          if [ -d eurusd-proxy-bot/fusion ]; then
+            echo "dir=eurusd-proxy-bot" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run one cycle
+        env:
+          RUNNER: github-actions
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TWELVE_DATA_KEY_1: ${{ secrets.TWELVE_DATA_KEY_1 }}
+          TWELVE_DATA_KEY_2: ${{ secrets.TWELVE_DATA_KEY_2 }}
+          TWELVE_DATA_KEY_3: ${{ secrets.TWELVE_DATA_KEY_3 }}
+          TWELVE_DATA_KEY_4: ${{ secrets.TWELVE_DATA_KEY_4 }}
+          TWELVE_DATA_KEY_5: ${{ secrets.TWELVE_DATA_KEY_5 }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: |
+          python3 scripts/actions_cycle.py

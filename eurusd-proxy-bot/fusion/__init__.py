@@ -1,7 +1,7 @@
 """FUSION BOT — unified EUR/USD research signal engine.
 
 Pure standard-library Python. No pip dependencies. Runs on CPython 3.9+
-(Termux, GitHub Actions, laptop).
+(GitHub Actions, a laptop, any always-on host).
 
 The package is organised as a single-minute pipeline:
 

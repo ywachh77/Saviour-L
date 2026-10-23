@@ -1,10 +1,16 @@
 """Heartbeat-only liveness.
 
-There is no second opinion about whether the bot is alive: the primary runner
-writes a heartbeat each cycle, and the GitHub Actions fallback stands in only
-when that heartbeat is older than the stale threshold. A process that is up but
-wedged stops writing heartbeats, which is exactly the case the fallback exists
-for.
+The runner writes a heartbeat at the end of every cycle. That row is the only
+record of whether the bot is alive: a process that is up but wedged stops
+writing heartbeats, and the bot is judged dead until one arrives.
+
+This deliberately replaces "is the process running?" with "did it finish a
+cycle?". A live process that is stuck in a retry loop looks dead here, because
+to the outside world it is.
+
+Heartbeats are for *observing*, not for gating. Every scheduled run does its
+own work; nothing waits for another runner to go quiet first, because there is
+only one runner.
 """
 
 from __future__ import annotations
@@ -42,6 +48,6 @@ def is_stale(row: dict | None, stale_seconds: int = charter.HEARTBEAT_STALE_SECO
     return age > float(stale_seconds)
 
 
-def fallback_should_run(store, *, stale_seconds: int = charter.HEARTBEAT_STALE_SECONDS, runner: str = "termux") -> bool:
-    """True only when the primary runner's heartbeat has gone quiet."""
-    return is_stale(store.latest_heartbeat(runner=runner), stale_seconds)
+def stale_seconds_since(row: dict | None) -> float | None:
+    """How long since this heartbeat, or None when there has never been one."""
+    return heartbeat_age_seconds(row)

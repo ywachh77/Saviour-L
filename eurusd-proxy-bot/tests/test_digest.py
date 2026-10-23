@@ -33,7 +33,7 @@ class TestDigest(unittest.TestCase):
             council_weights={},
             learning_events=[],
             key_pool={},
-            runner="termux",
+            runner="github-actions",
             alerts=[],
         )
         self.assertIn("unresolved 2", text)
@@ -51,7 +51,7 @@ class TestDigest(unittest.TestCase):
             council_weights={"breakout": 0.12},
             learning_events=[{"applied": True}],
             key_pool={"slots": [{"enabled": True, "day_used": 10, "day_limit": 800}]},
-            runner="termux",
+            runner="github-actions",
             alerts=[],
         )
         self.assertIn("Wilson", text)
@@ -73,7 +73,7 @@ class TestDigest(unittest.TestCase):
             council_weights={},
             learning_events=[],
             key_pool={},
-            runner="termux",
+            runner="github-actions",
             alerts=[],
         )
         self.assertIn("dropped as late", text)
@@ -90,7 +90,7 @@ class TestDigest(unittest.TestCase):
             council_weights={},
             learning_events=[],
             key_pool={},
-            runner="termux",
+            runner="github-actions",
             alerts=[{"kind": "stale_feed", "message": "feed 400s old"}],
         )
         self.assertIn("stale_feed", text)
@@ -107,7 +107,7 @@ class TestDigest(unittest.TestCase):
             council_weights={},
             learning_events=[],
             key_pool={},
-            runner="termux",
+            runner="github-actions",
             alerts=[],
         )
         self.assertIn("No broker order", text)
@@ -120,7 +120,7 @@ class TestStatus(unittest.TestCase):
         text = digest.build_status(
             config=Config(),
             paused=True,
-            runner="termux",
+            runner="github-actions",
             heartbeat_row=None,
             stats=stats(),
             unresolved=2,

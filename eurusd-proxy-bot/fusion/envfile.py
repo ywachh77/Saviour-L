@@ -8,7 +8,7 @@ Two rules shape everything here:
 * **A secret that has been written is never printed back in full.** Callers get
   masked labels; the real value only ever goes into the file.
 
-Dependency-free and small, because the same code runs on Termux.
+Dependency-free and small, so the same code runs anywhere Python does.
 """
 
 from __future__ import annotations

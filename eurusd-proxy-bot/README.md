@@ -11,8 +11,8 @@ It merges three lines of work into a single engine:
 | **orbix** | the 6-check confluence gate, feature set, isotonic calibration, prequential learning |
 | EUR/USD proxy bot | delivery honesty: sealed signals, confirmed message ids, cost-charged settlement |
 
-Standard library only. No pip install, no numpy, no pandas — it runs on Termux
-as happily as on GitHub Actions.
+Standard library only. No pip install, no numpy, no pandas — it runs anywhere
+Python 3.9+ does: GitHub Actions, a laptop, or any small always-on host.
 
 ---
 
@@ -449,28 +449,45 @@ secret can ever be pushed.)
    chat and confirms the message id came back, which is the same proof the bot
    requires before it ever records a signal as `SENT`.
 
-### Step 5 — Termux (the 24/7 primary)
+### Step 5 — run it on GitHub Actions
+
+Push your secrets, and the bot starts on its own:
 
 ```bash
-pkg update && pkg install python git
-git clone git@github.com:YOUR-USERNAME/eurusd-proxy-bot.git
-cd eurusd-proxy-bot/eurusd-proxy-bot
-cp .env.example .env
-nano .env          # fill in your four values
-python scripts/run_bot.py
+./scripts/push_secrets.sh
 ```
 
-That is the only command you need. The bot then owns its own schedule.
+That is it. The `fusion-cycle` workflow wakes on a cron and runs one cycle per
+wake-up. No device to keep awake, no battery optimisation to fight.
 
-If something is wrong, `python scripts/doctor.py` checks all four services for
-real (not just "is the variable set?") and prints one next action per problem.
+#### What cadence you get, honestly
 
-Recommended, so the phone does not kill it:
+GitHub's scheduler cannot fire faster than every five minutes, and a **private
+repo on the free plan gets 2,000 Actions minutes a month**. Each wake-up bills
+roughly one to two minutes, so:
 
-```bash
-termux-wake-lock
-```
-and disable battery optimisation for Termux in Android settings.
+| Cron | Runs/month | ~Minutes/month | Fits the free tier? |
+|---|---|---|---|
+| `*/5` | 8,640 | ~13,000 | No — far over |
+| `*/15` | 2,880 | ~4,300 | No |
+| `*/30` | 1,440 | ~2,200 | At the limit (**default**) |
+| `0 * * * *` | 720 | ~1,100 | Comfortably |
+
+The workflow ships as `*/30`. **If GitHub emails you about quota, edit the cron
+in `.github/workflows/cycle.yml` to `0 * * * *` and it halves.** Nothing else
+needs changing.
+
+Cadence also caps how often a signal can appear: the bot evaluates the minute
+it wakes into and **never backdates**, so `*/30` means at most 48 evaluated
+minutes a day. That is a research cadence, not a latency-critical one — which
+is what this bot is for.
+
+Want minute-by-minute coverage? Make the repo public (Actions minutes are then
+free and unlimited), buy more minutes, or run `python scripts/run_bot.py` on
+any always-on host. There is no fourth option inside the free private tier.
+
+If something is wrong, `python scripts/doctor.py` checks every service for real
+(not just "is the variable set?") and prints one next action per problem.
 
 ---
 
@@ -522,12 +539,18 @@ M1 needs.
 | only when a human must act | alert: stale feed, unknown delivery, key pool, negative expectancy, rollback |
 
 **Idempotency.** Every scheduled step claims a `(job, bucket)` slot first. If
-Termux and Actions ever overlap, the second one is skipped — a minute is never
-processed twice.
+two runs ever overlap, the second is skipped — a minute is never processed
+twice.
 
-**Fallback.** `scripts/fallback.py` runs from Actions every 5 minutes and does
-nothing at all unless the Termux heartbeat is older than 90 seconds. When it
-does act, its rows are tagged `actions-fallback`.
+**One runner.** `scripts/actions_cycle.py` runs from Actions on a cron: one
+minute cycle, plus whatever scheduled job is due, then the container ends. Its
+rows are tagged `github-actions`. There is no primary/fallback split — with a
+single runner, a job waiting for another runner to go quiet would be waiting
+for itself.
+
+**Liveness.** Each cycle writes a heartbeat. That row is the only record of
+whether the bot is alive, and a process that is up but wedged stops writing
+them, so it is judged dead — which is correct.
 
 ---
 
@@ -581,7 +604,7 @@ eurusd-proxy-bot/
 │   └── push_secrets.sh      Step 6 in one command (.env → Actions secrets)
 │   ├── smoke.py             offline pipeline demo  (python scripts/smoke.py 420)
 │   ├── nightly.py           walk-forward + gates
-│   ├── fallback.py          Actions stand-in, heartbeat-gated
+│   ├── actions_cycle.py     the Actions entry point: one cycle per wake-up
 │   ├── backtest.py          purged walk-forward replay of the full system
 │   ├── economics.py         can this configuration ever pay its own costs?
 │   └── validate_edge.py     does the session filter detect structure when it exists?
@@ -590,14 +613,13 @@ eurusd-proxy-bot/
 │   ├── set_keys.py          add/replace the Twelve Data keys in .env
 │   ├── set_telegram.py      put the bot token and owner chat id in .env
 │   └── set_supabase.py      put the project URL and service_role key in .env
-│   └── termux_boot.sh       optional auto-start + restart-on-crash for Termux
 ├── docs/
 │   ├── FUSION_BOT_BLUEPRINT.md   architecture record: why each piece exists
 │   └── vortex-orbix-topics.md    research notebook from the two source repos
 ├── supabase/migrations/     0001_init.sql — 13 tables, RLS on all
 │                            0002_add_missing_columns.sql — runtime columns
-├── .github/workflows/       tests.yml, nightly.yml, fallback.yml
-└── tests/                   442 tests, many of them charter guards
+├── .github/workflows/       tests.yml, nightly.yml, cycle.yml
+└── tests/                   467 tests, many of them charter guards
 ```
 
 ## Useful extras

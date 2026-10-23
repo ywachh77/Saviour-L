@@ -44,7 +44,7 @@ class StoreError(Exception):
 
 
 class LocalStore:
-    """Append-only JSON-lines store. Zero dependencies, works on Termux."""
+    """Append-only JSON-lines store. Zero dependencies, runs anywhere Python does."""
 
     def __init__(self, directory: str | Path = "var"):
         self.directory = Path(directory)
@@ -346,7 +346,7 @@ class Store:
         return self._read("learning_events", limit=limit, order="created_at.desc")
 
     # ------------------------------------------------------------- job slots
-    def claim_job(self, job: str, bucket: str, *, runner: str = "termux") -> bool:
+    def claim_job(self, job: str, bucket: str, *, runner: str = "github-actions") -> bool:
         """Idempotency slot. True only for the first caller for (job, bucket)."""
         key = f"{job}|{bucket}"
         if key in self.local._claimed:

@@ -134,7 +134,7 @@ class Config:
     nightly_minute_utc: int = 55
     timezone_name: str = "UTC"
     local_state_dir: str = "var"
-    runner: str = "termux"
+    runner: str = "github-actions"
 
     # --- switches ---
     allow_synthetic_learning: bool = False  # charter: never flip this on
@@ -201,7 +201,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         nightly_minute_utc=_int("NIGHTLY_MINUTE_UTC", 55),
         timezone_name=os.environ.get("TZ_NAME", "UTC").strip(),
         local_state_dir=os.environ.get("LOCAL_STATE_DIR", "var").strip(),
-        runner=os.environ.get("RUNNER", "termux").strip() or "termux",
+        runner=os.environ.get("RUNNER", "github-actions").strip() or "github-actions",
         allow_synthetic_learning=False,
         require_owner_commands=_bool("REQUIRE_OWNER_COMMANDS", True),
     )
