@@ -70,6 +70,9 @@ class BacktestReport:
     # horizon on, the hold length is a decision the system made, and a decision
     # that never appears in the output is one nobody can check.
     chosen_horizons: list[int] = field(default_factory=list)
+    # The hit rate this horizon and cost DEMAND, next to the one achieved. A
+    # 56% win rate reads as skill until the arithmetic says 67% was needed.
+    required_win_rate: float | None = None
     expectancy_low: float = 0.0
     expectancy_high: float = 0.0
     edge_status: str = ""
@@ -119,6 +122,7 @@ class BacktestReport:
             "samples_needed": self.samples_needed,
             "mean_horizon": round(self.mean_horizon, 2),
             "max_horizon": (max(self.chosen_horizons) if self.chosen_horizons else 0),
+            "required_win_rate": self.required_win_rate,
             "min_horizon": (min(self.chosen_horizons) if self.chosen_horizons else 0),
             "coverage": round(self.coverage, 5),
             "model_accuracy": self.model_accuracy,
@@ -342,6 +346,17 @@ def run_backtest(
     report.edge_status = verdict.status
     report.samples_needed = verdict.samples_needed
     report.edge = verdict
+    # Break-even hit rate, computed from the volatility actually present and the
+    # hold length actually used. This is the number the achieved win rate has to
+    # beat, and it is usually far higher than intuition expects.
+    atr_pips = [value / charter.PIP for value in atr_values if value is not None]
+    if atr_pips and report.chosen_horizons:
+        mean_atr = sum(atr_pips) / len(atr_pips)
+        mean_hold = report.mean_horizon
+        if mean_hold > 0:
+            required = costs.break_even_win_rate(mean_atr, int(round(mean_hold)), spread)
+            report.required_win_rate = (None if required == float("inf") else required)
+
     report.coverage = (report.signals / len(usable)) if usable else 0.0
     report.learned_weights = dict(weights.active())
     if model_points:
@@ -373,6 +388,20 @@ def _note(report: BacktestReport, spread: float) -> str:
                 f"Resolving a 0.25 pip/trade edge at this volatility would take about "
                 f"{report.samples_needed} settled trades."
             )
+    # Say what the win rate needed to be. Without this the achieved rate is just
+    # a number with no yardstick, and a 56% hit rate sounds like skill.
+    if report.win_rate is not None and report.required_win_rate is not None:
+        gap = report.win_rate - report.required_win_rate
+        parts.append(
+            f"Win rate needed to break even at this volatility and hold length is "
+            f"{report.required_win_rate * 100:.1f}%; achieved {report.win_rate * 100:.1f}% "
+            f"({gap * 100:+.1f} points)."
+        )
+    elif report.win_rate is not None and report.required_win_rate is None:
+        parts.append(
+            "No hit rate can break even at this volatility and hold length — the "
+            "projected move cannot cover the spread at any accuracy."
+        )
     if report.net_pips <= 0:
         parts.append("Net expectancy is not positive after costs — the gate should stay in VETO mode.")
     parts.append(

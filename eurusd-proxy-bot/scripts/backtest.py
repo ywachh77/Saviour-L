@@ -143,6 +143,13 @@ def main(argv: list[str]) -> int:
               f"  [95% Wilson {payload['wilson'][0] * 100:.1f}%–{payload['wilson'][1] * 100:.1f}%]")
     print(f"  gross pips               : {payload['gross_pips']:+.1f}")
     print(f"  net pips after costs     : {payload['net_pips']:+.1f}")
+    required = payload.get("required_win_rate")
+    if payload["win_rate"] is not None and required is not None:
+        gap = (payload["win_rate"] - required) * 100
+        print(f"  win rate needed to break even: {required * 100:5.1f}%"
+              f"   (achieved {payload['win_rate'] * 100:.1f}%, {gap:+.1f} points)")
+    elif payload["win_rate"] is not None and required is None:
+        print("  win rate needed to break even: impossible — no accuracy pays this cost")
     if payload["expectancy_pips"] is not None:
         print(f"  expectancy per signal    : {payload['expectancy_pips']:+.3f} pips"
               f"  [95% CI {payload['expectancy_low']:+.3f} to {payload['expectancy_high']:+.3f}]")

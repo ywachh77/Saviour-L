@@ -103,6 +103,11 @@ class Config:
     # usually not enough: at a realistic EUR/USD M1 ATR of 1.5 pips the same
     # trade needs about 36 minutes to clear three times its cost.
     adaptive_horizon: bool = False
+    # Narrow which strategies may speak by FX session. On by default: the
+    # mapping is standard domain knowledge, and on a synthetic replay it is
+    # inert anyway, because prototypes need 30 real outcomes to earn a voice
+    # and synthetic data grants none. See fusion/session.py.
+    session_filter: bool = True
     reward_to_cost: float = 3.0
     max_horizon_minutes: int = 120
     max_seal_latency_seconds: int = charter.MAX_SEAL_LATENCY_SECONDS
@@ -175,6 +180,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         candle_history=_int("CANDLE_HISTORY", 320),
         horizon_minutes=_int("SIGNAL_HORIZON_MINUTES", 5),
         adaptive_horizon=_bool("ADAPTIVE_HORIZON", False),
+        session_filter=_bool("SESSION_FILTER", True),
         reward_to_cost=_float("REWARD_TO_COST", 3.0),
         max_horizon_minutes=_int("MAX_HORIZON_MINUTES", 120),
         max_seal_latency_seconds=_int("MAX_SEAL_LATENCY_SECONDS", charter.MAX_SEAL_LATENCY_SECONDS),

@@ -24,6 +24,7 @@ from .domain import Candle, ModelRead, Signal
 from .features import compute_features
 from .model import MODE_ADVISORY, MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
 from .regime import RegimeState, detect_regime
+from .session import session_of
 from .timeutil import add_minutes, floor_minute, now as utcnow
 
 # Meta-model margins. VETO only blocks a read it confidently disagrees with;
@@ -197,6 +198,10 @@ class FusionEngine:
         if read is not None and read.abstain_reason:
             return Verdict("NO SIGNAL", read.abstain_reason, regime.name, read=read)
 
+        # The session is read from the bar being decided, not from the wall
+        # clock, so a replay of history classifies each bar by the hour it
+        # actually happened in.
+        session = session_of(candle.timestamp) if config.session_filter else None
         council = run_council(
             candle,
             previous_close,
@@ -207,6 +212,7 @@ class FusionEngine:
             min_checks=config.min_confluence_checks,
             calibrated=bool(read and read.calibrated),
             spread_pips=spread_pips,
+            session=session,
         )
         if not council.actionable:
             return Verdict("NO SIGNAL", council.reason, regime.name, read=read, council=council)

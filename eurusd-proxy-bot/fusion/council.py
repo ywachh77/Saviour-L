@@ -20,6 +20,7 @@ from typing import Sequence
 from . import charter, strategies
 from .domain import Candle, Decision
 from .regime import regime_allows
+from .session import session_allows
 
 # Learning gates
 MIN_SEEN_PER_PROTOTYPE = 30       # real settled outcomes before a voice is heard
@@ -156,11 +157,15 @@ def run_council(
     min_checks: int = 5,
     calibrated: bool = False,
     spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
+    session: str | None = None,
 ) -> CouncilResult:
     """Run every member and fold them into one honest decision.
 
     ``spread_pips`` is the cost the scalping members must clear before they are
     allowed an opinion. It is the live spread when the quote supplied one.
+
+    ``session`` narrows the field by time of day. ``None`` means no session
+    filtering, which is the behaviour everything before this existed with.
     """
     weights = weights or CouncilWeights()
     core: Decision = strategies.REGISTRY[strategies.CORE](
@@ -173,7 +178,15 @@ def run_council(
 
     for name in strategies.PROTOTYPES:
         weight = float(weights.weights.get(name, 0.0))
-        heard = weight > 0.0 and regime_allows(regime, name)
+        # A member must clear three gates to be heard: it needs a learned
+        # weight, the volatility regime must suit it, and the session must suit
+        # it. The session gate is about which KIND of rule fits the hour, which
+        # is a conditional effect the model's smooth hour term cannot express.
+        heard = (
+            weight > 0.0
+            and regime_allows(regime, name)
+            and (session is None or session_allows(session, name))
+        )
         decision: Decision = strategies.REGISTRY[name](
             candle,
             previous_close,
