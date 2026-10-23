@@ -38,7 +38,7 @@ The interval here comes from a **circular block bootstrap** — resampling runs
 of consecutive trades — so persistence in the sequence survives into the
 interval instead of being averaged away.
 
-Stdlib only, on purpose: this runs on Termux.
+Stdlib only, on purpose: this runs anywhere Python does.
 """
 
 from __future__ import annotations

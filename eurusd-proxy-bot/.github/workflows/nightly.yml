@@ -2,9 +2,11 @@ name: fusion-nightly
 
 # Nightly walk-forward at 23:55 UTC.
 #
-# The bot runs this itself from Termux. This job exists so the nightly still
-# happens if the phone was offline at 23:55; job slots make a double-run
-# harmless (the second one is skipped).
+# Walk-forward, promotion gates and rollback at 23:55 UTC.
+#
+# This is a scheduled job, not a safety net: Actions is the runner. If you also
+# run scripts/run_bot.py somewhere always-on, job slots make a double-run
+# harmless — the second one is skipped.
 
 on:
   schedule:

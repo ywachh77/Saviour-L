@@ -60,9 +60,9 @@ class TestLocalStore(unittest.TestCase):
         self.assertEqual(rows[0]["dedupe_key"], "stale|2026-01-01")
 
     def test_latest_heartbeat_is_the_newest(self):
-        self.store.heartbeat({"runner": "termux", "created_at": "2026-01-01T00:00:00Z"})
-        self.store.heartbeat({"runner": "actions-fallback", "created_at": "2026-01-01T00:01:00Z"})
-        self.assertEqual(self.store.latest_heartbeat(runner="termux")["created_at"], "2026-01-01T00:00:00Z")
+        self.store.heartbeat({"runner": "github-actions", "created_at": "2026-01-01T00:00:00Z"})
+        self.store.heartbeat({"runner": "local", "created_at": "2026-01-01T00:01:00Z"})
+        self.assertEqual(self.store.latest_heartbeat(runner="github-actions")["created_at"], "2026-01-01T00:00:00Z")
 
     def test_unknown_tables_do_not_crash(self):
         self.assertEqual(self.store._read("no_such_table"), [])

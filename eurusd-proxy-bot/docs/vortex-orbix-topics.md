@@ -51,7 +51,7 @@ orbix:
 
 FUSION BOT:
 `python` `eurusd` `forex` `m1` `signal-bot` `telegram` `supabase` `github-actions`
-`termux` `online-learning` `walk-forward` `calibration` `paper-trading` `zeroconfig`
+`github-actions` `online-learning` `walk-forward` `calibration` `paper-trading` `zeroconfig`
 
 ---
 

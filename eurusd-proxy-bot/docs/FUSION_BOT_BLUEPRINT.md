@@ -175,12 +175,23 @@ A local JSON-lines mirror is always written, so a Supabase outage degrades to
 | human must act | alert: stale feed, unknown delivery, key pool, negative expectancy, rollback |
 
 **Idempotency.** Every scheduled step claims a `(job, bucket)` slot first. If
-Termux and Actions overlap, the second is skipped — a minute is never processed
-twice.
+two runs overlap, the second is skipped — a minute is never processed twice.
 
-**Fallback.** `scripts/fallback.py` runs from Actions every 5 minutes and does
-nothing unless the Termux heartbeat is older than 90 seconds. Its rows are
-tagged `runner='actions-fallback'`.
+**Runner.** `scripts/actions_cycle.py` runs from GitHub Actions on a cron. It
+does one minute cycle plus whatever scheduled job is due, then the container
+disappears. Rows are tagged `runner='github-actions'`.
+
+**Cadence is a cost setting.** GitHub's scheduler cannot fire faster than every
+five minutes, and a private repo on the free plan gets 2,000 Actions minutes a
+month. At roughly one to two billed minutes per wake-up, `*/30` sits at the
+limit and hourly sits comfortably inside it. The cadence also caps signal
+frequency, because the bot evaluates the minute it wakes into and never
+backdates.
+
+**Liveness.** The runner writes a heartbeat each cycle. That row is the only
+record of whether the bot is alive; a wedged process stops writing them and is
+judged dead. Heartbeats are for observing, not for gating — with one runner, a
+run waiting for another to go quiet would be waiting for itself.
 
 **Key pool.** Quota is reserved *before* each HTTP call and refunded on network
 failure. HTTP 429 → cooldown with exponential backoff; 401/403 → disable the

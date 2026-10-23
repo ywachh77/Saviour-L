@@ -31,7 +31,6 @@ BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "gh (GitHub CLI) is not installed." >&2
-  echo "  Termux:  pkg install gh" >&2
   echo "  Ubuntu:  sudo apt install gh" >&2
   echo "  macOS:   brew install gh" >&2
   exit 1
