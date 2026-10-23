@@ -54,6 +54,12 @@ from fusion.keypool import mask_key  # noqa: E402
 
 ENV_PATH = ROOT / ".env"
 
+# Off by default. The random path is what keeps this safe on a shared network;
+# serving the form at / as well removes that, so it is opt-in and only sensible
+# somewhere the host itself is already private (a sandbox preview, a loopback
+# bind). On Termux over shared wifi, leave it off and use --local.
+ALLOW_ROOT = False
+
 
 class config_defaults:
     """What the form shows when .env has no opinion.
@@ -223,7 +229,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _authorised(self) -> bool:
-        return self.path.split("?")[0].strip("/") == self.token
+        path = self.path.split("?")[0].strip("/")
+        if not path:
+            return ALLOW_ROOT
+        return path == self.token
 
     def do_GET(self) -> None:
         if not self._authorised():
@@ -454,7 +463,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--local", action="store_true",
                         help="bind to 127.0.0.1 only; use this on Termux or shared wifi")
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--allow-root", action="store_true",
+                        help="also serve the form at / — only safe where the "
+                             "host itself is private (sandbox preview, loopback)")
     args = parser.parse_args(argv)
+
+    global ALLOW_ROOT
+    ALLOW_ROOT = args.allow_root
 
     host = "127.0.0.1" if args.local else args.host
     token = secrets.token_urlsafe(24)
@@ -472,6 +487,12 @@ def main(argv: list[str]) -> int:
     say("FUSION BOT — credential setup")
     say("=" * 62)
     say()
+    if ALLOW_ROOT:
+        say("  open   http://localhost:%d/  (root is serving the form)" % args.port)
+        say()
+        say("  Root access is ON. Turn it off with --allow-root omitted")
+        say("  before running this anywhere the host is reachable by others.")
+        say()
     say(f"  path   /{token}")
     say()
     say(f"  local  http://localhost:{args.port}/{token}")

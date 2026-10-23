@@ -113,6 +113,25 @@ class AccessControlTests(WebFormTests):
         self.assertEqual(200, status)
         self.assertIn("<form", body)
 
+    def test_root_is_refused_by_default(self) -> None:
+        """On a shared network the random path is the only thing keeping this
+        safe, so / must not serve the form unless it is explicitly allowed."""
+        self.assertEqual(404, self.web.get("/")[0])
+
+    def test_root_serves_the_form_only_when_allowed(self) -> None:
+        setup_web.ALLOW_ROOT = True
+        try:
+            status, body = self.web.get("/")
+            self.assertEqual(200, status)
+            self.assertIn("<form", body)
+        finally:
+            setup_web.ALLOW_ROOT = False
+
+    def test_the_landing_page_never_reveals_the_token(self) -> None:
+        """A safe landing page must stay safe: no token anywhere in the 404."""
+        _, body = self.web.get("/")
+        self.assertNotIn(self.web.token, body)
+
 
 class LeakTests(WebFormTests):
     def test_the_page_never_contains_a_stored_secret(self) -> None:
