@@ -197,3 +197,62 @@ class ConfigDefaultsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BreakEvenWinRateTests(unittest.TestCase):
+    """The hit rate a configuration demands, which is the yardstick any
+    reported win rate has to be read against."""
+
+    def test_symmetric_payoff_solves_to_the_closed_form(self) -> None:
+        # p = 0.5 + cost / (2 * move);  move = 0.38 * 10 * sqrt(16) = 15.2
+        move = costs.expected_move_pips(10.0, 16)
+        expected = 0.5 + 2.0 / (2.0 * move)
+        self.assertAlmostEqual(expected, costs.break_even_win_rate(10.0, 16, 2.0), places=9)
+
+    def test_a_bigger_move_needs_a_lower_hit_rate(self) -> None:
+        short = costs.break_even_win_rate(2.0, 5, 1.2)
+        long = costs.break_even_win_rate(2.0, 60, 1.2)
+        self.assertGreater(short, long)
+
+    def test_a_cheaper_cost_needs_a_lower_hit_rate(self) -> None:
+        dear = costs.break_even_win_rate(2.0, 30, 2.0)
+        cheap = costs.break_even_win_rate(2.0, 30, 0.5)
+        self.assertGreater(dear, cheap)
+
+    def test_the_realistic_eurusd_five_minute_case_is_impossible(self) -> None:
+        """The headline number. At a 1.5 pip M1 ATR a five-minute hold would
+        need a 97% hit rate just to break even."""
+        required = costs.break_even_win_rate(1.5, 5, 1.2)
+        self.assertGreater(required, 0.95)
+
+    def test_stretching_the_hold_brings_it_within_reach(self) -> None:
+        """...and a forty-minute hold needs about 67%, which is merely hard."""
+        required = costs.break_even_win_rate(1.5, 40, 1.2)
+        self.assertLess(required, 0.70)
+        self.assertGreater(required, 0.60)
+
+    def test_an_unpayable_move_returns_infinity_not_a_number(self) -> None:
+        """Returning a finite-looking value here would imply some accuracy could
+        rescue it. None can, and the answer has to say so."""
+        self.assertEqual(float("inf"), costs.break_even_win_rate(0.0, 10, 1.2))
+        self.assertEqual(float("inf"), costs.break_even_win_rate(0.1, 10, 1.2))
+
+    def test_zero_cost_is_a_coin_flip(self) -> None:
+        self.assertAlmostEqual(0.5, costs.break_even_win_rate(3.0, 10, 0.0), places=9)
+
+    def test_never_below_a_coin_flip(self) -> None:
+        for atr in (0.5, 1.5, 5.0, 20.0):
+            for horizon in (5, 30, 90):
+                value = costs.break_even_win_rate(atr, horizon, 1.2)
+                self.assertGreaterEqual(value, 0.5)
+
+    def test_the_current_system_does_not_come_close(self) -> None:
+        """The honest comparison, asserted so it cannot quietly be reframed.
+
+        The replayed win rate sits near 50-56%. What the arithmetic demands, at
+        the volatility the synthetic series actually has and the hold actually
+        used, is higher than that.
+        """
+        achieved = 0.559
+        required = costs.break_even_win_rate(5.8, 5, 1.2)
+        self.assertGreater(required, achieved)

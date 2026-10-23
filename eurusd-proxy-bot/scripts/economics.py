@@ -67,6 +67,16 @@ def main(argv: list[str]) -> int:
           f"(market offers {atr_pips:.2f})")
     print()
 
+    needed = costs.break_even_win_rate(atr_pips, horizon, spread)
+    if needed == float("inf"):
+        print("  hit rate needed to break even : impossible at any accuracy")
+        print("    the projected move is smaller than the cost, so there is no")
+        print("    win rate that rescues this configuration.")
+    else:
+        print(f"  hit rate needed to break even : {needed * 100:.1f}%")
+        print("    This is the number to compare any reported win rate against.")
+    print()
+
     if verdict.never_viable:
         print("  VERDICT — DO NOT TRADE THIS")
         print(f"    {verdict.describe()}")

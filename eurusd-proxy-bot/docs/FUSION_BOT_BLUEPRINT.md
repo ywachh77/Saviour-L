@@ -246,6 +246,22 @@ key; 5xx → short cooldown. Slots exist for legitimately provisioned keys only.
   hold moved mean expectancy from -1.11 to -0.68 pips/trade over 19 paths
   (paired 95% CI +0.24 to +0.61, better on 16 of 19). It is still negative, it
   widens the spread of outcomes, and on a lively market it changes nothing.
+- **The win rate needed to break even is far higher than intuition suggests.**
+  With a fixed horizon the required hit rate is ``0.5 + cost / (2 x E|move|)``.
+  At a realistic 1.5 pip M1 ATR and a 1.2 pip round turn that is **97.1% for a
+  five-minute hold** and **66.6% for a forty-minute hold**. The synthetic default
+  (5.8 pip ATR) makes it look like 54-62%, which is why a realistic volatility
+  has to be dialled in before any win rate is judged.
+- **The scalping family is silent at realistic volatility, correctly.** At a
+  1.8 pip M1 ATR, ``scalp_cost_ok`` requires 0.5 x ATR to clear 1.5 x the
+  spread, which it does not. The scalps are not misfiring; they are declining a
+  market too quiet to pay them. Any report that shows them firing is running at
+  unrealistic volatility.
+- **Session filtering is validated as a mechanism only.** ``validate_edge.py``
+  builds paths containing injected session structure and shows the mapping
+  separates the families by ~16 points there, against ~1 point on a random-walk
+  control. That proves the code captures the effect if it exists. It says
+  nothing about whether real EUR/USD carries it.
 - **A high win rate means nothing on its own.** The offline smoke run routinely
   reports a 68% win rate alongside a negative net, because a trade that wins
   1 pip and loses 4 is a loser that looks like a winner. Expectancy is the only

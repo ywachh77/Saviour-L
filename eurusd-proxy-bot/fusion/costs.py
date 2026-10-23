@@ -258,3 +258,36 @@ def resolve_horizon(
     if viable is None:
         return None
     return max(base, int(viable))
+
+
+def break_even_win_rate(
+    m1_atr_pips: float,
+    horizon_minutes: int,
+    spread_pips: float,
+) -> float:
+    """The directional hit rate at which this trade pays for itself.
+
+    With a fixed horizon and no take-profit or stop, a win and a loss are the
+    same size, so expected gross move is ``(2p - 1) x E|move|``. Setting that
+    equal to the round-turn cost and solving for ``p``::
+
+        p = 0.5 + cost / (2 x E|move|)
+
+    Returns ``inf`` when the projected move is zero or smaller than the cost,
+    because no hit rate can rescue a trade whose average move cannot cover the
+    toll. That is a real answer, not a missing one: it means the configuration
+    is broken rather than the model being inaccurate.
+
+    This is the number to put next to any reported win rate. A 56% hit rate
+    sounds like skill until you learn the horizon and the spread demand 67%.
+    """
+    move = expected_move_pips(m1_atr_pips, horizon_minutes)
+    cost = float(spread_pips)
+    if move <= 0.0:
+        return float("inf")
+    if cost <= 0.0:
+        return 0.5
+    required = 0.5 + cost / (2.0 * move)
+    if required > 1.0:
+        return float("inf")
+    return required

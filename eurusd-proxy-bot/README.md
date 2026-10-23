@@ -104,7 +104,7 @@ ingest ──▶ data gate ──▶ features ──▶ regime ──▶ strateg
 | A scalp that cannot pay its own spread stays quiet | `charter.scalp_cost_ok`, `tests/test_scalping.py` |
 | The replay learns the council as the live bot does | `backtest.run_backtest`, `tests/test_backtest.py` |
 
-Run `python -m unittest discover -s tests -t .` — 416 tests. If one fails, the
+Run `python -m unittest discover -s tests -t .` — 442 tests. If one fails, the
 charter is broken; do not ship it.
 
 ---
@@ -251,6 +251,90 @@ Read the caveats, because they are the point:
   pays for itself. The repository's synthetic default is about four times more
   volatile than real EUR/USD, which is why this never showed up in testing
   before it was measured directly.
+
+---
+
+## What win rate do you actually need?
+
+"Increase the win rate" is only meaningful against a target, and the target is
+set by volatility, hold length and cost — not by ambition. With a fixed horizon
+a win and a loss are the same size, so the hit rate that breaks even is:
+
+    required_win_rate = 0.5 + cost / (2 x expected_move)
+
+At a 1.2 pip round turn:
+
+| M1 ATR | 5m hold | 15m | 40m | 60m |
+|---|---|---|---|---|
+| 1.0 pip (dead market) | impossible | 90.8% | 75.0% | 70.4% |
+| **1.5 pips (realistic EUR/USD)** | **97.1%** | 77.2% | **66.6%** | 63.6% |
+| 2.0 pips | 85.3% | 70.4% | 62.5% | 60.2% |
+| 5.8 pips (this repo's synthetic default) | 62.2% | 57.0% | 54.3% | 53.5% |
+
+Read the bottom row against the others. **The synthetic series is about four
+times too volatile, and that makes every win rate look achievable.** At a
+realistic 1.5 pip ATR, a five-minute hold needs a 97.1% hit rate just to break
+even. That is not a model problem; no model does that. Stretch the hold to 40
+minutes and the requirement falls to a merely-hard 66.6%.
+
+`scripts/economics.py` prints your number, and every replay now prints achieved
+against required:
+
+```
+win rate needed to break even : 66.0%   (achieved 58.4%, -7.6 points)
+```
+
+So the honest answer to "how do I raise the win rate" is: **you need 66.6% and
+you have about 50%.** That gap is the whole problem, and it is not closed by
+tuning — it is closed by finding genuine predictive structure or by not trading
+configurations where the arithmetic cannot work.
+
+---
+
+## Session filter
+
+FX is not the same market at 03:00 and at 15:00 UTC. London and the
+London/New York overlap are where directional moves happen; Asia is where ranges
+happen.
+
+Time of day is already a model feature (`hour_sin`, `hour_cos`), but a linear
+model given a smooth circular encoding can only express "the edge varies smoothly
+around the clock". It cannot express "trust a different *rule* in a different
+hour", which is a conditional effect. `fusion/session.py` encodes that as a
+strategy-selection gate alongside the volatility regime:
+
+| session (UTC) | character | who may speak |
+|---|---|---|
+| Asia 00:00–07:00 | thin, ranging | reversion, mean-reversion scalps |
+| London 07:00–13:00 | directional open | continuation, breakouts, impulse scalps |
+| Overlap 13:00–17:00 | peak volume | continuation, breakouts, impulse scalps |
+| New York 17:00–21:00 | mixed | both families |
+| Off-hours 21:00–24:00 | thinnest book | reversion only |
+
+The core confluence gate is allowed everywhere on purpose: it is the only member
+that can originate a signal, and muting it by hour would mute the bot for hours
+rather than change what it believes.
+
+**It is validated as a mechanism, not as an edge.** `python scripts/validate_edge.py`
+builds paths that *do* contain session structure (momentum in London,
+mean-reversion in Asia) and checks whether the mapping separates the families,
+then runs a plain random walk as a control:
+
+```
+structured paths : mapping advantage +15.81 points (sd 0.82)
+control paths    : mapping advantage  +1.18 points (sd 3.24)
+```
+
+The filter separates the families by ~16 points when the structure exists and
+stops separating it when it does not — which is what a genuine mechanism does.
+That validates the mechanism. **Whether real EUR/USD carries this structure is a
+separate question this repository cannot answer**, because it has no real market
+data.
+
+One incidental finding from building it: at a realistic 1.8 pip M1 ATR the
+**entire scalping family is correctly silenced by its own cost gate**
+(`scalp_cost_ok` needs 0.5 x ATR to clear 1.5 x the spread). The scalps are not
+failing; they are declining to trade a market too quiet to pay them.
 
 ---
 
@@ -448,6 +532,7 @@ eurusd-proxy-bot/
 │   ├── backtest.py          purged walk-forward replay of the gated system
 │   ├── costs.py             can a trade pay for itself before it is taken?
 │   ├── stats.py             when is a number evidence? intervals and verdicts
+│   ├── session.py           which FX session a bar is in, and who may speak in it
 │   ├── calibration.py       isotonic (PAVA) calibration
 │   ├── learning.py          online updates, walk-forward, promotion gates
 │   ├── keypool.py           reserve / refund / rotate / cooldown
@@ -467,7 +552,8 @@ eurusd-proxy-bot/
 │   ├── nightly.py           walk-forward + gates
 │   ├── fallback.py          Actions stand-in, heartbeat-gated
 │   ├── backtest.py          purged walk-forward replay of the full system
-│   └── economics.py         can this configuration ever pay its own costs?
+│   ├── economics.py         can this configuration ever pay its own costs?
+│   └── validate_edge.py     does the session filter detect structure when it exists?
 │   ├── backfill.py          history import (BACKFILL=1, env-flagged on purpose)
 │   ├── set_keys.py          add/replace the Twelve Data keys in .env
 │   ├── set_telegram.py      put the bot token and owner chat id in .env
@@ -479,7 +565,7 @@ eurusd-proxy-bot/
 ├── supabase/migrations/     0001_init.sql — 13 tables, RLS on all
 │                            0002_add_missing_columns.sql — runtime columns
 ├── .github/workflows/       tests.yml, nightly.yml, fallback.yml
-└── tests/                   416 tests, many of them charter guards
+└── tests/                   442 tests, many of them charter guards
 ```
 
 ## Useful extras
