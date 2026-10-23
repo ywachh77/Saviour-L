@@ -354,6 +354,37 @@ prints abstentions, signals, cost-charged settlements and the charter checks.
 It trains **nothing** — watch the net-pips line, which is often negative even
 when the win rate looks good. That is the point: gross direction is not profit.
 
+### Step 1.5 — or fill everything in at once (web form)
+
+If you would rather do the whole credential setup in one go, there is a small
+local web form:
+
+```bash
+python scripts/setup_web.py
+```
+
+It prints a URL with a random 32-character path and opens it. The page asks for
+the Supabase URL and service_role key, the Telegram bot token and chat id, up to
+30 Twelve Data keys (one per line), and the optional tuning values — then writes
+straight into `.env`. It stops itself after one save.
+
+Use `--local` if you are on shared wifi or a public network, so only this device
+can reach it:
+
+```bash
+python scripts/setup_web.py --local        # binds 127.0.0.1
+python scripts/setup_web.py --port 8010    # pick a port
+```
+
+**That URL is the access control.** Anyone who has it can read and overwrite
+your credentials, so do not share it and stop the server when you are done.
+Secrets travel by POST, never in the URL; the page never pre-fills a stored key
+or prints one to the terminal; and a rejected field writes nothing at all.
+
+It uses the same validators as the command-line scripts below, so the two routes
+cannot disagree about what a valid token looks like. Use whichever you prefer —
+the steps that follow work either way.
+
 ### Step 2 — Supabase (free tier is fine)
 
 1. Create a project at [supabase.com](https://supabase.com).
@@ -555,6 +586,7 @@ eurusd-proxy-bot/
 │   ├── economics.py         can this configuration ever pay its own costs?
 │   └── validate_edge.py     does the session filter detect structure when it exists?
 │   ├── backfill.py          history import (BACKFILL=1, env-flagged on purpose)
+│   ├── setup_web.py         one-page form for every credential at once
 │   ├── set_keys.py          add/replace the Twelve Data keys in .env
 │   ├── set_telegram.py      put the bot token and owner chat id in .env
 │   └── set_supabase.py      put the project URL and service_role key in .env
