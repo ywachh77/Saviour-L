@@ -149,7 +149,25 @@ def build_status(
         )
         expectancy = system.get("expectancy_pips")
         if expectancy is not None:
-            lines.append(f"    expectancy {expectancy:+.3f} pips per signal after costs")
+            low = system.get("expectancy_low")
+            high = system.get("expectancy_high")
+            if low is not None and high is not None:
+                lines.append(
+                    f"    expectancy {expectancy:+.3f} pips per signal after costs "
+                    f"(95% CI {low:+.3f} to {high:+.3f})"
+                )
+            else:
+                lines.append(f"    expectancy {expectancy:+.3f} pips per signal after costs")
+            status = system.get("edge_status") or ""
+            if status == "EDGE_DEMONSTRATED":
+                lines.append("    edge: demonstrated on this history (one path — not a promise)")
+            elif status == "EDGE_REFUTED":
+                lines.append("    edge: refuted — confidently negative after costs")
+            else:
+                lines.append("    edge: unproven — too little evidence to say either way")
+                needed = system.get("samples_needed", -1)
+                if needed and needed > 0:
+                    lines.append(f"      (about {needed} settled trades to resolve a 0.25 pip edge)")
     elif system:
         lines.append(f"  system replay: {system.get('note', 'not run yet')[:120]}")
     if last_cycle:

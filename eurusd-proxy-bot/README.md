@@ -104,7 +104,7 @@ ingest ──▶ data gate ──▶ features ──▶ regime ──▶ strateg
 | A scalp that cannot pay its own spread stays quiet | `charter.scalp_cost_ok`, `tests/test_scalping.py` |
 | The replay learns the council as the live bot does | `backtest.run_backtest`, `tests/test_backtest.py` |
 
-Run `python -m unittest discover -s tests -t .` — 339 tests. If one fails, the
+Run `python -m unittest discover -s tests -t .` — 416 tests. If one fails, the
 charter is broken; do not ship it.
 
 ---
@@ -157,13 +157,100 @@ make money**, and on this synthetic history nothing does.
 ```bash
 python scripts/backtest.py            # purged walk-forward replay of the full system
 python scripts/backtest.py 5000       # most recent 5000 bars
+python scripts/backtest.py --paths 8  # the same system over 8 independent price paths
 ```
 
 This is **not** the model's score on every bar. It replays the bars that survive
 the data gate, the regime filter, the council and the meta-model veto, and
 charges the spread on every one. Folds are purged, so a label that looks ahead
-is never trained on. If it reports fewer than 200 signals, it says so and
-declines to call the number evidence.
+is never trained on.
+
+#### Run `--paths` before you believe any single replay
+
+A replay is **one draw from a distribution**, and the distribution is wide.
+Replaying this system over eight independent synthetic price paths gives
+per-path expectancies of roughly `+0.12` down to `−2.91` pips per trade, mean
+`−1.32`, and — the part worth staring at — **the paths disagree on the sign**.
+Quoted alone, the single best path looks like an edge. It is a lucky draw.
+
+So the report leads with an interval and a verdict, not a number:
+
+```
+expectancy per signal : -0.350 pips  [95% CI -0.71 to +0.01]
+EDGE: EDGE_INCONCLUSIVE
+```
+
+`EDGE_INCONCLUSIVE` does **not** mean "no edge". It means this sample cannot
+tell. Absence of evidence is not evidence of absence, and the distinction is
+enforced in `fusion/stats.py` rather than left to whoever is reading.
+
+Two rules keep the number honest:
+
+* **A small sample cannot claim an edge, however good its average.** Thirty
+  trades averaging +3.5 pips produce an interval entirely above zero and are
+  still reported as inconclusive, because under-powered evidence is not
+  evidence. No verdict is offered below 200 trades.
+* **The interval is never tighter than the naive independence estimate.** Trade
+  outcomes arrive in runs, so the interval comes from a block bootstrap that
+  resamples consecutive trades. Measured on independent data that bootstrap runs
+  slightly *narrow* at larger block sizes, and a narrow interval invents
+  significance — so the reported interval is floored at the
+  independence-assuming estimate. Every error it can make is cautious.
+
+If the report says 200 signals is not enough, it means it: resolving a 0.25
+pip-per-trade edge at this volatility takes thousands of settled trades.
+
+---
+
+## The cost problem, and adaptive horizon
+
+Accuracy is not the binding constraint. **Cost is.**
+
+Every trade pays a round-turn spread, default 1.2 pips. The default hold is five
+minutes. On EUR/USD those two facts fight each other: a five-minute move is
+often smaller than the toll charged to travel it, and a model that calls the
+direction right 56% of the time still loses money if the average move is 1.3
+pips and the toll is 1.2.
+
+```bash
+python scripts/economics.py 1.5     # 1.5 = your market's M1 ATR in pips
+```
+
+```
+  projected move over 5m :   1.27 pips
+  move needed to pay        :   3.60 pips
+  M1 ATR needed for 5m    :   4.24 pips (market offers 1.50)
+
+  VERDICT — NOT affordable at this hold length
+    A 40-minute hold would clear the cost at this volatility.
+```
+
+No amount of model accuracy fixes that. It is a *cost* problem.
+
+**Adaptive horizon** fixes it. Set `ADAPTIVE_HORIZON=1` and each signal is
+stretched to the shortest hold that can pay for itself, and a market where no
+hold can pay produces no signal at all rather than a guaranteed small loss.
+
+Measured over 19 independent price paths at a realistic 1.8 pip M1 ATR:
+
+| | fixed 5m | adaptive |
+|---|---|---|
+| mean expectancy | −1.11 pips/trade | **−0.68 pips/trade** |
+| spread of outcomes (sd) | 0.195 | 0.443 |
+| better on | — | **16 of 19** paths |
+
+Paired 95% interval for the improvement: **[+0.24, +0.61]** pips/trade.
+
+Read the caveats, because they are the point:
+
+* **It does not make the system profitable.** −0.68 is better than −1.11 and
+  still negative. This is a cost fix, not an edge.
+* **It is worse on 3 of the 19 paths.** Longer holds mean fewer, larger bets,
+  so the variance goes up along with the mean.
+* **On a lively market it does nothing**, because the configured hold already
+  pays for itself. The repository's synthetic default is about four times more
+  volatile than real EUR/USD, which is why this never showed up in testing
+  before it was measured directly.
 
 ---
 
@@ -359,6 +446,8 @@ eurusd-proxy-bot/
 │   ├── regime.py            TREND / RANGE / VOLATILE gating
 │   ├── model.py             prequential logistic + bootstrap ensemble
 │   ├── backtest.py          purged walk-forward replay of the gated system
+│   ├── costs.py             can a trade pay for itself before it is taken?
+│   ├── stats.py             when is a number evidence? intervals and verdicts
 │   ├── calibration.py       isotonic (PAVA) calibration
 │   ├── learning.py          online updates, walk-forward, promotion gates
 │   ├── keypool.py           reserve / refund / rotate / cooldown
@@ -378,6 +467,7 @@ eurusd-proxy-bot/
 │   ├── nightly.py           walk-forward + gates
 │   ├── fallback.py          Actions stand-in, heartbeat-gated
 │   ├── backtest.py          purged walk-forward replay of the full system
+│   └── economics.py         can this configuration ever pay its own costs?
 │   ├── backfill.py          history import (BACKFILL=1, env-flagged on purpose)
 │   ├── set_keys.py          add/replace the Twelve Data keys in .env
 │   ├── set_telegram.py      put the bot token and owner chat id in .env
@@ -389,7 +479,7 @@ eurusd-proxy-bot/
 ├── supabase/migrations/     0001_init.sql — 13 tables, RLS on all
 │                            0002_add_missing_columns.sql — runtime columns
 ├── .github/workflows/       tests.yml, nightly.yml, fallback.yml
-└── tests/                   339 tests, many of them charter guards
+└── tests/                   416 tests, many of them charter guards
 ```
 
 ## Useful extras

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
 
-from . import charter, datagate
+from . import charter, costs, datagate
 from .calibration import IsotonicCalibrator
 from .council import CouncilResult, CouncilWeights, run_council
 from .domain import Candle, ModelRead, Signal
@@ -346,6 +346,34 @@ class FusionEngine:
                 model_reason=verdict.model_reason,
             )
 
+        # Pick the hold length before the signal exists. When adaptive horizon
+        # is on, a market too quiet to pay for the round turn produces None, and
+        # the right response is to abstain rather than to take the trade anyway.
+        atr_pips = 0.0
+        if features:
+            atr_pips = abs(float(features.get("atr", 0.0))) / charter.PIP
+        horizon = costs.resolve_horizon(
+            atr_pips,
+            spread,
+            self.config.horizon_minutes,
+            adaptive=self.config.adaptive_horizon,
+            reward_to_cost=self.config.reward_to_cost,
+            max_horizon=self.config.max_horizon_minutes,
+        )
+        if horizon is None:
+            verdict_obj = costs.evaluate(atr_pips, self.config.horizon_minutes, spread,
+                                         self.config.reward_to_cost)
+            return EngineResult(
+                charter.SEAL_ABSTAIN,
+                None,
+                "No hold length can pay for this trade: " + verdict_obj.describe(),
+                gate=gate,
+                regime=verdict.regime,
+                read=verdict.read,
+                council=verdict.council,
+                model_reason=verdict.model_reason,
+            )
+
         read = verdict.read
         signal = Signal.create(
             pair=self.config.pair,
@@ -355,7 +383,7 @@ class FusionEngine:
             reason=verdict.reason,
             source=source,
             generated_at=at,
-            horizon_minutes=self.config.horizon_minutes,
+            horizon_minutes=horizon,
             probability_up=read.probability if read else None,
             probability_raw=read.raw if read else None,
             calibration_state=read.calibration_state if read else RAW,

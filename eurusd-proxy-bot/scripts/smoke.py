@@ -19,7 +19,8 @@ sys.path.insert(0, str(ROOT))
 
 import tempfile  # noqa: E402
 
-from fusion import charter  # noqa: E402
+from fusion import charter
+from fusion import stats as stats_module  # noqa: E402
 from fusion.config import Config  # noqa: E402
 from fusion.runner import FusionBot  # noqa: E402
 from fusion.settle import summarise  # noqa: E402
@@ -71,6 +72,21 @@ def main(argv: list[str]) -> int:
         print(f"  win rate                     : {stats.win_rate * 100:.1f}%"
               f"  [95% Wilson {stats.wilson_low * 100:.1f}%–{stats.wilson_high * 100:.1f}%]")
     print(f"  net pips after {config.spread_pips:.1f} pip cost : {stats.net_pips:+.1f}")
+
+    # Expectancy, with its interval, sits next to the win rate on purpose. This
+    # run routinely produces a 68% win rate alongside a negative net, because a
+    # trade that wins 1 pip and loses 4 is a loser wearing a winner's number.
+    # Showing the two together is the point.
+    outcomes = [
+        float(row["net_pips"])
+        for row in settlements
+        if row.get("outcome") in (charter.WIN, charter.LOSS) and row.get("net_pips") is not None
+    ]
+    if outcomes:
+        verdict = stats_module.edge_verdict(outcomes)
+        print(f"  expectancy per signal        : {verdict.mean_net_pips:+.3f} pips"
+              f"  [95% CI {verdict.ci_low:+.3f} to {verdict.ci_high:+.3f}]")
+        print(f"  edge verdict                 : {verdict.status}")
     print()
     print("Honesty checks")
     print("-" * 62)
