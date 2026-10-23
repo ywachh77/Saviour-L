@@ -97,6 +97,14 @@ class Config:
 
     # --- signal shape ---
     horizon_minutes: int = 5
+    # Hold long enough to pay for the trip. Off by default because it changes
+    # which bars produce signals, and the default path stays the one that is
+    # already measured. See fusion/costs.py for why 5 minutes at 1.2 pips is
+    # usually not enough: at a realistic EUR/USD M1 ATR of 1.5 pips the same
+    # trade needs about 36 minutes to clear three times its cost.
+    adaptive_horizon: bool = False
+    reward_to_cost: float = 3.0
+    max_horizon_minutes: int = 120
     max_seal_latency_seconds: int = charter.MAX_SEAL_LATENCY_SECONDS
     max_candle_age_seconds: int = 180
     max_spread_pips: float = 2.5
@@ -146,6 +154,8 @@ class Config:
             "provider_keys": len(self.twelve_data_keys),
             "pair": self.pair,
             "horizon_minutes": self.horizon_minutes,
+            "adaptive_horizon": self.adaptive_horizon,
+            "reward_to_cost": self.reward_to_cost,
             "synthetic_learning_allowed": self.allow_synthetic_learning,
         }
 
@@ -164,6 +174,9 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         timeframe=os.environ.get("TIMEFRAME", charter.ALLOWED_TIMEFRAME).strip(),
         candle_history=_int("CANDLE_HISTORY", 320),
         horizon_minutes=_int("SIGNAL_HORIZON_MINUTES", 5),
+        adaptive_horizon=_bool("ADAPTIVE_HORIZON", False),
+        reward_to_cost=_float("REWARD_TO_COST", 3.0),
+        max_horizon_minutes=_int("MAX_HORIZON_MINUTES", 120),
         max_seal_latency_seconds=_int("MAX_SEAL_LATENCY_SECONDS", charter.MAX_SEAL_LATENCY_SECONDS),
         max_candle_age_seconds=_int("MAX_CANDLE_AGE_SECONDS", 180),
         max_spread_pips=_float("MAX_SPREAD_PIPS", 2.5),

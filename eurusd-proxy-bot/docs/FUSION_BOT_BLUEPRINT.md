@@ -201,6 +201,10 @@ key; 5xx → short cooldown. Slots exist for legitimately provisioned keys only.
 | RLS on all 13 tables | `supabase/migrations/` |
 | bot payloads and the SQL schema cannot drift apart | `tests/test_schema_contract.py` |
 | every win rate carries a Wilson interval | `digest.py`, `test_digest.py` |
+| expectancy carries an interval, not a bare average | `stats.confidence_interval`, `test_stats.py` |
+| a small sample cannot claim an edge, however good its average | `stats.edge_verdict`, `test_stats.py` |
+| "inconclusive" never asserts there is no edge | `stats.EDGE_INCONCLUSIVE`, `test_stats.py` |
+| the interval is never tighter than the independence estimate | `stats.confidence_interval`, `test_stats.py` |
 | backtest folds are purged | `backtest.py`, `test_backtest.py` |
 | calibration fitted out-of-sample only | `learning.run_nightly`, `test_backtest.py` |
 | a scalp that cannot pay its own spread stays quiet | `charter.scalp_cost_ok`, `test_scalping.py` |
@@ -214,6 +218,38 @@ key; 5xx → short cooldown. Slots exist for legitimately provisioned keys only.
 - **Nothing here is validated against live market data.** Every number in this
   repository comes from synthetic series. The first honest performance
   measurement will come from `scripts/backtest.py` once real candles are stored.
+- **A single replay is not a measurement, and one was mistaken for one.**
+  The first performance figures quoted for this project came from one synthetic
+  path (seed 20260101): 55.9% win rate, gross +187 pips, net −0.35 pips/trade.
+  Replaying the identical system over eight independent paths gives a mean of
+  **−1.32 ± 0.84 pips/trade**, with the best path at +0.12 and the worst at
+  −2.91. The quoted seed was the luckiest of the eight. Nothing about the model
+  changed between those two statements — only the number of paths.
+- **On a random walk there is no edge to find, by construction.** The synthetic
+  series are random walks, so their true directional predictability is zero.
+  Any tuning that improves the replay score on them is fitting noise. This is
+  why `--paths` reports the spread between paths rather than a score: the
+  spread is the thing being measured, and it is large.
+- **Removing the cost, the gross edge is about zero.** At the default 1.2 pip
+  spread the multi-path mean is −1.32 pips/trade, which puts gross expectancy
+  near −0.1 pips/trade. The shortfall is not a modelling problem that more
+  accuracy will fix; it is a cost problem. A 5-minute EUR/USD hold has to
+  overcome a 1.2 pip round turn, and that is the binding constraint.
+- **The synthetic series are about four times too volatile for EUR/USD.** The
+  generator's default gives an M1 ATR near 5.8 pips; a real EUR/USD minute is
+  nearer 1.5. Every replay run at the default therefore prices a market far
+  livelier than the one the bot will trade — and a lively market makes almost
+  any horizon look affordable. This is why the cost problem went unnoticed
+  until volatility was dialled down and measured directly.
+- **Adaptive horizon improves expectancy and does not create an edge.** At a
+  realistic 1.8 pip M1 ATR, stretching each signal to the shortest affordable
+  hold moved mean expectancy from -1.11 to -0.68 pips/trade over 19 paths
+  (paired 95% CI +0.24 to +0.61, better on 16 of 19). It is still negative, it
+  widens the spread of outcomes, and on a lively market it changes nothing.
+- **A high win rate means nothing on its own.** The offline smoke run routinely
+  reports a 68% win rate alongside a negative net, because a trade that wins
+  1 pip and loses 4 is a loser that looks like a winner. Expectancy is the only
+  number that pays for anything, which is why it now carries an interval.
 - The volatility band in the core gate (`atr_pct ≤ 0.004`) and the regime's
   volatile threshold (`0.0012`) were inherited from the reference projects. On
   M1 EUR/USD they rarely trigger; they are scale-free enough to be harmless and

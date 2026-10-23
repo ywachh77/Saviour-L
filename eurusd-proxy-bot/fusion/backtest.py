@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Sequence
 
-from . import charter, datagate
+from . import charter, costs, datagate
 from .config import Config
 from .council import CouncilWeights, spoken_votes
 from .domain import Candle
@@ -41,6 +41,7 @@ from .features import compute_features
 from .indicators import atr, mean
 from .model import OnlineLogisticModel
 from .regime import classify
+from .stats import EdgeVerdict, MultiPathSummary, edge_verdict, summarise_paths
 
 MIN_TRAIN_PER_FOLD = 150
 MIN_BARS_FOR_BACKTEST = 600
@@ -61,6 +62,19 @@ class BacktestReport:
     win_rate: float | None = None
     wilson_low: float = 0.0
     wilson_high: float = 0.0
+    # Per-trade net outcomes, kept so expectancy can be given an interval
+    # instead of a bare average. A mean without a spread is a number that
+    # invites a conclusion the sample cannot support.
+    trade_net_pips: list[float] = field(default_factory=list)
+    # Hold lengths actually used, one per signal. Visible because with adaptive
+    # horizon on, the hold length is a decision the system made, and a decision
+    # that never appears in the output is one nobody can check.
+    chosen_horizons: list[int] = field(default_factory=list)
+    expectancy_low: float = 0.0
+    expectancy_high: float = 0.0
+    edge_status: str = ""
+    samples_needed: int = -1
+    edge: EdgeVerdict | None = None
     coverage: float = 0.0
     model_accuracy: float | None = None
     model_points: int = 0
@@ -71,6 +85,13 @@ class BacktestReport:
     @property
     def enough_for_a_view(self) -> bool:
         return self.signals >= MIN_SIGNALS_FOR_A_VIEW
+
+    @property
+    def mean_horizon(self) -> float:
+        """Mean hold length actually used, in minutes."""
+        if not self.chosen_horizons:
+            return 0.0
+        return sum(self.chosen_horizons) / len(self.chosen_horizons)
 
     @property
     def expectancy_pips(self) -> float | None:
@@ -92,6 +113,13 @@ class BacktestReport:
             "expectancy_pips": (None if self.expectancy_pips is None else round(self.expectancy_pips, 4)),
             "win_rate": self.win_rate,
             "wilson": [round(self.wilson_low, 4), round(self.wilson_high, 4)],
+            "expectancy_low": round(self.expectancy_low, 4),
+            "expectancy_high": round(self.expectancy_high, 4),
+            "edge_status": self.edge_status,
+            "samples_needed": self.samples_needed,
+            "mean_horizon": round(self.mean_horizon, 2),
+            "max_horizon": (max(self.chosen_horizons) if self.chosen_horizons else 0),
+            "min_horizon": (min(self.chosen_horizons) if self.chosen_horizons else 0),
             "coverage": round(self.coverage, 5),
             "model_accuracy": self.model_accuracy,
             "model_points": self.model_points,
@@ -225,7 +253,28 @@ def run_backtest(
                 at=candle.timestamp + timedelta(minutes=1),
             )
 
-            label = _label(candles, index, horizon)
+            # With adaptive horizon the hold length is chosen per bar, so the
+            # label and the exit must both follow that bar's horizon. Using one
+            # fixed horizon here would train the model on a question the trade
+            # is not asking.
+            bar_horizon = horizon
+            if getattr(config, "adaptive_horizon", False):
+                atr_pips = abs(float(features.get("atr", 0.0))) / charter.PIP
+                resolved = costs.resolve_horizon(
+                    atr_pips,
+                    spread,
+                    horizon,
+                    adaptive=True,
+                    reward_to_cost=getattr(config, "reward_to_cost", 3.0),
+                    max_horizon=getattr(config, "max_horizon_minutes", 120),
+                )
+                if resolved is None or index + resolved >= len(candles):
+                    # Cannot pay for itself, or the hold would run off the end
+                    # of history: skip rather than settle a partial trade.
+                    continue
+                bar_horizon = resolved
+
+            label = _label(candles, index, bar_horizon)
             if label is not None:
                 try:
                     model_points.append((model.predict_up(features), label))
@@ -236,13 +285,15 @@ def run_backtest(
                 continue
 
             entry = candles[index + 1].open
-            exit_price = candles[index + horizon].close
+            exit_price = candles[index + bar_horizon].close
             move = exit_price - entry
             gross_pips = (move if result.signal.side == "BUY" else -move) / charter.PIP
             net_pips = gross_pips - spread
 
             fold_signals += 1
             fold_net += net_pips
+            report.trade_net_pips.append(net_pips)
+            report.chosen_horizons.append(int(bar_horizon))
             if math.isclose(gross_pips, 0.0, abs_tol=1e-12):
                 report.ties += 1
             elif gross_pips > 0:
@@ -281,6 +332,16 @@ def run_backtest(
     if decided:
         report.win_rate = report.wins / decided
         report.wilson_low, report.wilson_high = charter.wilson_interval(report.wins, decided)
+
+    # Judge the expectancy, not just the win rate. A 55% win rate with a bad
+    # payoff is still a losing system, and an average over one path is a single
+    # draw, so the verdict is what gets reported rather than the point estimate.
+    verdict = edge_verdict(report.trade_net_pips)
+    report.expectancy_low = verdict.ci_low
+    report.expectancy_high = verdict.ci_high
+    report.edge_status = verdict.status
+    report.samples_needed = verdict.samples_needed
+    report.edge = verdict
     report.coverage = (report.signals / len(usable)) if usable else 0.0
     report.learned_weights = dict(weights.active())
     if model_points:
@@ -302,10 +363,99 @@ def _note(report: BacktestReport, spread: float) -> str:
         parts.append(
             f"Fewer than {MIN_SIGNALS_FOR_A_VIEW} signals: the interval is too wide to call this evidence."
         )
+
+    # The verdict, not the average, is the finding. An average over one path is
+    # one draw from a distribution and says nothing about the next path.
+    if report.edge is not None:
+        parts.append(report.edge.describe())
+        if report.edge.inconclusive and report.samples_needed > 0:
+            parts.append(
+                f"Resolving a 0.25 pip/trade edge at this volatility would take about "
+                f"{report.samples_needed} settled trades."
+            )
     if report.net_pips <= 0:
         parts.append("Net expectancy is not positive after costs — the gate should stay in VETO mode.")
     parts.append(
         "Replay assumes the feed was healthy (freshness cannot be checked historically) and "
-        "measures one path through one history, not a distribution."
+        "measures one path through one history, not a distribution: run --paths to see the spread."
     )
     return " ".join(parts)
+
+
+@dataclass
+class MultiPathReport:
+    """The same system replayed over several independent synthetic price paths.
+
+    One path is one draw. Reporting it as though it were a measurement is how a
+    losing system gets described as a 55% win rate. This is the distribution the
+    single number was hiding inside.
+    """
+
+    paths: int
+    bars: int
+    reports: list[BacktestReport] = field(default_factory=list)
+    summary: MultiPathSummary | None = None
+
+    @property
+    def signals(self) -> int:
+        return sum(report.signals for report in self.reports)
+
+    def to_dict(self) -> dict:
+        return {
+            "paths": self.paths,
+            "bars": self.bars,
+            "signals": self.signals,
+            "summary": self.summary.to_dict() if self.summary else None,
+            "per_path": [report.to_dict() for report in self.reports],
+        }
+
+
+def run_multi_path(
+    config: Config,
+    *,
+    paths: int = 8,
+    bars: int = 3000,
+    first_seed: int = 1,
+    horizon: int | None = None,
+    spread_pips: float | None = None,
+    folds: int = 4,
+    volatility: float | None = None,
+    drift: float = 0.0,
+) -> MultiPathReport:
+    """Replay the system over ``paths`` independent synthetic price paths.
+
+    Synthetic series are random walks, so the true directional edge on them is
+    zero by construction. A system that reports a positive expectancy on one
+    path of a random walk is reporting noise; replaying several paths shows
+    how loud that noise is.
+
+    ``drift`` defaults to zero so the paths carry no directional bias of their
+    own — otherwise a long-biased model could appear skilful simply by trading
+    the generator's drift.
+    """
+    from .simulate import synthetic_series
+
+    report = MultiPathReport(paths=int(paths), bars=int(bars))
+    seeds = [int(first_seed) + offset for offset in range(max(1, int(paths)))]
+    for seed in seeds:
+        kwargs = {"count": int(bars), "seed": seed, "drift": drift}
+        if volatility is not None:
+            kwargs["volatility"] = float(volatility)
+        candles = synthetic_series(**kwargs)
+        report.reports.append(
+            run_backtest(
+                candles,
+                config,
+                folds=folds,
+                horizon=horizon,
+                spread_pips=spread_pips,
+            )
+        )
+
+    expectancies = [
+        value
+        for value in (item.expectancy_pips for item in report.reports)
+        if value is not None
+    ]
+    report.summary = summarise_paths(expectancies)
+    return report
