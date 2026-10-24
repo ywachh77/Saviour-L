@@ -75,4 +75,12 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+          # Stretch each hold to a length that can cover its own cost instead
+          # of trading a fixed five minutes. At the volatility actually measured
+          # from live EUR/USD candles, five minutes projects about 1.3 pips
+          # against a 1.2 pip round turn, which needs a 97% hit rate to break
+          # even. Without this the bot takes trades that cannot win by
+          # construction, and more accuracy does not fix that.
+          ADAPTIVE_HORIZON: "1"
+          MAX_HORIZON_MINUTES: "120"
         run: python3 scripts/actions_cycle.py
