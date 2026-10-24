@@ -286,11 +286,13 @@ class FusionBot:
             return 0
         deadline = time.monotonic() + max(0.0, float(seconds))
         handled = 0
+        failures = 0
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             timeout = int(max(1, min(poll_timeout, remaining)))
+            poll_error = False
             try:
                 before = self.telegram.offset
                 for command in self.telegram.poll_commands(timeout_seconds=timeout):
@@ -299,6 +301,7 @@ class FusionBot:
                         continue
                     self.handle_command(command.command)
                     handled += 1
+                poll_error = bool(self.telegram.last_poll_error)
                 self._report_telegram_visibility()
                 if self.telegram.offset != before:
                     # The cursor only survives if it is written down. Without
@@ -307,6 +310,16 @@ class FusionBot:
                     self._save_state(force=True)
             except Exception as error:  # noqa: BLE001 - listening must not die
                 self.store.alert("listen_error", str(error)[:300])
+                poll_error = True
+            if poll_error:
+                # A transport that fails instantly would otherwise spin the
+                # loop thousands of times inside one window. Telegram answers
+                # that with a rate limit rather than a fix, so back off.
+                failures += 1
+                delay = min(15.0, 0.5 * (2 ** min(failures, 5)))
+                time.sleep(min(delay, max(0.0, deadline - time.monotonic())))
+            else:
+                failures = 0
             try:
                 self.settle_due()
                 self.flush_outbox()
@@ -340,21 +353,23 @@ class FusionBot:
         if client is None:
             return
         if client.last_poll_error:
-            self.store.alert(
+            self._alert_once(
                 "telegram_poll_error",
                 client.last_poll_error[:300],
-                dedupe_key="telegram_poll_error|" + now().strftime("%Y%m%d%H"),
+                key="telegram_poll_error|" + now().strftime("%Y%m%d%H"),
+                notify=False,
             )
             client.last_poll_error = None
         for ignored in client.ignored_senders:
             chat_id = str(ignored.get("chat_id", ""))
-            self.store.alert(
+            self._alert_once(
                 "telegram_ignored_sender",
                 (
                     f"Ignored {ignored.get('command', '')} from chat {chat_id}; "
                     f"owner id is {self._masked_owner_id()}."
                 ),
-                dedupe_key=f"telegram_ignored_sender|{chat_id}",
+                key=f"telegram_ignored_sender|{chat_id}",
+                notify=False,
             )
         client.ignored_senders = []
 
@@ -403,8 +418,33 @@ class FusionBot:
         else:
             text = "Unknown command.\n\n" + HELP_TEXT
         if self.telegram is not None:
-            self.telegram.send(text)
+            self._report_command_reply(command, self.telegram.send(text))
         return text
+
+    def _report_command_reply(self, command: str, result) -> None:
+        """Write down what happened to a reply.
+
+        Command replies go straight to Telegram rather than through the
+        outbox, so until now a reply that Telegram rejected left no trace
+        anywhere: the owner saw silence and the database stayed clean, which
+        is the one thing guaranteed to make a silent bot undiagnosable. A
+        success is proof the round trip works; a failure says why not.
+        """
+        hour = now().strftime("%Y%m%d%H")
+        if result.confirmed:
+            self._alert_once(
+                "telegram_reply_sent",
+                f"Answered {command} (message {result.message_id}).",
+                key=f"telegram_reply_sent|{command}|{hour}",
+                notify=False,
+            )
+            return
+        self._alert_once(
+            "telegram_reply_failed",
+            f"Reply to {command} not delivered: {result.state} {result.error}"[:300],
+            key=f"telegram_reply_failed|{command}|{hour}",
+            notify=False,
+        )
 
     def on_demand_signal(self, at: datetime | None = None) -> str:
         """Answer /signals: read the live market now and say what it says.
@@ -993,7 +1033,15 @@ class FusionBot:
             self.digest_job(stamp)
 
     # ---------------------------------------------------------------- alerts
-    def _alert_once(self, kind: str, detail: str, *, key: str) -> None:
+    def _alert_once(self, kind: str, detail: str, *, key: str, notify: bool = True) -> None:
+        """Record an alert at most once per key, for the life of the key.
+
+        ``store.alert`` inserts unconditionally; the dedupe_key column only
+        does anything when the caller checks it, so without this a poll that
+        fails on every pass writes a row per pass -- thousands a run.
+        ``notify`` is switched off for transport diagnostics: reporting over
+        Telegram that Telegram is broken cannot work, and would only spam.
+        """
         if key in self.alerted_today:
             return
         if self.store.alert_seen(key):
@@ -1004,7 +1052,7 @@ class FusionBot:
             return
         self.alerted_today.add(key)
         self.store.alert(kind, detail, dedupe_key=key)
-        if self.telegram is not None and self.telegram.configured:
+        if notify and self.telegram is not None and self.telegram.configured:
             self.telegram.send(digest.alert_message(kind, detail))
 
     # ------------------------------------------------------------ persistence

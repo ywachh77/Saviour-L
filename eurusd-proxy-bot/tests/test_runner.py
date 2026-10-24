@@ -698,5 +698,68 @@ class TestListeningWhileAwake(unittest.TestCase):
         self.assertGreaterEqual(broken.calls, 1)
 
 
+class TestReplyIsNeverSilent(unittest.TestCase):
+    """A reply that never arrives must not also leave no trace.
+
+    Command replies are sent straight to Telegram rather than queued in the
+    outbox, so a rejected reply used to vanish completely: the owner saw
+    silence and the database stayed clean. That combination is precisely what
+    makes a silent bot impossible to diagnose from outside.
+    """
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def _bot(self, transport) -> FusionBot:
+        config = Config(local_state_dir=str(self.directory), runner="github-actions", horizon_minutes=3)
+        return FusionBot(config=config, store=Store(None, LocalStore(self.directory)),
+                         provider=None, telegram=TelegramClient("t", "1", opener=transport))
+
+    def _alerts(self, bot) -> list[dict]:
+        return bot.store.recent_alerts(limit=20)
+
+    def test_a_delivered_reply_is_recorded(self):
+        updates = b'{"ok":true,"result":[{"update_id":910,"message":{"text":"/pause","chat":{"id":"1"}}}]}'
+        bot = self._bot(ScriptedTransport(updates))
+        bot.listen(0.05)
+        kinds = [str(a.get("kind")) for a in self._alerts(bot)]
+        self.assertIn("telegram_reply_sent", kinds)
+
+    def test_a_rejected_reply_is_recorded_rather_than_dropped(self):
+        updates = b'{"ok":true,"result":[{"update_id":911,"message":{"text":"/pause","chat":{"id":"1"}}}]}'
+        rejected = b'{"ok":false,"description":"chat not found"}'
+        bot = self._bot(ScriptedTransport(updates, rejected))
+        bot.listen(0.05)
+        kinds = [str(a.get("kind")) for a in self._alerts(bot)]
+        self.assertIn("telegram_reply_failed", kinds)
+
+    def test_a_stranger_leaves_the_chat_id_that_actually_arrived(self):
+        """That id is how a wrong TELEGRAM_OWNER_CHAT_ID gets found."""
+        updates = b'{"ok":true,"result":[{"update_id":912,"message":{"text":"/pause","chat":{"id":"999"}}}]}'
+        bot = self._bot(ScriptedTransport(updates))
+        bot.listen(0.05)
+        rows = [a for a in self._alerts(bot) if a.get("kind") == "telegram_ignored_sender"]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("999", str(rows[0].get("message")))
+
+    def test_a_failing_poll_does_not_flood_the_alerts_table(self):
+        """store.alert inserts unconditionally; only the caller can dedupe.
+
+        A transport that fails on every pass used to write a row per pass,
+        which is thousands of rows in a single listening window.
+        """
+        class Broken:
+            def __call__(self, request, timeout=None):
+                raise OSError("network down")
+
+        bot = self._bot(Broken())
+        bot.listen(0.05)
+        errors = [a for a in self._alerts(bot) if a.get("kind") == "telegram_poll_error"]
+        self.assertLessEqual(len(errors), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
