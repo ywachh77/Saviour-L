@@ -75,6 +75,21 @@ class TestLocalStore(unittest.TestCase):
         rows = self.store.recent_alerts()
         self.assertEqual(rows[0]["dedupe_key"], "stale|2026-01-01")
 
+    def test_an_alert_key_can_be_recognised_as_already_seen(self):
+        """The dedupe key has to be readable back, not just written.
+
+        The bot restarts every cycle, so 'have we told the human?' cannot live
+        in memory; it is answered by looking the key up here.
+        """
+        self.assertFalse(self.store.alert_seen("stale|2026-01-01"))
+        self.store.alert("stale_feed", "feed is 400s old", dedupe_key="stale|2026-01-01")
+        self.assertTrue(self.store.alert_seen("stale|2026-01-01"))
+        self.assertFalse(self.store.alert_seen("stale|2026-01-02"))
+
+    def test_an_empty_key_is_never_treated_as_seen(self):
+        self.store.alert("stale_feed", "no key here")
+        self.assertFalse(self.store.alert_seen(""))
+
     def test_latest_heartbeat_is_the_newest(self):
         self.store.heartbeat({"runner": "github-actions", "created_at": "2026-01-01T00:00:00Z"})
         self.store.heartbeat({"runner": "local", "created_at": "2026-01-01T00:01:00Z"})

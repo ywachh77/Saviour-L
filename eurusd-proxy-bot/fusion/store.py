@@ -444,6 +444,19 @@ class Store:
             [{"kind": kind, "message": message, "dedupe_key": dedupe_key, "created_at": format_datetime(_utcnow())}],
         )
 
+    def alert_seen(self, dedupe_key: str) -> bool:
+        """True when an alert with this key has already been recorded.
+
+        The bot runs in short-lived containers that restart every cycle, so an
+        in-memory "already told the human" set evaporates and the same alert is
+        re-sent on every wake-up. The key is persisted precisely so the check
+        can survive the process; without this read the column is dead storage.
+        """
+        if not dedupe_key:
+            return False
+        rows = self._read("alerts", limit=1, **{"dedupe_key": f"eq.{dedupe_key}"})
+        return bool(rows)
+
     def recent_alerts(self, limit: int = 50) -> list[dict]:
         return self._read("alerts", limit=limit, order="created_at.desc")
 

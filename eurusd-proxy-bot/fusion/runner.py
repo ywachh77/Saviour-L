@@ -130,6 +130,10 @@ class FusionBot:
         self.weights = CouncilWeights.from_dict(self.store.load_council_weights())
         runtime = row.get("runtime") or {}
         self.paused = bool(runtime.get("paused", False))
+        offset = runtime.get("telegram_offset")
+        if self.telegram is not None and isinstance(offset, int) and offset > 0:
+            self.telegram.offset = offset
+        self.stale_feed_minutes = int(runtime.get("stale_feed_minutes") or 0)
         points = row.get("calibration_points") or []
         self.calibration_points = [
             (float(item[0]), int(item[1])) for item in points if len(item) == 2
@@ -220,11 +224,17 @@ class FusionBot:
     def poll_commands(self) -> None:
         if self.telegram is None or not self.telegram.configured:
             return
+        before = self.telegram.offset
         for command in self.telegram.poll_commands(timeout_seconds=0):
             if not command.from_owner:
                 # Silent by design: the bot does not talk to strangers.
                 continue
             self.handle_command(command.command)
+        if self.telegram.offset != before:
+            # Acknowledge the updates. This container exits in a few minutes, so
+            # unless the cursor is written down the next one starts from zero and
+            # re-answers every command from the last 24 hours, every cycle.
+            self._save_state(force=True)
 
     def handle_command(self, command: str) -> str:
         if command == "/start":
@@ -363,8 +373,14 @@ class FusionBot:
                     f"{result.gate.age_seconds:.0f}s for {self.stale_feed_minutes} minutes.",
                     key=f"stale_feed|{bucket[:10]}",
                 )
-        else:
+            # The streak has to be written down, not just counted: this
+            # container exits within minutes and one cycle evaluates a single
+            # minute, so an in-memory counter restarts at zero forever and the
+            # alert can never reach five.
+            self._save_state(force=True)
+        elif self.stale_feed_minutes:
             self.stale_feed_minutes = 0
+            self._save_state(force=True)
 
         if result.seal_state == charter.SEAL_DISCARDED_LATE:
             return CycleReport(bucket, result.seal_state, result.reason, regime=result.regime)
@@ -713,6 +729,12 @@ class FusionBot:
     def _alert_once(self, kind: str, detail: str, *, key: str) -> None:
         if key in self.alerted_today:
             return
+        if self.store.alert_seen(key):
+            # Already told the human in an earlier run. This container just
+            # booted, so the in-memory set is empty and would otherwise let the
+            # same alert through again on every wake-up.
+            self.alerted_today.add(key)
+            return
         self.alerted_today.add(key)
         self.store.alert(kind, detail, dedupe_key=key)
         if self.telegram is not None and self.telegram.configured:
@@ -725,7 +747,11 @@ class FusionBot:
         payload: dict[str, Any] = {
             "model": self.model.to_dict() if self.model else None,
             "ensemble": self.ensemble.to_dict(),
-            "runtime": {"paused": self.paused},
+            "runtime": {
+                "paused": self.paused,
+                "telegram_offset": self.telegram.offset if self.telegram else None,
+                "stale_feed_minutes": self.stale_feed_minutes,
+            },
             "calibration_points": [[point[0], point[1]] for point in self.calibration_points[-2000:]],
         }
         self.store.save_model_state(payload)

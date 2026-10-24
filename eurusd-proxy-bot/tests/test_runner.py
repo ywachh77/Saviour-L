@@ -14,6 +14,7 @@ from fusion.runner import FusionBot, format_signal
 from fusion.simulate import SyntheticFeed, run_simulation, synthetic_series
 from fusion.store import LocalStore, Store
 from fusion.telegram import TelegramClient
+from tests.helpers import make_candles
 
 
 class FakeResponse:
@@ -355,6 +356,117 @@ class TestSignalText(unittest.TestCase):
         self.assertIn("open of the", text)
         self.assertIn("spread", text)
         self.assertIn("No broker order", text)
+
+
+class TestShortLivedContainerDoesNotRepeatItself(unittest.TestCase):
+    """The bot runs in containers that die after a few minutes.
+
+    Any 'already done this' flag held only in memory is wiped between cycles,
+    so the human gets the same alert and the same command reply over and over.
+    These tests restart the bot against the same store to prove it does not.
+    """
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def _store(self) -> Store:
+        return Store(None, LocalStore(self.directory))
+
+    def _bot(self, store: Store, transport=None) -> FusionBot:
+        config = Config(local_state_dir=str(self.directory), runner="github-actions", horizon_minutes=3)
+        client = TelegramClient("t", "1", opener=transport) if transport else None
+        return FusionBot(config=config, store=store, provider=None, telegram=client)
+
+    def test_an_alert_is_not_re_sent_after_the_container_restarts(self):
+        store = self._store()
+        transport = ScriptedTransport()
+        first = self._bot(store, transport)
+        first._alert_once("stale_feed", "feed is old", key="stale_feed|2026-10-24")
+        self.assertEqual(len(transport.sent), 1, "the first container tells the human once")
+
+        second_transport = ScriptedTransport()
+        second = self._bot(store, second_transport)
+        second._alert_once("stale_feed", "feed is old", key="stale_feed|2026-10-24")
+        self.assertEqual(
+            second_transport.sent, [], "a restarted container must not repeat an alert already sent"
+        )
+
+    def test_a_different_key_still_raises_its_own_alert(self):
+        store = self._store()
+        transport = ScriptedTransport()
+        bot = self._bot(store, transport)
+        bot._alert_once("stale_feed", "feed is old", key="stale_feed|2026-10-24")
+        bot._alert_once("stale_feed", "feed is old", key="stale_feed|2026-10-25")
+        self.assertEqual(len(transport.sent), 2, "a new day is a new alert, not a duplicate of yesterday")
+
+    def test_the_stale_feed_streak_survives_a_restart(self):
+        """Five stale minutes is two and a half hours on a half-hourly cron.
+
+        One cycle evaluates one minute, so a counter that lives only in memory
+        tops out at one and the alert is unreachable. It has to be written down.
+        """
+        store = self._store()
+        candles = make_candles(200, seed=17)
+        stale_at = candles[-1].timestamp + timedelta(minutes=30)
+        bucket = "2026-10-24T00:00"
+
+        early = ScriptedTransport()
+        for _ in range(4):
+            bot = self._bot(store, early)
+            bot.startup()
+            bot.candles = candles
+            bot.evaluate_minute(bucket=bucket, at=stale_at)
+        self.assertEqual(early.sent, [], "four stale minutes is below the threshold of five")
+
+        late = ScriptedTransport()
+        final = self._bot(store, late)
+        final.startup()
+        self.assertEqual(final.stale_feed_minutes, 4, "the streak arrived with the new container")
+        final.candles = candles
+        final.evaluate_minute(bucket=bucket, at=stale_at)
+        self.assertEqual(len(late.sent), 1, "the fifth stale minute finally raises the alert")
+
+    def test_a_healthy_minute_clears_the_streak(self):
+        store = self._store()
+        candles = make_candles(200, seed=17)
+        bot = self._bot(store, ScriptedTransport())
+        bot.startup()
+        bot.candles = candles
+        bot.evaluate_minute(bucket="2026-10-24T00:00", at=candles[-1].timestamp + timedelta(minutes=30))
+        self.assertEqual(bot.stale_feed_minutes, 1)
+        bot.evaluate_minute(bucket="2026-10-24T00:01", at=candles[-1].timestamp + timedelta(minutes=1))
+        self.assertEqual(bot.stale_feed_minutes, 0, "a fresh minute resets the count")
+
+    def test_the_telegram_cursor_is_carried_into_the_next_container(self):
+        updates = b'{"ok":true,"result":[{"update_id":100,"message":{"text":"/pause","chat":{"id":"1"}}}]}'
+        empty = b'{"ok":true,"result":[]}'
+
+        store = self._store()
+        first_transport = ScriptedTransport(updates)
+        first = self._bot(store, first_transport)
+        first.poll_commands()
+        self.assertTrue(first.paused, "the owner's /pause was applied")
+
+        second_transport = ScriptedTransport(empty)
+        second = self._bot(store, second_transport)
+        second.startup()
+        second.poll_commands()
+
+        self.assertTrue(second.paused, "the paused state itself survives, independently of the cursor")
+        get_updates = second_transport.sent[0]
+        self.assertIn(
+            "offset=101",
+            get_updates,
+            "the next container must acknowledge the update it already answered",
+        )
+        self.assertEqual(
+            len(second_transport.sent),
+            1,
+            "no command reply should be sent: /pause was handled before this container existed",
+        )
 
 
 if __name__ == "__main__":
