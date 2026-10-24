@@ -23,6 +23,7 @@ from .council import CouncilResult, CouncilWeights, run_council
 from .domain import Candle, ModelRead, Signal
 from .features import compute_features
 from .model import MODE_ADVISORY, MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
+from .mistakes import MistakeMemory
 from .regime import RegimeState, detect_regime
 from .session import session_of
 from .timeutil import add_minutes, floor_minute, now as utcnow
@@ -186,6 +187,7 @@ class FusionEngine:
         weights: CouncilWeights | None = None,
         regime_state: RegimeState | None = None,
         spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
+        mistakes: MistakeMemory | None = None,
     ) -> Verdict:
         """Run regime, council and meta-model. No data gate, no sealing."""
         config = self.config
@@ -213,6 +215,7 @@ class FusionEngine:
             calibrated=bool(read and read.calibrated),
             spread_pips=spread_pips,
             session=session,
+            mistakes=mistakes,
         )
         if not council.actionable:
             return Verdict("NO SIGNAL", council.reason, regime.name, read=read, council=council)
@@ -238,6 +241,7 @@ class FusionEngine:
         source: str = "LIVE",
         quote: dict | None = None,
         at: datetime | None = None,
+        mistakes: MistakeMemory | None = None,
     ) -> EngineResult:
         """Data gate -> features -> decision -> seal, for one live minute."""
         config = self.config
@@ -270,6 +274,7 @@ class FusionEngine:
             weights=weights,
             regime_state=regime_state,
             spread_pips=gate.spread_pips,
+            mistakes=mistakes,
         )
         return self._seal(
             verdict, gate=gate, source=source, at=stamp, spread=gate.spread_pips, features=features
@@ -287,6 +292,7 @@ class FusionEngine:
         weights: CouncilWeights | None = None,
         source: str = "BACKTEST",
         at: datetime | None = None,
+        mistakes: MistakeMemory | None = None,
     ) -> EngineResult:
         """Decision + seal with the gate, features and regime supplied.
 
@@ -305,6 +311,7 @@ class FusionEngine:
             weights=weights,
             regime_state=regime_state,
             spread_pips=gate.spread_pips,
+            mistakes=mistakes,
         )
         return self._seal(
             verdict,

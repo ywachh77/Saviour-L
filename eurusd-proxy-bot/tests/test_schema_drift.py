@@ -47,7 +47,9 @@ EXPECTED: dict[str, list[str]] = {
         "id", "kind", "signal_id", "applied", "reason", "predicted", "raw",
         "label", "squared_error", "created_at", "outcome",
     ],
-    "model_state": ["id", "model", "ensemble", "runtime", "calibration_points", "updated_at"],
+    "model_state": [
+        "id", "model", "ensemble", "runtime", "calibration_points", "mistakes", "updated_at",
+    ],
     "model_versions": ["version_id", "report", "created_at"],
     "outbox": [
         "message_key", "text", "kind", "attempts", "state", "message_id",

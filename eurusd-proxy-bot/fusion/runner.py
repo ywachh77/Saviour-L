@@ -28,7 +28,9 @@ from .council import CouncilWeights, Vote
 from .domain import Candle, Signal
 from .engine import FusionEngine
 from .model import MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
+from .mistakes import MistakeMemory
 from .provider import TwelveDataProvider
+from .session import session_of
 from .store import Store, build_store
 from .telegram import HELP_TEXT, TelegramClient
 from .timeutil import minute_bucket, now, parse_datetime, seconds_until_next_minute
@@ -102,6 +104,7 @@ class FusionBot:
     alerted_today: set[str] = field(default_factory=set)
     nightly_report: dict | None = None
     calibration_points: list[tuple[float, int]] = field(default_factory=list)
+    mistakes: MistakeMemory = field(default_factory=MistakeMemory)
 
     # ------------------------------------------------------------------ setup
     def __post_init__(self) -> None:
@@ -134,6 +137,7 @@ class FusionBot:
         if self.telegram is not None and isinstance(offset, int) and offset > 0:
             self.telegram.offset = offset
         self.stale_feed_minutes = int(runtime.get("stale_feed_minutes") or 0)
+        self.mistakes = MistakeMemory.from_dict(row.get("mistakes"))
         points = row.get("calibration_points") or []
         self.calibration_points = [
             (float(item[0]), int(item[1])) for item in points if len(item) == 2
@@ -528,6 +532,18 @@ class FusionBot:
             votes = _votes_from_signal(signal)
             self.weights.observe(votes, winning)
 
+        # Post-mortem: remember what this setup cost, so a pattern that keeps
+        # losing can be refused instead of re-tried. Rebuilt from what the
+        # signal stored, so the same bar always lands in the same cell.
+        self.mistakes.record(
+            settlement.outcome,
+            MistakeMemory.fingerprint(
+                signal.regime,
+                session_of(signal.entry_time) if self.config.session_filter else None,
+                signal.side,
+            ),
+        )
+
         # Model learning: test before learn, once per confirmed non-tied outcome.
         step = learning.online_step(
             self.model,
@@ -753,6 +769,7 @@ class FusionBot:
                 "stale_feed_minutes": self.stale_feed_minutes,
             },
             "calibration_points": [[point[0], point[1]] for point in self.calibration_points[-2000:]],
+            "mistakes": self.mistakes.to_dict(),
         }
         self.store.save_model_state(payload)
         self.store.save_council_weights(self.weights.to_dict())

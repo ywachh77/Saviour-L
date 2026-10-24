@@ -19,6 +19,7 @@ from typing import Sequence
 
 from . import charter, strategies
 from .domain import Candle, Decision
+from .mistakes import MistakeMemory
 from .regime import regime_allows
 from .session import session_allows
 
@@ -158,6 +159,7 @@ def run_council(
     calibrated: bool = False,
     spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
     session: str | None = None,
+    mistakes: MistakeMemory | None = None,
 ) -> CouncilResult:
     """Run every member and fold them into one honest decision.
 
@@ -166,6 +168,9 @@ def run_council(
 
     ``session`` narrows the field by time of day. ``None`` means no session
     filtering, which is the behaviour everything before this existed with.
+
+    ``mistakes`` carries the post-mortem memory. When supplied, a setup the bot
+    has already paid to learn is refused rather than re-tried.
     """
     weights = weights or CouncilWeights()
     core: Decision = strategies.REGISTRY[strategies.CORE](
@@ -232,6 +237,20 @@ def run_council(
             round(opposition, 4),
             True,
         )
+
+    if mistakes is not None:
+        key = mistakes.fingerprint(regime, session, core.side)
+        refused, why = mistakes.refuses(key)
+        if refused:
+            return CouncilResult(
+                "NO SIGNAL",
+                why,
+                core.score,
+                tuple(votes),
+                round(support, 4),
+                round(opposition, 4),
+                False,
+            )
 
     spoken = ", ".join(vote.name for vote in votes if vote.heard and vote.side == core.side)
     suffix = f" Supporting learned prototypes: {spoken}." if spoken else " No learned prototype is active yet."
