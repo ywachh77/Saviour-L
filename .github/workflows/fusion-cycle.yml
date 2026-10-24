@@ -18,16 +18,25 @@ name: fusion-cycle
 # affordable here; the arithmetic below is the private-repo case, kept only
 # because it is the reason the previous default was thirty minutes.
 #
-#     */5    ~8,640 runs/mo   ~13,000 min   free while public
-#     */30   ~1,440 runs/mo   ~2,200 min    what a private repo would allow
+#     */15   ~2,880 runs/mo  ~36,000 min   free while public
+#     */30   ~1,440 runs/mo   ~2,200 min   what a private repo would allow
 #
-# If this repo ever goes private, switch the cron back to "*/30 * * * *" or the
-# account will be billed. Nothing else needs editing.
+# If this repo ever goes private, cut the listening window and move to "*/30",
+# or the account will be billed. Nothing else needs editing.
 #
-# Each run also long-polls Telegram for LISTEN_SECONDS after the cycle, so a
-# command sent while the container is alive is answered within about a second.
-# The worst case is a command sent during the gap between runs, which waits for
-# the next wake-up -- roughly two minutes at this cadence.
+# THE CADENCE IS */15, NOT */5, BECAUSE GITHUB DROPS */5.
+#
+# This was measured, not assumed. With "*/5 * * * *" deployed, the cycle did
+# not run once in forty minutes -- not delayed, absent. GitHub throttles very
+# frequent schedules and does not guarantee cron at all: the */30 schedule it
+# replaced averaged fifteen to twenty minutes between runs, and GitHub itself
+# warns that scheduled runs are best-effort during busy periods.
+#
+# So the wake-ups are kept rare and made long instead. Each run listens for
+# LISTEN_SECONDS, which covers most of the interval, and the gap between one
+# container stopping and the next starting is what a command has to survive.
+# Rare-and-long beats frequent-and-dropped, because a dropped run is a window
+# with no bot in it at all.
 #
 # The two extra entries exist because the nightly (23:55) and the digest (00:05)
 # fall on minutes a half-hourly cron never lands on. They are cheap -- two runs
@@ -41,7 +50,7 @@ name: fusion-cycle
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
     - cron: "55 23 * * *"
     - cron: "5 0 * * *"
   workflow_dispatch:
@@ -91,7 +100,9 @@ jobs:
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
           # Hold the Telegram connection open after the cycle so commands are
-          # answered while the container still exists. Keep this plus startup
-          # comfortably under the cron interval and the job timeout.
-          LISTEN_SECONDS: "180"
+          # answered while the container still exists. Twelve minutes of a
+          # fifteen-minute interval leaves a gap of about two minutes, which is
+          # what a command sent at the worst moment has to wait. Keep this plus
+          # startup under both the cron interval and the job timeout.
+          LISTEN_SECONDS: "720"
         run: python3 scripts/actions_cycle.py
