@@ -123,8 +123,19 @@ class TestCommands(unittest.TestCase):
         self.transport.responses = [self._updates("12345", "hello there")]
         self.assertEqual(self.client.poll_commands(), [])
 
-    def test_only_five_commands_exist(self):
-        self.assertEqual(set(COMMANDS), {"/start", "/help", "/status", "/pause", "/resume"})
+    def test_the_command_set_is_exactly_what_the_owner_approved(self):
+        """Five for months; a sixth by explicit request.
+
+        The original brief fixed the surface at five commands and this test
+        enforced it. The owner then asked for /signals by name, so the set is
+        now six. It stays a closed list on purpose: every command is a way to
+        reach the bot, so the list should grow only when asked, never drift.
+        """
+        self.assertEqual(
+            set(COMMANDS),
+            {"/start", "/help", "/signals", "/status", "/pause", "/resume"},
+        )
+        self.assertEqual(len(COMMANDS), 6)
 
 
 if __name__ == "__main__":

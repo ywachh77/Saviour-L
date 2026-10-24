@@ -40,6 +40,8 @@ from .engine import FusionEngine
 from .features import compute_features
 from .indicators import atr, mean
 from .model import OnlineLogisticModel
+from .session import session_of
+from .mistakes import MistakeMemory
 from .regime import classify
 from .stats import EdgeVerdict, MultiPathSummary, edge_verdict, summarise_paths
 
@@ -178,6 +180,7 @@ def run_backtest(
     spread_pips: float | None = None,
     weights: CouncilWeights | None = None,
     min_bars: int = MIN_BARS_FOR_BACKTEST,
+    mistakes: MistakeMemory | None = None,
 ) -> BacktestReport:
     """Replay the full pipeline over history and settle every signal with costs."""
     candles = sorted(candles, key=lambda candle: candle.timestamp)
@@ -316,6 +319,20 @@ def run_backtest(
             winning_side = "BUY" if move > 0 else "SELL" if move < 0 else None
             if result.council is not None and winning_side is not None:
                 weights.observe(spoken_votes(result.council.votes), winning_side)
+
+            # Post-mortem, opt-in. Passing a memory is the caller asserting the
+            # replay is over real bars: synthetic data trains nothing, and this
+            # is the one mechanism that can permanently ban a setup, so it must
+            # never be fed a random walk.
+            if mistakes is not None and result.signal is not None and not math.isclose(gross_pips, 0.0, abs_tol=1e-12):
+                mistakes.observe(
+                    MistakeMemory.fingerprint(
+                        result.regime or "UNKNOWN",
+                        session_of(candles[index].timestamp) if config.session_filter else None,
+                        result.signal.side,
+                    ),
+                    gross_pips > 0,
+                )
 
         report.folds += 1
         report.signals += fold_signals

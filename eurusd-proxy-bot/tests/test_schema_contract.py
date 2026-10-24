@@ -57,7 +57,7 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
         "move_pips", "net_pips", "spread_pips", "settled_at", "source",
     },
     "model_state": {
-        "id", "model", "ensemble", "runtime", "calibration_points", "updated_at",
+        "id", "model", "ensemble", "runtime", "calibration_points", "mistakes", "updated_at",
     },
     "model_versions": {"version_id", "report", "created_at"},
     "council_weights": {"id", "net", "seen", "weights", "version"},

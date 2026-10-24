@@ -243,17 +243,30 @@ def resolve_horizon(
 ) -> int | None:
     """The horizon this signal should use, or ``None`` meaning "do not trade".
 
-    With ``adaptive`` off this is the configured horizon unchanged, so the
-    default path is bit-for-bit the behaviour that already exists.
+    ``adaptive`` controls one thing only: whether a hold that is too short to
+    pay is *stretched* to a length that can. It does not control whether the
+    cost is checked, because a trade that cannot cover its own toll is not a
+    trade — it is a fee with a direction attached.
 
-    With it on, the hold is stretched to the shortest horizon that can pay for
-    itself, and never shortened below the configured one — a quiet market needs
-    more time, not less. ``None`` means even the cap cannot cover the cost, and
-    the honest response is to stay out rather than to hold longer and hope.
+    So both paths refuse an unpayable hold:
+
+    * adaptive off — the configured horizon, but only if it can pay;
+    * adaptive on  — stretched to the shortest horizon that can pay, and never
+      shortened below the configured one, since a quiet market needs more time
+      and not less.
+
+    ``None`` means even the cap cannot cover the cost. The honest response is to
+    stay out rather than to hold longer and hope.
+
+    A previous version returned the configured horizon unchecked when adaptive
+    was off, to preserve the behaviour of existing installs. That was a mistake:
+    at the EUR/USD volatility actually measured from live candles (0.6-1.5 pips
+    M1 ATR) a five-minute hold demands a 97% hit rate to break even against a
+    1.2 pip round turn. Preserving that behaviour preserved a guaranteed loss.
     """
     base = max(MIN_HORIZON_MINUTES, int(base_horizon_minutes))
     if not adaptive:
-        return base
+        return base if affordable(m1_atr_pips, base, spread_pips, reward_to_cost) else None
     viable = minimum_viable_horizon(m1_atr_pips, spread_pips, reward_to_cost, max_horizon)
     if viable is None:
         return None

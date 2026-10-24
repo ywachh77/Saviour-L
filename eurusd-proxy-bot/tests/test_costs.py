@@ -120,10 +120,21 @@ class AffordabilityTests(unittest.TestCase):
 
 
 class ResolveHorizonTests(unittest.TestCase):
-    def test_off_means_the_configured_horizon_unchanged(self) -> None:
-        """The default path must stay bit-for-bit what it already was."""
-        self.assertEqual(5, costs.resolve_horizon(0.1, 1.2, 5, adaptive=False))
+    def test_off_keeps_the_configured_horizon_when_it_can_pay(self) -> None:
+        """Stretching is opt-in. A hold that already pays is left alone."""
         self.assertEqual(17, costs.resolve_horizon(99.0, 1.2, 17, adaptive=False))
+        self.assertEqual(5, costs.resolve_horizon(6.0, 1.2, 5, adaptive=False))
+
+    def test_off_still_refuses_a_hold_that_cannot_pay(self) -> None:
+        """The cost test is unconditional; only the stretching is optional.
+
+        At 0.1 pips of M1 ATR no hold up to the cap projects 3.60 pips, so
+        there is no hit rate that rescues this trade and the only honest answer
+        is to stay out. Returning the configured 5 minutes here is what let the
+        bot take trades that were certain losses by construction.
+        """
+        self.assertIsNone(costs.resolve_horizon(0.1, 1.2, 5, adaptive=False))
+        self.assertIsNone(costs.resolve_horizon(1.8, 1.2, 5, adaptive=False))
 
     def test_adaptive_never_shortens_the_hold(self) -> None:
         """A quiet market needs more time, not less."""

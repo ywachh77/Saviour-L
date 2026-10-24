@@ -17,11 +17,20 @@ for the same bars every day forever.
 
     BACKFILL_MINUTES        how many further bars to fetch this run (max 200000)
     BACKFILL_TARGET_BARS    stop once the table holds this many (0 = no target)
+    BACKFILL_PACE_SECONDS   pause between pages (default 8.0)
+
+Pacing is what makes a large BACKFILL_MINUTES usable on a single key. Twelve
+Data allows 8 credits a minute and each page of 5000 bars costs one, so an
+unpaced run burns through the minute quota in eight pages, the pool raises
+"exhausted", and the backfill stops having fetched a fraction of what it was
+asked for. Sleeping between pages keeps it just under the limit so a 100k-bar
+run completes in about three minutes rather than aborting at forty thousand.
 """
 
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +81,12 @@ def main() -> int:
     else:
         print("No history yet; starting from now and walking back.")
 
+    try:
+        pace = float(os.environ.get("BACKFILL_PACE_SECONDS", "8.0"))
+    except ValueError:
+        pace = 8.0
+    pace = max(0.0, min(pace, 60.0))
+
     total = 0
     remaining = minutes
     end = oldest
@@ -111,6 +126,8 @@ def main() -> int:
         print(f"  stored {total} candles (walking back to {end})")
         if len(values) < size:
             break
+        if remaining > 0 and pace > 0.0:
+            time.sleep(pace)
 
     print(f"Done. {total} candles stored for {config.pair}.")
     return 0

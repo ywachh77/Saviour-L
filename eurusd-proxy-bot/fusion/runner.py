@@ -28,10 +28,12 @@ from .council import CouncilWeights, Vote
 from .domain import Candle, Signal
 from .engine import FusionEngine
 from .model import MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
+from .mistakes import MistakeMemory
 from .provider import TwelveDataProvider
+from .session import session_of
 from .store import Store, build_store
 from .telegram import HELP_TEXT, TelegramClient
-from .timeutil import minute_bucket, now, parse_datetime, seconds_until_next_minute
+from .timeutil import minute_bucket, now, parse_datetime, seconds_until_next_minute, floor_minute
 
 # How far past the minute boundary the pipeline is allowed to seal before the
 # signal is considered late and dropped.
@@ -60,6 +62,63 @@ def format_signal(signal: Signal) -> str:
         "Paper research signal. No broker order is placed.",
     ]
     return "\n".join(lines)
+
+
+def format_brief_signal(signal: Signal) -> str:
+    """Pair, direction, entry, expiry. Nothing else.
+
+    The full message carries the model read and the reasoning, and both still
+    go to the database where they can be audited. The phone gets the four
+    things a trade actually needs, because a wall of text at 2am is how a
+    number gets misread.
+    """
+    return "\n".join(
+        [
+            f"{signal.pair} {signal.side}",
+            f"Entry  open of {signal.entry_time.strftime('%H:%M')}Z candle",
+            f"Expiry {signal.expiry_time.strftime('%H:%M')}Z  ({signal.horizon_minutes} min)",
+            f"#{signal.signal_id[:8]}",
+            "",
+            "Paper — research only, no broker order.",
+        ]
+    )
+
+
+def format_result(signal: Signal, settlement) -> str:
+    """What the prediction actually did, sent the moment it is known.
+
+    Net, not gross: the spread is charged on every trade, so a result that
+    ignores it is a different number from the one that would have hit an
+    account. UNRESOLVED is reported as UNRESOLVED rather than as a zero.
+    """
+    header = f"RESULT {signal.pair} {signal.side}  #{signal.signal_id[:8]}"
+    if settlement.outcome == charter.UNRESOLVED:
+        return "\n".join(
+            [
+                header,
+                "UNRESOLVED — the price data never arrived.",
+                "No result is claimed for this trade.",
+            ]
+        )
+    if settlement.outcome == charter.TIED:
+        return "\n".join(
+            [
+                header,
+                f"Entry {settlement.entry_price:.5f} -> Exit {settlement.exit_price:.5f}",
+                "TIED — no movement, no result either way.",
+            ]
+        )
+    net = settlement.net_pips or 0.0
+    gross = settlement.gross_pips or 0.0
+    verdict = "WIN" if settlement.outcome == charter.WIN else "LOSS"
+    return "\n".join(
+        [
+            header,
+            f"Entry {settlement.entry_price:.5f} -> Exit {settlement.exit_price:.5f}",
+            f"Move {gross:+.1f} pips | cost {settlement.spread_pips:.1f} | net {net:+.1f}",
+            verdict,
+        ]
+    )
 
 
 @dataclass
@@ -102,6 +161,7 @@ class FusionBot:
     alerted_today: set[str] = field(default_factory=set)
     nightly_report: dict | None = None
     calibration_points: list[tuple[float, int]] = field(default_factory=list)
+    mistakes: MistakeMemory = field(default_factory=MistakeMemory)
 
     # ------------------------------------------------------------------ setup
     def __post_init__(self) -> None:
@@ -134,6 +194,7 @@ class FusionBot:
         if self.telegram is not None and isinstance(offset, int) and offset > 0:
             self.telegram.offset = offset
         self.stale_feed_minutes = int(runtime.get("stale_feed_minutes") or 0)
+        self.mistakes = MistakeMemory.from_dict(row.get("mistakes"))
         points = row.get("calibration_points") or []
         self.calibration_points = [
             (float(item[0]), int(item[1])) for item in points if len(item) == 2
@@ -208,6 +269,44 @@ class FusionBot:
             time.sleep(min(interval, max(0.05, deadline - time.time())))
 
     # ---------------------------------------------------------- housekeeping
+    def listen(self, seconds: float, *, poll_timeout: float = 20.0) -> int:
+        """Stay on the line, answering commands the moment they arrive.
+
+        A scheduled runner is only alive for the length of its job, so a
+        command sent while it is down waits for the next wake-up. Long polling
+        closes most of that gap: while this runs, Telegram holds the request
+        open and returns the instant the owner sends something, so /signals is
+        answered in about a second rather than whenever the cron next fires.
+
+        Settlements and outbox retries are drained on every pass too, so a
+        result is delivered during the same window instead of half an hour
+        later.
+        """
+        if self.telegram is None or not self.telegram.configured:
+            return 0
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        handled = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            timeout = int(max(1, min(poll_timeout, remaining)))
+            try:
+                for command in self.telegram.poll_commands(timeout_seconds=timeout):
+                    if not command.from_owner:
+                        # Silent by design: the bot does not talk to strangers.
+                        continue
+                    self.handle_command(command.command)
+                    handled += 1
+            except Exception as error:  # noqa: BLE001 - listening must not die
+                self.store.alert("listen_error", str(error)[:300])
+            try:
+                self.settle_due()
+                self.flush_outbox()
+            except Exception as error:  # noqa: BLE001
+                self.store.alert("listen_error", str(error)[:300])
+        return handled
+
     def housekeeping(self, at: datetime | None = None) -> None:
         stamp = at or now()
         self.store.heartbeat(
@@ -221,11 +320,11 @@ class FusionBot:
         self.settle_due(at=stamp)
         self.flush_outbox()
 
-    def poll_commands(self) -> None:
+    def poll_commands(self, *, timeout_seconds: int = 0) -> None:
         if self.telegram is None or not self.telegram.configured:
             return
         before = self.telegram.offset
-        for command in self.telegram.poll_commands(timeout_seconds=0):
+        for command in self.telegram.poll_commands(timeout_seconds=timeout_seconds):
             if not command.from_owner:
                 # Silent by design: the bot does not talk to strangers.
                 continue
@@ -253,11 +352,73 @@ class FusionBot:
             self.paused = False
             self._save_state(force=True)
             text = "Signals resumed."
+        elif command == "/signals":
+            text = self.on_demand_signal()
         else:
             text = "Unknown command.\n\n" + HELP_TEXT
         if self.telegram is not None:
             self.telegram.send(text)
         return text
+
+    def on_demand_signal(self, at: datetime | None = None) -> str:
+        """Answer /signals: read the live market now and say what it says.
+
+        This deliberately runs the same engine and the same gates as the
+        scheduled cycle. It does not relax a single threshold to produce an
+        answer, because a signal manufactured to satisfy a request is not a
+        prediction, it is a comfort -- and the whole point of this bot is that it
+        only ever says what it measured.
+
+        When the gates decline, the honest reply is that there is no setup.
+        Silence would be easier to mistake for a working system than a
+        refusal, which is exactly why the refusal is spelled out.
+        """
+        stamp = at or now()
+        if self.paused:
+            return "Signals are paused. Send /resume to start again."
+
+        # Target the minute that is about to open, not the one running.
+        #
+        # The charter discards any signal sealed more than ten seconds after a
+        # minute opened, because backdating an entry that already happened is a
+        # lie. Asked at :37 past the minute, a prediction about *this* minute
+        # could therefore never be sealed. A prediction about the next minute
+        # is not backdated at all -- its entry price does not exist yet -- and
+        # it is what someone hitting /signals actually wants: a call made
+        # before the bar, which is the only kind that can be traded.
+        if at is None:
+            next_minute = floor_minute(stamp) + timedelta(minutes=1)
+            stamp = next_minute + timedelta(seconds=1)
+        if self.provider is not None and getattr(self.provider, "configured", False):
+            self.ingest(at=stamp)
+        if not self.candles:
+            return "No price data available. The provider may be unreachable; try again shortly."
+
+        result = self.engine.evaluate(
+            self.candles,
+            model=self.model,
+            ensemble=self.ensemble,
+            weights=self.weights,
+            source="LIVE",
+            at=stamp,
+            mistakes=self.mistakes,
+        )
+        if not result.actionable or result.signal is None:
+            return (
+                "No setup right now.\n"
+                f"{result.reason}\n\n"
+                "The bot only reports what its gates actually agree on. "
+                "Asking again will not change the answer until the market does."
+            )
+
+        signal = result.signal
+        self.store.save_signal(
+            dict(signal.to_dict(), seal_state=charter.SEAL_SIGNAL, settled=False,
+                 bucket=minute_bucket(stamp))
+        )
+        self.deliver(signal, brief=True)
+        self.settle_due(at=stamp)
+        return format_brief_signal(signal)
 
     def _latest_system_report(self) -> dict | None:
         versions = self.store.load_model_versions(limit=1)
@@ -405,18 +566,30 @@ class FusionBot:
         )
 
     # -------------------------------------------------------------- delivery
-    def deliver(self, signal: Signal) -> None:
-        """Queue and send. SENT is recorded only on a confirmed message id."""
+    def deliver(self, signal: Signal, *, brief: bool = False) -> None:
+        """Queue and send. SENT is recorded only on a confirmed message id.
+
+        ``brief`` is what goes to the phone for an on-demand /signals request:
+        pair, direction, entry, expiry. The outbox still stores the full text
+        with the model read and the reasoning, so the short version is a
+        display choice and not a loss of the audit trail.
+        """
         key = f"signal|{signal.signal_id}"
         self.store.outbox_append(
-            {"message_key": key, "text": format_signal(signal), "kind": "signal", "state": charter.DELIVERY_PENDING}
+            {
+                "message_key": key,
+                "text": format_signal(signal),
+                "kind": "signal",
+                "state": charter.DELIVERY_PENDING,
+            }
         )
+        outgoing = format_brief_signal(signal) if brief else format_signal(signal)
         if self.telegram is None or not self.telegram.configured:
             self.store.outbox_update(key, {"state": charter.DELIVERY_FAILED, "last_error": "Telegram not configured"})
             self.store.update_signal(signal.signal_id, {"delivery_state": charter.DELIVERY_FAILED})
             return
 
-        result = self.telegram.send(format_signal(signal))
+        result = self.telegram.send(outgoing)
         if result.confirmed:
             self.store.outbox_update(
                 key, {"state": charter.DELIVERY_SENT, "message_id": result.message_id, "attempts": 1}
@@ -435,6 +608,30 @@ class FusionBot:
                 digest.ALERT_DELIVERY_UNKNOWN,
                 f"Signal {signal.signal_id[:8]} may or may not have been delivered. {result.error[:200]}",
                 key=f"delivery|{signal.signal_id}",
+            )
+
+    def deliver_result(self, signal: Signal, settlement) -> None:
+        """Send what the prediction did, as soon as the exit price exists.
+
+        Follows the same delivery discipline as the signal itself: SENT is
+        recorded only on a confirmed message id, and a failure is queued for
+        retry rather than assumed delivered.
+        """
+        key = f"result|{signal.signal_id}"
+        text = format_result(signal, settlement)
+        if self.telegram is None or not self.telegram.configured:
+            return
+        self.store.outbox_append(
+            {"message_key": key, "text": text, "kind": "result", "state": charter.DELIVERY_PENDING}
+        )
+        result = self.telegram.send(text)
+        if result.confirmed:
+            self.store.outbox_update(
+                key, {"state": charter.DELIVERY_SENT, "message_id": result.message_id, "attempts": 1}
+            )
+        else:
+            self.store.outbox_update(
+                key, {"state": result.state, "last_error": result.error[:300], "attempts": 1}
             )
 
     def flush_outbox(self) -> None:
@@ -461,23 +658,30 @@ class FusionBot:
             signal_id = self._signal_id_from_key(row.get("message_key"))
             if result.confirmed:
                 patch["message_id"] = result.message_id or ""
-                self.store.update_signal(
-                    signal_id,
-                    {"delivery_state": charter.DELIVERY_SENT, "message_id": patch["message_id"]},
-                )
+                if signal_id:
+                    self.store.update_signal(
+                        signal_id,
+                        {"delivery_state": charter.DELIVERY_SENT, "message_id": patch["message_id"]},
+                    )
             else:
                 # Still failing. Say which state, and on the last attempt admit
                 # we have given up rather than leaving it looking pending.
                 state = charter.DELIVERY_FAILED if attempts + 1 >= 3 else result.state
                 patch["state"] = state
-                self.store.update_signal(signal_id, {"delivery_state": state})
+                if signal_id:
+                    self.store.update_signal(signal_id, {"delivery_state": state})
             self.store.outbox_update(str(row.get("message_key")), patch)
 
     @staticmethod
-    def _signal_id_from_key(message_key: object) -> str:
-        """`signal|<id>` -> `<id>`. Outbox rows are keyed by what they carry."""
+    def _signal_id_from_key(message_key: object) -> str | None:
+        """`signal|<id>` -> `<id>`. Returns None for anything else.
+
+        Result rows are keyed `result|<id>`, and treating that whole string as
+        a signal id would silently miss the signal and then write a SENT
+        delivery state against a row that does not exist.
+        """
         key = str(message_key or "")
-        return key.split("|", 1)[-1] if key.startswith("signal|") else key
+        return key.split("|", 1)[-1] if key.startswith("signal|") else None
 
     # ------------------------------------------------------------ settlement
     def settle_due(self, at: datetime | None = None) -> int:
@@ -509,6 +713,11 @@ class FusionBot:
         label = settle.learning_label(signal, settlement)
         winning = settle.winning_side(settlement)
 
+        # Report the outcome the moment it exists. Synthetic replays are
+        # plumbing, not predictions, so they settle silently.
+        if not charter.is_synthetic(signal.source):
+            self.deliver_result(signal, settlement)
+
         if charter.is_synthetic(signal.source):
             # Charter: synthetic data trains nothing. The settlement is still
             # recorded so the pipeline can be observed end to end.
@@ -527,6 +736,18 @@ class FusionBot:
         if winning is not None:
             votes = _votes_from_signal(signal)
             self.weights.observe(votes, winning)
+
+        # Post-mortem: remember what this setup cost, so a pattern that keeps
+        # losing can be refused instead of re-tried. Rebuilt from what the
+        # signal stored, so the same bar always lands in the same cell.
+        self.mistakes.record(
+            settlement.outcome,
+            MistakeMemory.fingerprint(
+                signal.regime,
+                session_of(signal.entry_time) if self.config.session_filter else None,
+                signal.side,
+            ),
+        )
 
         # Model learning: test before learn, once per confirmed non-tied outcome.
         step = learning.online_step(
@@ -753,6 +974,7 @@ class FusionBot:
                 "stale_feed_minutes": self.stale_feed_minutes,
             },
             "calibration_points": [[point[0], point[1]] for point in self.calibration_points[-2000:]],
+            "mistakes": self.mistakes.to_dict(),
         }
         self.store.save_model_state(payload)
         self.store.save_council_weights(self.weights.to_dict())

@@ -11,18 +11,23 @@ name: fusion-cycle
 # The eurusd-proxy-bot/ copies stay for scripts/publish_repo.sh, which pushes
 # that folder as its own standalone repository.
 #
-# CADENCE IS A COST SETTING, NOT A PERFORMANCE ONE.
+# CADENCE AND THE COST OF WAITING
 #
-# A private repo on the free plan gets 2,000 Actions minutes a month. Every
-# wake-up costs roughly one to two billed minutes, so:
+# This repository is PUBLIC, and GitHub does not bill Actions minutes for Linux
+# runners on public repositories. That is what makes a five-minute wake-up
+# affordable here; the arithmetic below is the private-repo case, kept only
+# because it is the reason the previous default was thirty minutes.
 #
-#     */5    ~8,640 runs/mo   ~13,000 min   far over the free tier
-#     */15   ~2,880 runs/mo   ~4,300 min    over
-#     */30   ~1,440 runs/mo   ~2,200 min    at the limit  <-- default
-#     0 * *  ~  720 runs/mo   ~1,100 min    comfortable
+#     */5    ~8,640 runs/mo   ~13,000 min   free while public
+#     */30   ~1,440 runs/mo   ~2,200 min    what a private repo would allow
 #
-# The default is */30. If GitHub emails you about quota, delete the */30 line
-# below and uncomment the hourly one. Nothing else needs editing.
+# If this repo ever goes private, switch the cron back to "*/30 * * * *" or the
+# account will be billed. Nothing else needs editing.
+#
+# Each run also long-polls Telegram for LISTEN_SECONDS after the cycle, so a
+# command sent while the container is alive is answered within about a second.
+# The worst case is a command sent during the gap between runs, which waits for
+# the next wake-up -- roughly two minutes at this cadence.
 #
 # The two extra entries exist because the nightly (23:55) and the digest (00:05)
 # fall on minutes a half-hourly cron never lands on. They are cheap -- two runs
@@ -36,7 +41,7 @@ name: fusion-cycle
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/5 * * * *"
     - cron: "55 23 * * *"
     - cron: "5 0 * * *"
   workflow_dispatch:
@@ -48,9 +53,11 @@ concurrency:
 jobs:
   cycle:
     runs-on: ubuntu-latest
-    # Longer than the cycle itself needs, because a run landing in the nightly
-    # window will pick that job up and training takes minutes on real history.
-    # Job slots mean only one runner does it, whichever gets there first.
+    # A ceiling, not an expectation: an ordinary run finishes in about four
+    # minutes (a cycle plus the LISTEN_SECONDS window). It has to stay high
+    # enough for the 23:55 entry, which picks up the nightly and trains on
+    # real history -- that one takes minutes. Job slots mean only one runner
+    # does it, whichever gets there first.
     timeout-minutes: 20
     defaults:
       run:
@@ -75,4 +82,16 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+          # Stretch each hold to a length that can cover its own cost instead
+          # of trading a fixed five minutes. At the volatility actually measured
+          # from live EUR/USD candles, five minutes projects about 1.3 pips
+          # against a 1.2 pip round turn, which needs a 97% hit rate to break
+          # even. Without this the bot takes trades that cannot win by
+          # construction, and more accuracy does not fix that.
+          ADAPTIVE_HORIZON: "1"
+          MAX_HORIZON_MINUTES: "120"
+          # Hold the Telegram connection open after the cycle so commands are
+          # answered while the container still exists. Keep this plus startup
+          # comfortably under the cron interval and the job timeout.
+          LISTEN_SECONDS: "180"
         run: python3 scripts/actions_cycle.py

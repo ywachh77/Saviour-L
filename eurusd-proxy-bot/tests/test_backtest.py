@@ -133,10 +133,17 @@ class TestSharedDecisionPath(unittest.TestCase):
         features = rows[index]
         self.assertIsNotNone(features)
 
+        # The live path prices this bar's session spread; a flat 1.2 handed to
+        # the prepared path would compare two different trades. Derive the
+        # prepared gate from the same model so the only difference under test is
+        # who computed the gate, not which spread was assumed.
+        modelled = datagate.modelled_spread_pips(
+            candles[index].timestamp, base=engine.config.spread_pips
+        )
         prepared = engine.evaluate_prepared(
             candles[: index + 1],
             features=features,
-            gate=datagate.GateResult(datagate.OK, "OK", 0.0, 1.2, "modelled", 0, index + 1, "test"),
+            gate=datagate.GateResult(datagate.OK, "OK", 0.0, modelled, "modelled", 0, index + 1, "test"),
             regime_state=classify(
                 atr_value=features["atr"],
                 atr_pct=features["atr_pct"],
@@ -149,13 +156,18 @@ class TestSharedDecisionPath(unittest.TestCase):
             weights=CouncilWeights(),
             at=candles[index].timestamp + timedelta(minutes=1),
         )
-        # The live path needs a healthy gate too, so compare side only.
+        # The live path computes its own data gate; the prepared path is handed
+        # one, so the seal state can legitimately differ when the live bar is
+        # stale or the session is wide. What must never diverge is the decision
+        # the two reach once a gate has been passed — that is the part the
+        # backtest shares rather than re-implements.
         live = engine.evaluate(
             candles[: index + 1],
             weights=CouncilWeights(),
             at=candles[index].timestamp + timedelta(minutes=1),
         )
-        self.assertEqual(prepared.seal_state, live.seal_state)
+        if live.gate is not None and live.gate.usable:
+            self.assertEqual(prepared.seal_state, live.seal_state)
         if prepared.actionable and live.actionable:
             self.assertEqual(prepared.signal.side, live.signal.side)
 
@@ -249,7 +261,12 @@ class TestReplayLearnsTheCouncil(unittest.TestCase):
     """
 
     def _replay(self, **overrides):
-        candles = synthetic_series(900, seed=20260101)
+        # 2500 bars, not 900. Once an unpayable hold is refused rather than
+        # taken, this replay settles about 150 signals instead of 260, and a
+        # prototype needs 30 settled outcomes with a positive net before it is
+        # heard. At 900 bars nothing clears that bar any more — which is the
+        # cost gate working, not learning breaking.
+        candles = synthetic_series(2500, seed=20260101)
         weights = CouncilWeights()
         report = run_backtest(candles, config(**overrides), folds=3, weights=weights)
         return report, weights
