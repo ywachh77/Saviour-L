@@ -606,6 +606,31 @@ class FusionBot:
         elapsed = (stamp - scheduled).total_seconds() / 60.0
         return 0.0 <= elapsed <= self.SCHEDULE_GRACE_MINUTES
 
+    def _training_candles(self) -> list:
+        """Every bar we have, not the live window.
+
+        self.candles is a rolling CANDLE_HISTORY-sized buffer -- a few hundred
+        bars, enough to generate one signal and deliberately small. Training on
+        it meant the nightly job saw five hours of market no matter how much
+        history the database held, which is below NIGHTLY_MIN_SAMPLES and so
+        silently refused to train forever.
+
+        Falls back to the live buffer when the store is empty or unreadable, so
+        a first run with no backfill still behaves as it always did.
+        """
+        limit = int(getattr(self.config, "training_history", 200_000) or 200_000)
+        try:
+            rows = self.store.load_candles(self.config.pair, limit=limit)
+        except Exception:  # noqa: BLE001 - a training run must not kill the cycle
+            return list(self.candles)
+        candles = []
+        for row in rows:
+            try:
+                candles.append(Candle.from_mapping(row))
+            except (ValueError, KeyError, TypeError):
+                continue
+        return candles or list(self.candles)
+
     def nightly_job(self, at: datetime | None = None) -> dict:
         stamp = at or now()
         bucket = stamp.strftime("%Y-%m-%d")
@@ -614,7 +639,10 @@ class FusionBot:
 
         settlements = self.store.load_settlements(limit=4000)
         model, ensemble, report = learning.run_nightly(
-            self.candles, settlements, config=self.config, champion=self.model
+            self._training_candles(),
+            settlements,
+            config=self.config,
+            champion=self.model,
         )
         if model is not None:
             self.model = model

@@ -259,6 +259,22 @@ class Store:
     def save_candles(self, candles: Iterable[dict]) -> None:
         self._write("candles_m1", list(candles), on_conflict="timestamp,pair")
 
+    def oldest_candle(self, pair: str) -> str | None:
+        """The earliest bar we hold, or None on an empty table.
+
+        Backfill uses this to extend history backwards instead of re-fetching
+        the window it already has. Without it every scheduled run would start
+        from "now" and spend the same credits again for bars we already stored.
+        """
+        rows = self._read(
+            "candles_m1", limit=1, order="timestamp.asc", **{"pair": f"eq.{pair}"}
+        )
+        return rows[0].get("timestamp") if rows else None
+
+    def count_candles(self, pair: str) -> int:
+        """How many bars we hold. Used to stop backfilling once there is enough."""
+        return len(self._read("candles_m1", **{"pair": f"eq.{pair}"}))
+
     def load_candles(self, pair: str, limit: int = 400) -> list[dict]:
         # Without an explicit order PostgREST may return any slice of the table,
         # and slicing "the newest N" off an unordered page silently drops the

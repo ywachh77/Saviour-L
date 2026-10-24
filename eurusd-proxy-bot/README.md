@@ -554,6 +554,41 @@ them, so it is judged dead — which is correct.
 
 ---
 
+## How the model gets trained
+
+Three jobs, all in `.github/workflows/` at the **repository root** — GitHub
+ignores the copies inside `eurusd-proxy-bot/.github/`. Nothing here needs you.
+
+| Job | When | What it does |
+|---|---|---|
+| `fusion-backfill` | 02:17 UTC daily | Extends candle history backwards |
+| `fusion-cycle` | every 30 min | One minute cycle; picks up scheduled jobs |
+| `fusion-nightly` | 23:55 UTC | Walk-forward, promote or roll back, refit calibration |
+
+**Why backfill is mandatory.** The live cycle keeps only `CANDLE_HISTORY` bars
+(a few hundred) and refetches that same window every run, so the table never
+grows by itself. Training needs far more than that. Without backfill the
+nightly job has nothing to learn from and quietly refuses, forever.
+
+**Why it is safe on a schedule.** Each run walks backwards from the earliest
+bar already stored, so it buys new bars instead of re-buying ones you have.
+`BACKFILL_TARGET_BARS` stops it once there is enough, after which the job exits
+without spending a credit. A page is 5000 bars for one provider credit; the
+default is 20000 bars a day, well inside the free tier's 8 per minute.
+
+**Training reads history, not the live window.** The nightly job loads stored
+bars via `_training_candles()` rather than the in-memory buffer. Training on the
+live window meant it saw about five hours of market no matter how much history
+the database held.
+
+**Expect it to refuse.** Promotion requires a confidence interval that clears
+zero over at least 200 trades. At a realistic M1 ATR the spread demands a hit
+rate most configurations never reach, so "no edge" is the usual and correct
+outcome — the model stays in `VETO` rather than being handed authority it has
+not earned. That is the charter working, not a failure.
+
+---
+
 ### Step 6 — GitHub Actions secrets
 
 One command, from `eurusd-proxy-bot/`:

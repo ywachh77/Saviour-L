@@ -94,6 +94,9 @@ class Config:
     pair: str = charter.ALLOWED_PAIR
     timeframe: str = charter.ALLOWED_TIMEFRAME
     candle_history: int = 320
+    # Bars the nightly job trains on. Separate from candle_history, which is the
+    # rolling window the live cycle keeps in memory for signal generation.
+    training_history: int = 200_000
 
     # --- signal shape ---
     horizon_minutes: int = 5
@@ -178,6 +181,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         pair=os.environ.get("PAIR", charter.ALLOWED_PAIR).strip() or charter.ALLOWED_PAIR,
         timeframe=os.environ.get("TIMEFRAME", charter.ALLOWED_TIMEFRAME).strip(),
         candle_history=_int("CANDLE_HISTORY", 320),
+        training_history=_int("TRAINING_HISTORY", 200_000),
         horizon_minutes=_int("SIGNAL_HORIZON_MINUTES", 5),
         adaptive_horizon=_bool("ADAPTIVE_HORIZON", False),
         session_filter=_bool("SESSION_FILTER", True),
