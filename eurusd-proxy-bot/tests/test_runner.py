@@ -3,7 +3,7 @@
 import shutil
 import tempfile
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import URLError
 
@@ -171,6 +171,45 @@ class TestDeliveryInTheLoop(unittest.TestCase):
         ]
         self.assertEqual(len(transport.sent), 0)
         self.assertTrue(suppressed or not bot.store._read("signals"))
+
+
+class TestSchedulingSurvivesACron(unittest.TestCase):
+    """A cron cannot land on an arbitrary minute, so neither can the bot rely on one."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self.directory = Path(self._tmp)
+        self.bot = make_bot(self.directory)
+
+    def tearDown(self):
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _at(self, hour, minute, day=6):
+        return datetime(2026, 1, day, hour, minute, tzinfo=timezone.utc)
+
+    def test_the_exact_minute_still_fires(self):
+        self.assertTrue(self.bot.due_nightly(self._at(23, 55)))
+
+    def test_a_half_hourly_cron_catches_the_nightly(self):
+        """23:55 is not on a :00/:30 boundary. Without slack it never runs."""
+        self.assertTrue(self.bot.due_nightly(self._at(0, 0, day=7)))
+        self.assertTrue(self.bot.due_nightly(self._at(0, 30, day=7)))
+
+    def test_a_half_hourly_cron_catches_the_digest(self):
+        self.assertTrue(self.bot.due_digest(self._at(0, 30, day=7)))
+
+    def test_it_does_not_fire_early(self):
+        self.assertFalse(self.bot.due_nightly(self._at(23, 0)))
+
+    def test_the_grace_window_expires(self):
+        """Otherwise a run at noon would think the nightly was still due."""
+        self.assertFalse(self.bot.due_nightly(self._at(6, 0, day=7)))
+        self.assertFalse(self.bot.due_digest(self._at(6, 0, day=7)))
+
+    def test_the_previous_days_job_does_not_leak(self):
+        """At 23:00 the due job is yesterday's, long past its window."""
+        self.assertFalse(self.bot.due_nightly(self._at(23, 0)))
+        self.assertTrue(self.bot.due_nightly(self._at(23, 56)))
 
 
 class TestJobSlots(unittest.TestCase):

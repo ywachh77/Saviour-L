@@ -576,13 +576,35 @@ class FusionBot:
         return any(candle.timestamp == target for candle in self.candles)
 
     # -------------------------------------------------------- scheduled jobs
+    # How late a scheduled job may start and still be considered due.
+    SCHEDULE_GRACE_MINUTES = 90
+
     def due_nightly(self, at: datetime | None = None) -> bool:
-        stamp = at or now()
-        return stamp.hour == self.config.nightly_hour_utc and stamp.minute == self.config.nightly_minute_utc
+        return self._due_at(at, self.config.nightly_hour_utc, self.config.nightly_minute_utc)
 
     def due_digest(self, at: datetime | None = None) -> bool:
+        return self._due_at(at, self.config.digest_hour_utc, self.config.digest_minute_utc)
+
+    def _due_at(self, at: datetime | None, hour: int, minute: int) -> bool:
+        """True once the scheduled minute has passed, and for a while after.
+
+        An exact minute match only works if something wakes the bot at exactly
+        23:55. Nothing can promise that here: a cron fires on its own schedule,
+        and GitHub queues jobs and routinely starts them minutes late. Matching
+        exactly meant a half-hourly cron -- which never lands on :55 -- would
+        skip the nightly and the digest every single day, silently, while every
+        other cycle looked healthy.
+
+        Job slots make the slack safe. claim_job("nightly", date) and the digest
+        equivalent mean a late run cannot fire twice in one day.
+        """
         stamp = at or now()
-        return stamp.hour == self.config.digest_hour_utc and stamp.minute == self.config.digest_minute_utc
+        scheduled = stamp.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if stamp < scheduled:
+            # The 23:55 job is due when the clock reads 00:30 the next day.
+            scheduled -= timedelta(days=1)
+        elapsed = (stamp - scheduled).total_seconds() / 60.0
+        return 0.0 <= elapsed <= self.SCHEDULE_GRACE_MINUTES
 
     def nightly_job(self, at: datetime | None = None) -> dict:
         stamp = at or now()

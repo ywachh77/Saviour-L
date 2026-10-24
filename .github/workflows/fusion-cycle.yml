@@ -1,0 +1,75 @@
+name: fusion-cycle
+
+# The runner. Wakes on a cron, does one cycle, disappears.
+#
+# This file lives at the repository ROOT on purpose. GitHub only discovers
+# workflows in <root>/.github/workflows/ -- the copies inside
+# eurusd-proxy-bot/.github/ are invisible to it and never fire. While an
+# always-on device was the primary runner that did not matter; with Actions as
+# the only runner it means the bot silently does nothing at all.
+#
+# The eurusd-proxy-bot/ copies stay for scripts/publish_repo.sh, which pushes
+# that folder as its own standalone repository.
+#
+# CADENCE IS A COST SETTING, NOT A PERFORMANCE ONE.
+#
+# A private repo on the free plan gets 2,000 Actions minutes a month. Every
+# wake-up costs roughly one to two billed minutes, so:
+#
+#     */5    ~8,640 runs/mo   ~13,000 min   far over the free tier
+#     */15   ~2,880 runs/mo   ~4,300 min    over
+#     */30   ~1,440 runs/mo   ~2,200 min    at the limit  <-- default
+#     0 * *  ~  720 runs/mo   ~1,100 min    comfortable
+#
+# The default is */30. If GitHub emails you about quota, delete the */30 line
+# below and uncomment the hourly one. Nothing else needs editing.
+#
+# The two extra entries exist because the nightly (23:55) and the digest (00:05)
+# fall on minutes a half-hourly cron never lands on. They are cheap -- two runs
+# a day -- and the runner tolerates a late start, so even if GitHub queues them
+# the job still fires.
+#
+# Cadence also caps how often a signal can be emitted: the bot evaluates the
+# minute it wakes into and never backdates, so */30 means at most 48 evaluated
+# minutes a day. That is a research cadence, not a latency-critical one, which
+# is what this bot is for.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+    - cron: "55 23 * * *"
+    - cron: "5 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fusion-cycle
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: eurusd-proxy-bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run one cycle
+        env:
+          RUNNER: github-actions
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TWELVE_DATA_KEY_1: ${{ secrets.TWELVE_DATA_KEY_1 }}
+          TWELVE_DATA_KEY_2: ${{ secrets.TWELVE_DATA_KEY_2 }}
+          TWELVE_DATA_KEY_3: ${{ secrets.TWELVE_DATA_KEY_3 }}
+          TWELVE_DATA_KEY_4: ${{ secrets.TWELVE_DATA_KEY_4 }}
+          TWELVE_DATA_KEY_5: ${{ secrets.TWELVE_DATA_KEY_5 }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+        run: python3 scripts/actions_cycle.py
