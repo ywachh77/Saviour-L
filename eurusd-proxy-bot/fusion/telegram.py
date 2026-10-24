@@ -22,7 +22,7 @@ from typing import Any
 
 from . import charter
 
-COMMANDS = ("/start", "/help", "/status", "/pause", "/resume")
+COMMANDS = ("/start", "/help", "/signals", "/status", "/pause", "/resume")
 
 HELP_TEXT = (
     "FUSION BOT — EUR/USD M1 research signals (paper only).\n"
@@ -30,12 +30,15 @@ HELP_TEXT = (
     "Commands:\n"
     "/start — begin receiving signals\n"
     "/help — this message\n"
+    "/signals — read the market now and answer at once\n"
     "/status — health, ledger and learning state\n"
     "/pause — stop signals (bot keeps learning)\n"
     "/resume — resume signals\n"
     "\n"
     "Everything else is automatic: ingest, signals, settlement, online learning, "
-    "nightly walk-forward, and a daily digest at 00:05 UTC.\n"
+    "nightly walk-forward, and a daily digest at 00:05 UTC.\n\n"
+    "/signals runs the same gates as the scheduled cycle. When they decline it "
+    "says so, because a signal produced on demand would not be a prediction.\n"
     "\n"
     "This is research output, not investment advice. Signals are cost-charged paper "
     "settlements; no broker order is ever placed."

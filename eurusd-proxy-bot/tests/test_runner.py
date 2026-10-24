@@ -9,11 +9,12 @@ from urllib.error import URLError
 
 from fusion import charter
 from fusion.config import Config
-from fusion.domain import Candle, Signal
+from fusion.domain import Candle, Settlement, Signal
 from fusion.runner import FusionBot, format_signal
 from fusion.simulate import SyntheticFeed, run_simulation, synthetic_series
 from fusion.store import LocalStore, Store
 from fusion.telegram import TelegramClient
+from fusion.timeutil import parse_datetime
 from tests.helpers import make_candles
 
 
@@ -321,11 +322,12 @@ class TestCommands(unittest.TestCase):
         self.assertIn("FUSION BOT status", text)
         self.assertIn("PAUSED" if self.bot.paused else "LIVE", text)
 
-    def test_help_lists_exactly_five_commands(self):
+    def test_help_lists_every_command_and_nothing_else(self):
         text = self.bot.handle_command("/help")
-        for command in ("/start", "/help", "/status", "/pause", "/resume"):
+        for command in ("/start", "/help", "/signals", "/status", "/pause", "/resume"):
             self.assertIn(command, text)
         self.assertNotIn("/backfill", text)
+        self.assertNotIn("/train", text)
 
     def test_unknown_command_falls_back_to_help(self):
         text = self.bot.handle_command("/teleport")
@@ -467,6 +469,184 @@ class TestShortLivedContainerDoesNotRepeatItself(unittest.TestCase):
             1,
             "no command reply should be sent: /pause was handled before this container existed",
         )
+
+
+class TestOnDemandSignals(unittest.TestCase):
+    """/signals must read the market, not manufacture an answer.
+
+    These use candles anchored to the current minute on purpose. The shared
+    helper starts history in January 2026, so a bot handed those bars is
+    always looking at data eight months old and the freshness gate refuses it
+    -- which makes every assertion below pass for the wrong reason.
+    """
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    @staticmethod
+    def _fresh_candles(count: int = 200, seed: int = 11):
+        end = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=1)
+        return make_candles(count, seed=seed, start=end - timedelta(minutes=count - 1))
+
+    def _bot(self, transport=None, candles=None) -> FusionBot:
+        # adaptive_horizon matches the deployed workflow: a hold too short to
+        # pay is stretched, not taken.
+        config = Config(local_state_dir=str(self.directory), runner="github-actions",
+                        horizon_minutes=3, adaptive_horizon=True, max_horizon_minutes=120)
+        client = TelegramClient("t", "1", opener=transport) if transport else None
+        bot = FusionBot(config=config, store=Store(None, LocalStore(self.directory)),
+                        provider=None, telegram=client)
+        if candles is not None:
+            bot.candles = candles
+        return bot
+
+    def test_the_brief_format_carries_only_the_four_trade_facts(self):
+        from fusion.runner import format_brief_signal
+        signal = Signal.create(
+            pair="EUR/USD", side="BUY",
+            entry_time=datetime(2026, 10, 24, 10, 42, tzinfo=timezone.utc),
+            strategy="fusion_council", reason="test", source="LIVE",
+            generated_at=datetime(2026, 10, 24, 10, 42, tzinfo=timezone.utc),
+            horizon_minutes=40, spread_pips=1.2,
+        )
+        text = format_brief_signal(signal)
+        self.assertIn("EUR/USD", text)
+        self.assertIn("BUY", text)
+        self.assertIn("10:42", text)
+        self.assertIn("11:22", text)
+        for hidden in ("Model:", "Regime:", "Why:"):
+            self.assertNotIn(hidden, text)
+
+    def test_no_setup_is_reported_not_invented(self):
+        """The core point: a request must never become a prediction."""
+        transport = ScriptedTransport()
+        bot = self._bot(transport, candles=self._fresh_candles(seed=5))
+        reply = bot.on_demand_signal()
+        self.assertEqual(transport.sent, [], "nothing may be sent when there is no setup")
+        self.assertIn("No setup", reply)
+        self.assertNotIn("EUR/USD BUY", reply)
+
+    def test_a_real_setup_is_delivered_briefly(self):
+        """When the gates do agree, the phone gets the short version."""
+        from fusion import strategies
+        from fusion.domain import Decision
+
+        transport = ScriptedTransport()
+        bot = self._bot(transport, candles=self._fresh_candles(seed=11))
+        original = dict(strategies.REGISTRY)
+        strategies.REGISTRY[strategies.CORE] = lambda *a, **k: Decision("BUY", "forced", None, 6)
+        try:
+            reply = bot.on_demand_signal()
+        finally:
+            strategies.REGISTRY.clear()
+            strategies.REGISTRY.update(original)
+
+        self.assertIn("EUR/USD", reply)
+        self.assertIn("BUY", reply)
+        self.assertIn("Entry", reply)
+        self.assertIn("Expiry", reply)
+        self.assertEqual(len(transport.sent), 1)
+        self.assertIn("Entry", transport.sent[0])
+
+    def test_the_prediction_is_about_a_future_minute(self):
+        """Asked mid-minute, the call must be for a bar that has not opened.
+
+        Entry prices that already happened are backdated, and the charter
+        discards those. Targeting the next minute is what makes /signals
+        usable at any second rather than only in the first ten.
+        """
+        from fusion import strategies
+        from fusion.domain import Decision
+
+        bot = self._bot(ScriptedTransport(), candles=self._fresh_candles(seed=11))
+        original = dict(strategies.REGISTRY)
+        strategies.REGISTRY[strategies.CORE] = lambda *a, **k: Decision("BUY", "forced", None, 6)
+        try:
+            reply = bot.on_demand_signal()
+        finally:
+            strategies.REGISTRY.clear()
+            strategies.REGISTRY.update(original)
+        if "No setup" in reply:
+            self.skipTest("gates declined on this synthetic path")
+        for row in self._load_signals():
+            entry = parse_datetime(row["entry_time"])
+            self.assertGreater(entry, datetime.now(timezone.utc) - timedelta(seconds=5),
+                               "entry must be now or in the future, never in the past")
+
+    def _load_signals(self):
+        return Store(None, LocalStore(self.directory))._read("signals")
+
+    def test_it_refuses_while_paused(self):
+        bot = self._bot(ScriptedTransport(), candles=self._fresh_candles(seed=5))
+        bot.paused = True
+        self.assertIn("paused", bot.on_demand_signal())
+
+    def test_it_says_so_when_there_is_no_data(self):
+        bot = self._bot()
+        self.assertIn("No price data", bot.on_demand_signal())
+
+
+class TestResultReporting(unittest.TestCase):
+    """Every prediction must report what it did, including when it did nothing."""
+
+    def _signal(self):
+        stamp = datetime(2026, 10, 24, 10, 42, tzinfo=timezone.utc)
+        return Signal.create(
+            pair="EUR/USD", side="BUY", entry_time=stamp, strategy="fusion_council",
+            reason="test", source="LIVE", generated_at=stamp, horizon_minutes=5, spread_pips=1.2,
+        )
+
+    def _settlement(self, outcome, gross, net, spread=1.2):
+        return Settlement(
+            signal_id="s1", outcome=outcome, entry_price=1.10000, exit_price=1.10000 + gross / 10000,
+            gross_pips=gross, move_pips=gross, net_pips=net, spread_pips=spread,
+            settled_at=datetime(2026, 10, 24, 10, 47, tzinfo=timezone.utc), source="LIVE",
+        )
+
+    def test_a_win_reports_net_not_gross(self):
+        from fusion.runner import format_result
+        text = format_result(self._signal(), self._settlement(charter.WIN, 2.9, 1.7))
+        self.assertIn("WIN", text)
+        self.assertIn("+1.7", text)
+        self.assertIn("cost 1.2", text)
+
+    def test_a_loss_is_still_reported(self):
+        """A bot that only reports its wins is marketing, not research."""
+        from fusion.runner import format_result
+        text = format_result(self._signal(), self._settlement(charter.LOSS, -1.0, -2.2))
+        self.assertIn("LOSS", text)
+
+    def test_unresolved_claims_no_number(self):
+        from fusion.runner import format_result
+        text = format_result(self._signal(), self._settlement(charter.UNRESOLVED, 0.0, 0.0))
+        self.assertIn("UNRESOLVED", text)
+        self.assertNotIn("0.0", text.split("\n")[-1])
+
+    def test_a_tie_is_a_tie(self):
+        from fusion.runner import format_result
+        text = format_result(self._signal(), self._settlement(charter.TIED, 0.0, -1.2))
+        self.assertIn("TIED", text)
+
+    def test_the_result_is_sent_when_a_real_signal_settles(self):
+        directory = Path(tempfile.mkdtemp())
+        try:
+            transport = ScriptedTransport()
+            config = Config(local_state_dir=str(directory), runner="github-actions", horizon_minutes=3)
+            bot = FusionBot(config=config, store=Store(None, LocalStore(directory)),
+                            provider=None, telegram=TelegramClient("t", "1", opener=transport))
+            signal = self._signal()
+            bot.deliver_result(signal, self._settlement(charter.WIN, 2.9, 1.7))
+            self.assertEqual(len(transport.sent), 1)
+            self.assertIn("RESULT", transport.sent[0])
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+
+    def test_a_result_key_is_not_mistaken_for_a_signal_id(self):
+        self.assertIsNone(FusionBot._signal_id_from_key("result|abc123"))
+        self.assertEqual(FusionBot._signal_id_from_key("signal|abc123"), "abc123")
 
 
 if __name__ == "__main__":
