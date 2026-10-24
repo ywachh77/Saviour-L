@@ -8,6 +8,15 @@ credits, so it is an explicit, environment-flagged action you run on purpose.
 
 Twelve Data returns history in pages; each page costs credits from your key
 pool, and the pool stops honestly when the day's quota is gone.
+
+Incremental and safe on a schedule. Each run extends history backwards from
+the earliest bar already stored rather than re-fetching the recent window, and
+BACKFILL_TARGET_BARS stops the whole thing once there is enough -- so a daily
+cron spends a bounded number of credits and then goes quiet instead of paying
+for the same bars every day forever.
+
+    BACKFILL_MINUTES        how many further bars to fetch this run (max 200000)
+    BACKFILL_TARGET_BARS    stop once the table holds this many (0 = no target)
 """
 
 from __future__ import annotations
@@ -44,11 +53,28 @@ def main() -> int:
 
     store = build_store(config)
     provider = TwelveDataProvider(config.twelve_data_keys, base_url=config.provider_base_url)
-    print(f"Backfilling up to {minutes} one-minute candles for {config.pair}...")
+    target = int(os.environ.get("BACKFILL_TARGET_BARS") or os.environ.get("BACKFILL_TARGET") or 0)
+    have = store.count_candles(config.pair)
+    if target and have >= target:
+        print(f"Already holding {have} bars for {config.pair}, target is {target}. "
+              "Nothing to do, and no credits spent.")
+        return 0
+    if target:
+        print(f"Holding {have} bars for {config.pair}; target is {target}.")
+
+    print(f"Fetching up to {minutes} further one-minute candles for {config.pair}...")
+
+    # Walk backwards from the earliest bar we already hold. Starting from "now"
+    # every time would re-buy the same history on each scheduled run.
+    oldest = store.oldest_candle(config.pair)
+    if oldest:
+        print(f"History already starts at {oldest}; extending further back.")
+    else:
+        print("No history yet; starting from now and walking back.")
 
     total = 0
     remaining = minutes
-    end = None
+    end = oldest
     while remaining > 0:
         size = min(5000, remaining)
         params = {

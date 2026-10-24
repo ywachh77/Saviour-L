@@ -1,0 +1,56 @@
+name: fusion-nightly
+
+# The training run: walk-forward, promote or roll back, refit calibration.
+#
+# At the repository root on purpose: GitHub only discovers workflows in
+# <root>/.github/workflows/. The copy inside eurusd-proxy-bot/.github/ never
+# fires.
+#
+# Separate from fusion-cycle for two reasons. It needs a much longer timeout --
+# walk-forward over months of bars is minutes of work, not seconds -- and it
+# should not be in the path that produces signals. The cycle job also calls the
+# nightly when one of its runs lands in the window, but job slots mean whichever
+# gets there first wins and the other stands down, so running both is safe.
+#
+# This is the job that decides whether the model earns advisory authority. It is
+# expected to refuse: promotion requires a confidence interval that clears zero,
+# and at a realistic M1 ATR the spread demands a hit rate most configurations do
+# not reach. "No edge" is a correct answer here, not a failure.
+
+on:
+  schedule:
+    - cron: "55 23 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fusion-nightly
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: eurusd-proxy-bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Walk-forward, promote or roll back
+        env:
+          RUNNER: github-actions
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TWELVE_DATA_KEY_1: ${{ secrets.TWELVE_DATA_KEY_1 }}
+          TWELVE_DATA_KEY_2: ${{ secrets.TWELVE_DATA_KEY_2 }}
+          TWELVE_DATA_KEY_3: ${{ secrets.TWELVE_DATA_KEY_3 }}
+          TWELVE_DATA_KEY_4: ${{ secrets.TWELVE_DATA_KEY_4 }}
+          TWELVE_DATA_KEY_5: ${{ secrets.TWELVE_DATA_KEY_5 }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+        run: python3 scripts/nightly.py

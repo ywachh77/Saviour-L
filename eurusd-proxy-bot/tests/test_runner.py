@@ -9,7 +9,7 @@ from urllib.error import URLError
 
 from fusion import charter
 from fusion.config import Config
-from fusion.domain import Signal
+from fusion.domain import Candle, Signal
 from fusion.runner import FusionBot, format_signal
 from fusion.simulate import SyntheticFeed, run_simulation, synthetic_series
 from fusion.store import LocalStore, Store
@@ -171,6 +171,49 @@ class TestDeliveryInTheLoop(unittest.TestCase):
         ]
         self.assertEqual(len(transport.sent), 0)
         self.assertTrue(suppressed or not bot.store._read("signals"))
+
+
+class TestNightlyTrainsOnHistory(unittest.TestCase):
+    """Training must see the stored bars, not the few hundred the cycle keeps."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self.directory = Path(self._tmp)
+        self.bot = make_bot(self.directory)
+
+    def tearDown(self):
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _store_bars(self, count):
+        rows = []
+        for index in range(count):
+            stamp = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=index)
+            rows.append({
+                "timestamp": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "pair": "EUR/USD", "open": 1.10, "high": 1.11,
+                "low": 1.09, "close": 1.10, "volume": 700.0,
+            })
+        self.bot.store.save_candles(rows)
+
+    def test_training_sees_stored_history_not_the_live_window(self):
+        """The live buffer is CANDLE_HISTORY bars wide. Training on it silently
+        starved the nightly job, which needs far more to run at all."""
+        self._store_bars(1500)
+        self.bot.candles = []  # the in-memory window is empty this cycle
+
+        candles = self.bot._training_candles()
+        self.assertEqual(len(candles), 1500)
+        self.assertTrue(all(isinstance(item, Candle) for item in candles))
+
+    def test_training_history_is_capped_by_config(self):
+        self._store_bars(900)
+        self.bot.config.training_history = 120
+        self.assertEqual(len(self.bot._training_candles()), 120)
+
+    def test_it_falls_back_to_the_live_window_when_the_store_is_empty(self):
+        """No history yet: behave exactly as before rather than training on nothing."""
+        self.bot.candles = list(synthetic_series(50, seed=1))
+        self.assertEqual(len(self.bot._training_candles()), 50)
 
 
 class TestSchedulingSurvivesACron(unittest.TestCase):

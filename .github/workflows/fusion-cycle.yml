@@ -48,7 +48,10 @@ concurrency:
 jobs:
   cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Longer than the cycle itself needs, because a run landing in the nightly
+    # window will pick that job up and training takes minutes on real history.
+    # Job slots mean only one runner does it, whichever gets there first.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: eurusd-proxy-bot

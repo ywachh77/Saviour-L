@@ -1,0 +1,64 @@
+name: fusion-backfill
+
+# Extend the candle history the model trains on.
+#
+# At the repository root on purpose: GitHub only discovers workflows in
+# <root>/.github/workflows/, and a copy inside eurusd-proxy-bot/.github/ is
+# invisible to it.
+#
+# WHY THIS HAS TO BE INCREMENTAL
+#
+# The live cycle keeps only CANDLE_HISTORY bars (a few hundred) in memory, and
+# refetches that same window every run, so the table never grows on its own.
+# Without history the nightly job has nothing to train on, and without this
+# workflow there is no history.
+#
+# Each run walks backwards from the earliest bar already stored, so it buys new
+# bars rather than re-buying ones we have. BACKFILL_TARGET_BARS stops the whole
+# thing once there is enough, after which the job exits without spending a
+# single credit. That is what makes a daily cron safe to leave running.
+#
+# COST
+#
+# One page is 5000 bars and costs one provider credit. The default below is
+# 20000 bars a day = 4 credits, well inside the free tier's 8/minute. The job
+# idempotently stops at the target, so this is a bounded, one-off total cost
+# spread over a few days -- not a recurring charge.
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fusion-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: eurusd-proxy-bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Extend candle history
+        env:
+          BACKFILL: "1"
+          BACKFILL_MINUTES: "20000"
+          BACKFILL_TARGET_BARS: "250000"
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TWELVE_DATA_KEY_1: ${{ secrets.TWELVE_DATA_KEY_1 }}
+          TWELVE_DATA_KEY_2: ${{ secrets.TWELVE_DATA_KEY_2 }}
+          TWELVE_DATA_KEY_3: ${{ secrets.TWELVE_DATA_KEY_3 }}
+          TWELVE_DATA_KEY_4: ${{ secrets.TWELVE_DATA_KEY_4 }}
+          TWELVE_DATA_KEY_5: ${{ secrets.TWELVE_DATA_KEY_5 }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python3 scripts/backfill.py

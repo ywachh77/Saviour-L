@@ -41,6 +41,22 @@ class TestLocalStore(unittest.TestCase):
         self.store.save_settlement({"signal_id": "abc", "outcome": "WIN"})
         self.assertEqual(self.store.pending_signals("EUR/USD"), [])
 
+    def test_oldest_candle_reports_the_earliest_bar(self):
+        """Backfill starts here so it buys new bars, not ones we already have."""
+        self.assertIsNone(self.store.oldest_candle("EUR/USD"))
+        for stamp in ("2026-01-03T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"):
+            self.store.save_candles([{"timestamp": stamp, "pair": "EUR/USD", "close": 1.1}])
+        self.assertEqual(self.store.oldest_candle("EUR/USD"), "2026-01-01T00:00:00Z")
+
+    def test_candle_count_lets_backfill_stop_spending(self):
+        self.assertEqual(self.store.count_candles("EUR/USD"), 0)
+        rows = [
+            {"timestamp": f"2026-01-01T00:{index:02d}:00Z", "pair": "EUR/USD", "close": 1.1}
+            for index in range(12)
+        ]
+        self.store.save_candles(rows)
+        self.assertEqual(self.store.count_candles("EUR/USD"), 12)
+
     def test_model_state_is_a_single_row(self):
         self.store.save_model_state({"model": {"weights": [1, 2, 3]}})
         self.store.save_model_state({"model": {"weights": [4, 5, 6]}})
