@@ -269,6 +269,44 @@ class FusionBot:
             time.sleep(min(interval, max(0.05, deadline - time.time())))
 
     # ---------------------------------------------------------- housekeeping
+    def listen(self, seconds: float, *, poll_timeout: float = 20.0) -> int:
+        """Stay on the line, answering commands the moment they arrive.
+
+        A scheduled runner is only alive for the length of its job, so a
+        command sent while it is down waits for the next wake-up. Long polling
+        closes most of that gap: while this runs, Telegram holds the request
+        open and returns the instant the owner sends something, so /signals is
+        answered in about a second rather than whenever the cron next fires.
+
+        Settlements and outbox retries are drained on every pass too, so a
+        result is delivered during the same window instead of half an hour
+        later.
+        """
+        if self.telegram is None or not self.telegram.configured:
+            return 0
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        handled = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            timeout = int(max(1, min(poll_timeout, remaining)))
+            try:
+                for command in self.telegram.poll_commands(timeout_seconds=timeout):
+                    if not command.from_owner:
+                        # Silent by design: the bot does not talk to strangers.
+                        continue
+                    self.handle_command(command.command)
+                    handled += 1
+            except Exception as error:  # noqa: BLE001 - listening must not die
+                self.store.alert("listen_error", str(error)[:300])
+            try:
+                self.settle_due()
+                self.flush_outbox()
+            except Exception as error:  # noqa: BLE001
+                self.store.alert("listen_error", str(error)[:300])
+        return handled
+
     def housekeeping(self, at: datetime | None = None) -> None:
         stamp = at or now()
         self.store.heartbeat(
@@ -282,11 +320,11 @@ class FusionBot:
         self.settle_due(at=stamp)
         self.flush_outbox()
 
-    def poll_commands(self) -> None:
+    def poll_commands(self, *, timeout_seconds: int = 0) -> None:
         if self.telegram is None or not self.telegram.configured:
             return
         before = self.telegram.offset
-        for command in self.telegram.poll_commands(timeout_seconds=0):
+        for command in self.telegram.poll_commands(timeout_seconds=timeout_seconds):
             if not command.from_owner:
                 # Silent by design: the bot does not talk to strangers.
                 continue

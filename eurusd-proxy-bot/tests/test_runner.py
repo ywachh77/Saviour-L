@@ -649,5 +649,54 @@ class TestResultReporting(unittest.TestCase):
         self.assertEqual(FusionBot._signal_id_from_key("signal|abc123"), "abc123")
 
 
+class TestListeningWhileAwake(unittest.TestCase):
+    """A command sent while the container is alive must be answered at once."""
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def _bot(self, transport) -> FusionBot:
+        config = Config(local_state_dir=str(self.directory), runner="github-actions", horizon_minutes=3)
+        return FusionBot(config=config, store=Store(None, LocalStore(self.directory)),
+                         provider=None, telegram=TelegramClient("t", "1", opener=transport))
+
+    def test_a_command_arriving_during_the_window_is_answered(self):
+        updates = b'{"ok":true,"result":[{"update_id":900,"message":{"text":"/pause","chat":{"id":"1"}}}]}'
+        transport = ScriptedTransport(updates)
+        bot = self._bot(transport)
+        handled = bot.listen(0.05)
+        self.assertEqual(handled, 1)
+        self.assertTrue(bot.paused)
+
+    def test_it_returns_without_telegram(self):
+        config = Config(local_state_dir=str(self.directory), runner="github-actions")
+        bot = FusionBot(config=config, store=Store(None, LocalStore(self.directory)),
+                        provider=None, telegram=None)
+        self.assertEqual(bot.listen(0.05), 0)
+
+    def test_a_stranger_is_ignored(self):
+        """The bot does not take orders from just anyone."""
+        updates = b'{"ok":true,"result":[{"update_id":901,"message":{"text":"/pause","chat":{"id":"999"}}}]}'
+        transport = ScriptedTransport(updates)
+        bot = self._bot(transport)
+        self.assertEqual(bot.listen(0.05), 0)
+        self.assertFalse(bot.paused)
+
+    def test_a_transport_failure_does_not_kill_the_listener(self):
+        class Broken:
+            def __init__(self): self.calls = 0
+            def __call__(self, request, timeout=None):
+                self.calls += 1
+                raise OSError("network down")
+
+        broken = Broken()
+        bot = self._bot(broken)
+        self.assertEqual(bot.listen(0.05), 0)
+        self.assertGreaterEqual(broken.calls, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
