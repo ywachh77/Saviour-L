@@ -20,7 +20,7 @@ from typing import Sequence
 from . import charter, costs, datagate
 from .calibration import IsotonicCalibrator
 from .council import CouncilResult, CouncilWeights, run_council
-from .domain import Candle, ModelRead, Signal
+from .domain import Candle, ModelRead, Signal, closed_before
 from .features import compute_features
 from .model import MODE_ADVISORY, MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
 from .mistakes import MistakeMemory
@@ -246,7 +246,11 @@ class FusionEngine:
         """Data gate -> features -> decision -> seal, for one live minute."""
         config = self.config
         stamp = at or utcnow()
-        candles = list(candles)
+        # Decide only on bars that had already closed when the entry minute
+        # opened. The entry bar is still forming at this moment; letting its
+        # high, low and close into the features is look-ahead, and the
+        # walk-forward backtest never had it. See domain.closed_before.
+        candles = closed_before(list(candles), stamp)
 
         gate = datagate.evaluate(
             candles,
