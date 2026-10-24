@@ -7,6 +7,8 @@ and says why.
 
 from __future__ import annotations
 
+from . import charter
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
@@ -78,7 +80,14 @@ def evaluate(
     quote: dict | None = None,
     min_candles: int = 60,
     max_gaps: int = 3,
+    base_spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
 ) -> GateResult:
+    """``base_spread_pips`` is the configured assumed spread.
+
+    The model used to hardcode 1.2 here, so SPREAD_PIPS had no effect on the
+    gate at all: set it to 3.0 and the bot would still model London at 1.2 and
+    wave everything through.
+    """
     candles = list(candles)
     if len(candles) < min_candles:
         return GateResult(
@@ -98,7 +107,7 @@ def evaluate(
         spread = float(quote["spread_pips"])
         spread_source = "provider"
     else:
-        spread = modelled_spread_pips(last.timestamp)
+        spread = modelled_spread_pips(last.timestamp, base=base_spread_pips)
         spread_source = "modelled"
 
     gaps = count_gaps(candles)
