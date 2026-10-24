@@ -698,6 +698,53 @@ class TestListeningWhileAwake(unittest.TestCase):
         self.assertGreaterEqual(broken.calls, 1)
 
 
+class TestScheduledCyclesAreNotLostToCronJitter(unittest.TestCase):
+    """GitHub's cron does not land on minute boundaries.
+
+    Measured on the live table: of the first twenty-one scheduled cycles, two
+    found a real setup and both were discarded -- sealed 14.2s and 46.6s
+    after the minute opened, past the 10s limit. Zero signals in eleven
+    hours, and two of them were lost to a timing artefact rather than to the
+    market being untradeable.
+    """
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def _bot(self) -> FusionBot:
+        config = Config(local_state_dir=str(self.directory), runner="github-actions", horizon_minutes=3)
+        return FusionBot(config=config, store=Store(None, LocalStore(self.directory)),
+                         provider=None, telegram=None)
+
+    def test_a_late_wake_up_targets_the_next_minute(self):
+        woke = datetime(2026, 1, 5, 10, 43, 47, tzinfo=timezone.utc)
+        stamp = self._bot()._sealable_stamp(woke)
+        self.assertEqual(stamp, datetime(2026, 1, 5, 10, 44, 1, tzinfo=timezone.utc))
+
+    def test_a_prompt_wake_up_keeps_the_current_minute(self):
+        woke = datetime(2026, 1, 5, 10, 43, 3, tzinfo=timezone.utc)
+        self.assertEqual(self._bot()._sealable_stamp(woke), woke)
+
+    def test_the_rolled_forward_entry_is_not_backdated(self):
+        """The minute we enter must still be in the future."""
+        woke = datetime(2026, 1, 5, 10, 43, 47, tzinfo=timezone.utc)
+        stamp = self._bot()._sealable_stamp(woke)
+        self.assertGreater(stamp, woke)
+        self.assertGreater(stamp, datetime(2026, 1, 5, 10, 44, tzinfo=timezone.utc))
+
+    def test_a_late_cycle_targets_the_next_minute_not_the_missed_one(self):
+        woke = datetime(2026, 1, 5, 10, 43, 47, tzinfo=timezone.utc)
+        candles = make_candles(220, seed=5, start=woke - timedelta(minutes=219))
+        bot = self._bot()
+        bot.candles = candles
+        report = bot.minute_cycle(at=woke)
+        self.assertEqual(report.bucket, "2026-01-05T10:44Z")
+        self.assertNotEqual(report.seal_state, charter.SEAL_DISCARDED_LATE)
+
+
 class TestReplyIsNeverSilent(unittest.TestCase):
     """A reply that never arrives must not also leave no trace.
 

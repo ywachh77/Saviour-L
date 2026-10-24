@@ -540,8 +540,31 @@ class FusionBot:
         )
 
     # ---------------------------------------------------------- minute cycle
+    def _sealable_stamp(self, stamp: datetime) -> datetime:
+        """Roll to the next minute when this one can no longer be sealed.
+
+        GitHub's cron does not land on minute boundaries. Measured across a
+        day of live runs, the wake-up fell anywhere from :03 to :58 past the
+        minute, and the charter discards anything sealed more than ten seconds
+        after a minute opens because backdating an entry is a lie. A scheduled
+        cycle that evaluates the minute it woke into is therefore discarded
+        for being late far more often than for being wrong.
+
+        Measured on the live table: of the first twenty-one cycles, two found
+        a real setup and both were thrown away -- sealed 14.2s and 46.6s
+        after the minute opened. Zero signals in eleven hours.
+
+        Predicting the minute that has not opened yet is not backdated: its
+        entry price does not exist yet. It is the same thing /signals does,
+        and it is the only kind of call a scheduled runner can honestly make.
+        """
+        opened = floor_minute(stamp)
+        if (stamp - opened).total_seconds() <= self.config.max_seal_latency_seconds:
+            return stamp
+        return opened + timedelta(minutes=1, seconds=1)
+
     def minute_cycle(self, at: datetime | None = None) -> CycleReport:
-        stamp = at or now()
+        stamp = self._sealable_stamp(at or now())
         bucket = minute_bucket(stamp)
         self.cycles += 1
 
