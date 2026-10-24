@@ -292,12 +292,19 @@ class FusionBot:
                 break
             timeout = int(max(1, min(poll_timeout, remaining)))
             try:
+                before = self.telegram.offset
                 for command in self.telegram.poll_commands(timeout_seconds=timeout):
                     if not command.from_owner:
                         # Silent by design: the bot does not talk to strangers.
                         continue
                     self.handle_command(command.command)
                     handled += 1
+                self._report_telegram_visibility()
+                if self.telegram.offset != before:
+                    # The cursor only survives if it is written down. Without
+                    # this the next container starts from the same update and
+                    # answers the owner's command a second time.
+                    self._save_state(force=True)
             except Exception as error:  # noqa: BLE001 - listening must not die
                 self.store.alert("listen_error", str(error)[:300])
             try:
@@ -320,6 +327,44 @@ class FusionBot:
         self.settle_due(at=stamp)
         self.flush_outbox()
 
+    def _report_telegram_visibility(self) -> None:
+        """Put transport problems in the database instead of nowhere.
+
+        A bot that cannot hear its owner and a bot with nothing to say look
+        identical from the outside: no reply arrives. These alerts separate
+        them, which is the only way to diagnose a silent bot without asking
+        the owner to read a log. The hour bucket keeps a permanently failing
+        poll from writing thousands of identical rows a day.
+        """
+        client = self.telegram
+        if client is None:
+            return
+        if client.last_poll_error:
+            self.store.alert(
+                "telegram_poll_error",
+                client.last_poll_error[:300],
+                dedupe_key="telegram_poll_error|" + now().strftime("%Y%m%d%H"),
+            )
+            client.last_poll_error = None
+        for ignored in client.ignored_senders:
+            chat_id = str(ignored.get("chat_id", ""))
+            self.store.alert(
+                "telegram_ignored_sender",
+                (
+                    f"Ignored {ignored.get('command', '')} from chat {chat_id}; "
+                    f"owner id is {self._masked_owner_id()}."
+                ),
+                dedupe_key=f"telegram_ignored_sender|{chat_id}",
+            )
+        client.ignored_senders = []
+
+    def _masked_owner_id(self) -> str:
+        """The configured owner id, enough to compare against, not to use."""
+        owner = str(self.telegram.owner_chat_id or "") if self.telegram else ""
+        if len(owner) <= 4:
+            return "*" * len(owner)
+        return f"{owner[:2]}{'*' * (len(owner) - 4)}{owner[-2:]}"
+
     def poll_commands(self, *, timeout_seconds: int = 0) -> None:
         if self.telegram is None or not self.telegram.configured:
             return
@@ -329,6 +374,7 @@ class FusionBot:
                 # Silent by design: the bot does not talk to strangers.
                 continue
             self.handle_command(command.command)
+        self._report_telegram_visibility()
         if self.telegram.offset != before:
             # Acknowledge the updates. This container exits in a few minutes, so
             # unless the cursor is written down the next one starts from zero and

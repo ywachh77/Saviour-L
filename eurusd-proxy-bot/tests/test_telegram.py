@@ -30,7 +30,13 @@ class ScriptedTransport:
         self.calls: list[dict] = []
 
     def __call__(self, request, timeout=None):
-        self.calls.append({"url": request.full_url, "data": (request.data or b"").decode()})
+        self.calls.append(
+            {
+                "url": request.full_url,
+                "data": (request.data or b"").decode(),
+                "timeout": timeout,
+            }
+        )
         item = self.responses.pop(0) if self.responses else b'{"ok":true,"result":{"message_id":1}}'
         if isinstance(item, Exception):
             raise item
@@ -136,6 +142,90 @@ class TestCommands(unittest.TestCase):
             {"/start", "/help", "/signals", "/status", "/pause", "/resume"},
         )
         self.assertEqual(len(COMMANDS), 6)
+
+
+class TestSilentFailureModes(unittest.TestCase):
+    """A bot that cannot hear its owner must not look like a healthy one.
+
+    Each of these failures used to end in ``return []``, so from the database
+    a bot that was permanently deaf was indistinguishable from a bot that
+    simply had nothing to say. That is what made a silent bot undiagnosable.
+    """
+
+    def setUp(self):
+        self.transport = ScriptedTransport()
+        self.client = Client("token", "12345", opener=self.transport)
+
+    def _updates(self, chat_id: str, text: str) -> bytes:
+        return (
+            '{"ok":true,"result":[{"update_id":7,"message":{"text":"%s",'
+            '"chat":{"id":%s}}}]}' % (text, chat_id)
+        ).encode()
+
+    def test_the_socket_outlives_the_poll_window(self):
+        """A 20s poll killed by a 10s socket timeout never heard anything."""
+        self.transport.responses = [self._updates("12345", "/status")]
+        self.client.poll_commands(timeout_seconds=20)
+        self.assertGreaterEqual(
+            self.transport.calls[0]["timeout"],
+            20.0,
+            "the socket must stay open longer than the poll window it waits on",
+        )
+
+    def test_an_active_webhook_is_cleared_and_polling_continues(self):
+        """Telegram refuses getUpdates while a webhook is set.
+
+        There is no webhook handler here, so without clearing it the bot is
+        deaf for as long as the webhook exists and reports nothing at all.
+        """
+        self.transport.responses = [
+            b'{"ok":false,"description":"Conflict: terminated by other getUpdates"}',
+            b'{"ok":true,"result":true}',
+            self._updates("12345", "/status"),
+        ]
+        commands = self.client.poll_commands(timeout_seconds=5)
+        self.assertTrue(self.client.webhook_cleared)
+        self.assertIn("deleteWebhook", self.transport.calls[1]["url"])
+        self.assertEqual(len(commands), 1)
+        self.assertTrue(commands[0].from_owner)
+
+    def test_webhook_recovery_is_attempted_only_once(self):
+        conflict = b'{"ok":false,"description":"Conflict"}'
+        self.transport.responses = [conflict, b'{"ok":false,"description":"nope"}', conflict]
+        self.client.poll_commands(timeout_seconds=1)
+        self.client.poll_commands(timeout_seconds=1)
+        deletes = [c for c in self.transport.calls if "deleteWebhook" in c["url"]]
+        self.assertEqual(len(deletes), 1)
+
+    def test_a_poll_error_is_recorded_not_swallowed(self):
+        self.transport.responses = [URLError("timed out")]
+        self.assertEqual(self.client.poll_commands(timeout_seconds=5), [])
+        self.assertTrue(self.client.last_poll_error)
+
+    def test_a_stranger_is_recorded_so_a_wrong_owner_id_is_diagnosable(self):
+        """Seeing the id that arrived is how a wrong secret gets found."""
+        self.transport.responses = [self._updates("999", "/status")]
+        self.client.poll_commands()
+        self.assertEqual(len(self.client.ignored_senders), 1)
+        self.assertEqual(self.client.ignored_senders[0]["chat_id"], "999")
+
+    def test_the_owner_is_never_recorded_as_a_stranger(self):
+        self.transport.responses = [self._updates("12345", "/status")]
+        self.client.poll_commands()
+        self.assertEqual(self.client.ignored_senders, [])
+
+    def test_a_malformed_payload_records_an_error_instead_of_raising(self):
+        """A dict where a list belongs used to raise inside the loop."""
+        self.transport.responses = [b'{"ok":true,"result":{"message_id":1}}']
+        self.assertEqual(self.client.poll_commands(), [])
+        self.assertTrue(self.client.last_poll_error)
+
+    def test_the_token_is_never_written_into_the_recorded_error(self):
+        """The error is stored in the database, so it must stay clean."""
+        client = Client("secret-token-abc", "12345", opener=ScriptedTransport(URLError("boom")))
+        client.poll_commands(timeout_seconds=1)
+        self.assertTrue(client.last_poll_error)
+        self.assertNotIn("secret-token-abc", client.last_poll_error)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ successful HTTP request alone.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +24,12 @@ from typing import Any
 from . import charter
 
 COMMANDS = ("/start", "/help", "/signals", "/status", "/pause", "/resume")
+
+# A long poll has to be allowed to outlive the window it is waiting on. The
+# socket timeout used to be ten seconds while the poll window was twenty, so
+# every getUpdates call was killed by its own client before Telegram could
+# answer. The margin covers TLS setup and slow responses.
+POLL_TIMEOUT_MARGIN_SECONDS = 10.0
 
 HELP_TEXT = (
     "FUSION BOT — EUR/USD M1 research signals (paper only).\n"
@@ -91,17 +98,32 @@ class TelegramClient:
         self.timeout = timeout
         self._opener = opener
         self.offset: int | None = None
+        # Why a poll failed, so the caller can record it instead of the
+        # transport silently reporting "nothing to do".
+        self.last_poll_error: str | None = None
+        # Commands that arrived from someone who is not the owner. Ignored, but
+        # remembered: a bot that cannot hear the owner and a bot whose owner id
+        # is wrong look identical from the outside unless this is recorded.
+        self.ignored_senders: list[dict[str, str]] = []
+        self.webhook_cleared = False
+        self._webhook_recovery_tried = False
 
     @property
     def configured(self) -> bool:
         return bool(self.token and self.owner_chat_id)
 
-    def _call(self, method: str, payload: dict[str, Any]) -> tuple[dict | None, str]:
+    def _call(
+        self,
+        method: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> tuple[dict | None, str]:
         url = f"https://api.telegram.org/bot{self.token}/{method}"
         data = urllib.parse.urlencode(payload).encode("utf-8")
         request = urllib.request.Request(url, data=data, headers={"User-Agent": "fusion-bot/2.0"})
         try:
-            with self._opener(request, timeout=self.timeout) as response:
+            with self._opener(request, timeout=timeout if timeout is not None else self.timeout) as response:
                 body = response.read().decode("utf-8")
             return json.loads(body), ""
         except urllib.error.HTTPError as error:
@@ -134,18 +156,50 @@ class TelegramClient:
 
     # -------------------------------------------------------------- receiving
     def poll_commands(self, timeout_seconds: int = 0) -> list[IncomingCommand]:
-        """Fetch pending updates and return owner commands only."""
+        """Fetch pending updates and return the commands in them.
+
+        Every caller filters on ``from_owner``; this returns everything so the
+        caller can decide what to do with a stranger. Two failures used to be
+        invisible because both ended in ``return []``:
+
+        * a transport error. Most damaging is an active webhook, which makes
+          getUpdates fail permanently while the bot looks perfectly healthy;
+        * a command from the wrong chat id, which is dropped as a stranger.
+
+        ``last_poll_error`` and ``ignored_senders`` exist so the caller can
+        record both instead of reporting silence.
+        """
+        self.last_poll_error = None
+        self.ignored_senders = []
         if not self.configured:
             return []
         payload: dict[str, Any] = {"timeout": int(timeout_seconds)}
         if self.offset is not None:
             payload["offset"] = self.offset
-        result, error = self._call("getUpdates", payload)
+        # The socket has to stay open longer than the poll window, or the
+        # client kills the request before Telegram can answer it.
+        poll_timeout = max(float(self.timeout), float(timeout_seconds) + POLL_TIMEOUT_MARGIN_SECONDS)
+        result, error = self._call("getUpdates", payload, timeout=poll_timeout)
+        if not error and isinstance(result, dict) and not result.get("ok"):
+            # Telegram answers a webhook conflict with HTTP 200 and ok:false,
+            # not a transport error, so the description has to be read as a
+            # failure reason too or the conflict is never noticed.
+            error = str(result.get("description") or result)[:300]
+        if error and self._looks_like_webhook_conflict(error):
+            if self._clear_webhook():
+                result, error = self._call("getUpdates", payload, timeout=poll_timeout)
         if error or not isinstance(result, dict) or not result.get("ok"):
+            self.last_poll_error = (error or str(result))[:300]
+            return []
+        updates = result.get("result")
+        if not isinstance(updates, list):
+            # Guard the contract rather than iterating whatever came back: a
+            # dict here used to raise AttributeError inside the loop.
+            self.last_poll_error = f"unexpected getUpdates payload: {str(result)[:120]}"
             return []
 
         commands: list[IncomingCommand] = []
-        for update in result.get("result") or []:
+        for update in updates:
             update_id = int(update.get("update_id", 0))
             self.offset = max(self.offset or 0, update_id + 1)
             message = update.get("message") or update.get("edited_message") or {}
@@ -154,16 +208,43 @@ class TelegramClient:
                 continue
             chat_id = str(((message.get("chat") or {}).get("id")) or "")
             command = text.split()[0].split("@")[0].lower()
-            commands.append(
-                IncomingCommand(
-                    update_id=update_id,
-                    chat_id=chat_id,
-                    command=command,
-                    text=text,
-                    from_owner=bool(chat_id) and chat_id == self.owner_chat_id,
-                )
+            incoming = IncomingCommand(
+                update_id=update_id,
+                chat_id=chat_id,
+                command=command,
+                text=text,
+                from_owner=bool(chat_id) and chat_id == self.owner_chat_id,
             )
+            if not incoming.from_owner:
+                # Remembered, not answered. The chat id is what makes a wrong
+                # TELEGRAM_OWNER_CHAT_ID diagnosable from the database.
+                self.ignored_senders.append({"chat_id": chat_id, "command": command})
+            commands.append(incoming)
         return commands
+
+    # ----------------------------------------------------------------- webhook
+    @staticmethod
+    def _looks_like_webhook_conflict(error: str) -> bool:
+        """True when getUpdates failed because a webhook is active.
+
+        Telegram refuses getUpdates while a webhook is set, and the bot has no
+        webhook handler, so in that state it is permanently deaf and reports
+        nothing. Recovering automatically is the only way out without asking
+        the owner to run a curl command.
+        """
+        lowered = (error or "").lower()
+        return "conflict" in lowered or "webhook" in lowered
+
+    def _clear_webhook(self) -> bool:
+        """Drop any webhook once per process, then let polling continue."""
+        if self._webhook_recovery_tried:
+            return False
+        self._webhook_recovery_tried = True
+        result, error = self._call("deleteWebhook", {"drop_pending_updates": "false"})
+        self.webhook_cleared = not error and isinstance(result, dict) and bool(result.get("ok"))
+        if error:
+            self.last_poll_error = f"deleteWebhook failed: {error[:200]}"
+        return self.webhook_cleared
 
 
 @dataclass
