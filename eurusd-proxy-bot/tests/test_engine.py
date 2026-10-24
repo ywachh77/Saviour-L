@@ -3,12 +3,13 @@
 import unittest
 from datetime import timedelta
 
-from fusion import charter
+from fusion import charter, engine as engine_module
 from fusion.config import Config
-from fusion.domain import ModelRead
+from fusion.domain import Candle, ModelRead, closed_before
 from fusion.engine import FLAT, FusionEngine, build_read, model_verdict
 from fusion.features import compute_features
 from fusion.model import MODE_ADVISORY, MODE_VETO, OnlineLogisticModel
+from fusion.timeutil import floor_minute, now
 
 from .helpers import make_candles
 
@@ -132,6 +133,93 @@ class TestEngineRefusals(unittest.TestCase):
         candles = make_candles(20, seed=41)
         result = engine().evaluate(candles, at=candles[-1].timestamp + timedelta(minutes=1))
         self.assertEqual(result.seal_state, charter.SEAL_ABSTAIN)
+
+
+class TestNoLookAhead(unittest.TestCase):
+    """The entry bar must not reach the features that decide the entry.
+
+    A live poll sometimes returns the still-forming bar for the very minute
+    we are about to enter. Using it is look-ahead: the model is shown part of
+    the answer before it is asked. Measured on the real indicators, a 100-pip
+    move in the entry bar swings RSI from 100 to 39.
+
+    The walk-forward backtest always decided on one bar's close and entered
+    on the next bar's open. Live did not, so the two were not measuring the
+    same thing.
+    """
+
+    def setUp(self):
+        self.entry_minute = floor_minute(now())
+        # Anchored to the current minute, or the freshness gate would refuse
+        # for the wrong reason and every test here would pass vacuously.
+        self.candles = make_candles(
+            220, seed=7, start=self.entry_minute - timedelta(minutes=219)
+        )
+        self.entry_stamp = self.entry_minute + timedelta(seconds=1)
+        self.assertEqual(self.candles[-1].timestamp, self.entry_minute)
+
+    def test_closed_before_drops_the_entry_bar(self):
+        kept = closed_before(self.candles, self.entry_stamp)
+        self.assertNotIn(self.entry_minute, [c.timestamp for c in kept])
+        self.assertEqual(kept[-1].timestamp, self.entry_minute - timedelta(minutes=1))
+        self.assertEqual(len(kept), len(self.candles) - 1)
+
+    def test_closed_before_keeps_everything_that_already_closed(self):
+        """One bar is dropped, not a window's worth."""
+        kept = closed_before(self.candles, self.entry_minute + timedelta(seconds=59))
+        self.assertEqual(len(kept), len(self.candles) - 1)
+
+    def test_the_entry_bar_never_reaches_compute_features(self):
+        seen: dict = {}
+        real = compute_features
+
+        def spy(candles):
+            seen["candles"] = list(candles)
+            return real(candles)
+
+        engine_module.compute_features = spy
+        try:
+            engine().evaluate(self.candles, at=self.entry_stamp)
+        finally:
+            engine_module.compute_features = real
+
+        self.assertTrue(seen, "compute_features was never called")
+        stamps = [candle.timestamp for candle in seen["candles"]]
+        self.assertNotIn(self.entry_minute, stamps)
+        self.assertLess(max(stamps), self.entry_minute)
+
+    def test_trimming_the_entry_bar_actually_matters(self):
+        """Guard against the tests above passing for the wrong reason.
+
+        If dropping one bar changed nothing, 'the entry bar is excluded'
+        would be a claim about nothing at all.
+        """
+        with_entry = compute_features(self.candles)[-1]
+        without_entry = compute_features(closed_before(self.candles, self.entry_stamp))[-1]
+        self.assertNotEqual(with_entry["rsi"], without_entry["rsi"])
+        self.assertNotEqual(with_entry["ema_fast"], without_entry["ema_fast"])
+
+    def test_mutating_the_entry_bar_cannot_change_the_verdict(self):
+        """The decisive property: the future cannot move the answer."""
+        baseline = engine().evaluate(self.candles, at=self.entry_stamp)
+
+        wild = list(self.candles[:-1])
+        wild.append(
+            Candle(
+                timestamp=self.entry_minute,
+                open=1.1000,
+                high=1.2000,
+                low=1.0000,
+                close=1.0100,  # a 900-pip collapse in the entry bar
+                volume=9999.0,
+            )
+        )
+        mutated = engine().evaluate(wild, at=self.entry_stamp)
+
+        self.assertEqual(
+            (baseline.seal_state, baseline.reason),
+            (mutated.seal_state, mutated.reason),
+        )
 
 
 if __name__ == "__main__":

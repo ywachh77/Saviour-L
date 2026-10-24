@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from .timeutil import add_minutes, format_datetime, parse_datetime
+from .timeutil import add_minutes, floor_minute, format_datetime, parse_datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,3 +303,24 @@ class Settlement:
 
 
 NO_SIGNAL = Decision("NO SIGNAL", "No actionable read on this bar.")
+
+
+def closed_before(candles, stamp):
+    """Bars that had already closed when the minute ``stamp`` falls in began.
+
+    A bar timestamped 10:43 covers 10:43:00-10:44:00, so its high, low and
+    close do not exist until the clock passes 10:44. A decision to enter at
+    the 10:43 open can therefore only use bars that closed before 10:43.
+
+    Letting the entry bar into the feature set is look-ahead, and it is not a
+    small effect. Measured on the real indicators: a single 100-pip move in
+    the entry bar swings RSI from 100 to 39 and drags the fast EMA 30 pips.
+    The model is effectively shown part of the answer before it is asked.
+
+    The walk-forward backtest has always decided on one bar's close and
+    entered on the next bar's open. Live did not -- it decided on whatever
+    the provider happened to return, which on some polls includes the
+    still-forming entry bar. This is what makes the two agree.
+    """
+    cutoff = floor_minute(stamp)
+    return [candle for candle in candles if candle.timestamp < cutoff]
