@@ -170,6 +170,17 @@ class Config:
 
 def load_config(dotenv_path: str | Path = ".env") -> Config:
     _load_dotenv(dotenv_path)
+
+    spread = _float("SPREAD_PIPS", charter.DEFAULT_SPREAD_PIPS)
+    # The gate defaults to a multiple of the assumed spread rather than to a
+    # fixed number. An absolute cap decoupled from the assumed cost meant the
+    # two drifted apart: the modelled off-hours spread (2.1x) could land 0.02
+    # pips over the cap purely by coincidence, and raising SPREAD_PIPS changed
+    # what the bot charged without changing what it would trade.
+    max_spread = _float("MAX_SPREAD_PIPS", 0.0)
+    if max_spread <= 0:
+        max_spread = spread * charter.MAX_SPREAD_MULTIPLE
+
     return Config(
         telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_owner_chat_id=os.environ.get("TELEGRAM_OWNER_CHAT_ID", "").strip(),
@@ -189,8 +200,8 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         max_horizon_minutes=_int("MAX_HORIZON_MINUTES", 120),
         max_seal_latency_seconds=_int("MAX_SEAL_LATENCY_SECONDS", charter.MAX_SEAL_LATENCY_SECONDS),
         max_candle_age_seconds=_int("MAX_CANDLE_AGE_SECONDS", 180),
-        max_spread_pips=_float("MAX_SPREAD_PIPS", 2.5),
-        spread_pips=_float("SPREAD_PIPS", charter.DEFAULT_SPREAD_PIPS),
+        max_spread_pips=max_spread,
+        spread_pips=spread,
         max_uncertainty=_float("MAX_UNCERTAINTY", 0.10),
         min_confluence_checks=_int("MIN_CONFLUENCE_CHECKS", 5),
         min_calibration_points=_int("MIN_CALIBRATION_POINTS", charter.MIN_CALIBRATION_POINTS),

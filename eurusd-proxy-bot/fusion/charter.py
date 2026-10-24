@@ -60,6 +60,16 @@ HEARTBEAT_STALE_SECONDS = 90
 # Every settled paper trade pays the spread. A strategy that only wins gross is
 # not winning.
 DEFAULT_SPREAD_PIPS = 1.2
+
+# How much wider than the assumed spread the market may be before we refuse to
+# trade. The data gate defaults to SPREAD_PIPS x this, because the two have to
+# move together: an absolute cap silently decoupled from the assumed cost meant
+# that raising SPREAD_PIPS could block every session without explanation.
+#
+# The modelled off-hours spread is 2.1x base and the active-session figure is
+# 1.35x, so 1.9 sits deliberately between them: off-hours is refused with real
+# margin rather than by a 0.02 pip accident.
+MAX_SPREAD_MULTIPLE = 1.9
 PIP = 0.0001  # EUR/USD fourth decimal
 
 # --- boundaries ---------------------------------------------------------------

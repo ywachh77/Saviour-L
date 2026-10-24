@@ -250,6 +250,7 @@ class FusionEngine:
             max_age_seconds=config.max_candle_age_seconds,
             max_spread_pips=config.max_spread_pips,
             quote=quote,
+            base_spread_pips=config.spread_pips,
         )
         if not gate.usable:
             return EngineResult(charter.SEAL_ABSTAIN, None, f"Data gate: {gate.reason}", gate=gate)
