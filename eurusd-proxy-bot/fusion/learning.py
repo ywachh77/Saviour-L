@@ -17,7 +17,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from . import charter
+from . import charter, stats
 from .backtest import BacktestReport, run_backtest
 from .calibration import (
     IsotonicCalibrator,
@@ -32,7 +32,6 @@ from .model import (
     MODE_VETO,
     BootstrapEnsemble,
     OnlineLogisticModel,
-    evaluate,
 )
 from .timeutil import add_minutes, format_datetime, now
 
@@ -154,6 +153,9 @@ class WalkForwardReport:
     ece: float | None = None
     net_pips: float | None = None
     trades: int = 0
+    # Per-trade outcomes, kept so promotion can be judged on the distribution
+    # rather than on where the running total happened to stop.
+    trade_pips: list = field(default_factory=list)
     promoted: bool = False
     rolled_back: bool = False
     mode: str = MODE_VETO
@@ -233,6 +235,7 @@ def walk_forward(
     points: list[tuple[float, int]] = []
     gross_total = 0.0
     trades = 0
+    trade_pips: list[float] = []
     champion_points: list[tuple[float, int]] = []
 
     for train, test in splits:
@@ -246,7 +249,8 @@ def walk_forward(
             # Only bars where the model actually took a side are traded.
             if abs(probability - 0.5) >= 0.02:
                 direction = 1.0 if probability > 0.5 else -1.0
-                gross_total += direction * sample.gross_pips - spread_pips
+                trade_pips.append(direction * sample.gross_pips - spread_pips)
+                gross_total += trade_pips[-1]
                 trades += 1
             if champion is not None and champion.trained:
                 champion_points.append((champion.predict_up(sample.features), sample.label))
@@ -269,6 +273,7 @@ def walk_forward(
     report.ece = expected_calibration_error(points)
     report.net_pips = gross_total
     report.trades = trades
+    report.trade_pips = list(trade_pips)
     report.oos_points = list(points)
     report.candidate = {
         "brier": report.brier,
@@ -315,6 +320,22 @@ def promotion_gate(
             f"Walk-forward expectancy {report.net_pips:.1f} pips is not positive after "
             "charging the spread on every trade."
         )
+
+    # A positive total is not an edge. Two hundred coin flips land above zero
+    # about half the time, so promoting on the sign of the running total is how
+    # noise gets promoted. Ask for the interval to clear zero instead.
+    # Reaching here means the total is positive, so the only verdicts left are
+    # DEMONSTRATED and INCONCLUSIVE -- a resolved loss has a negative total and
+    # was rejected above. There is no third case to handle.
+    if report.trade_pips:
+        verdict = stats.edge_verdict(report.trade_pips)
+        if not verdict.demonstrated:
+            return False, (
+                f"Walk-forward netted {verdict.mean_net_pips:.1f} pips over {verdict.n} "
+                f"trades, but that is not distinguishable from noise "
+                f"({verdict.confidence:.0%} CI {verdict.ci_low:.1f} to {verdict.ci_high:.1f}): "
+                "the interval still includes zero. A positive total is not an edge."
+            )
     if champion is not None and champion.trained and report.champion:
         champion_brier = report.champion.get("brier")
         if champion_brier is not None and report.brier is not None and report.brier > champion_brier:
@@ -330,8 +351,29 @@ def promotion_gate(
     return True, "All promotion gates passed."
 
 
-def rollback_check(settlements: Sequence[dict], window: int = 120, min_trades: int = 60) -> tuple[bool, str]:
-    """Has the champion's live record decayed enough to warrant a rollback?"""
+def rollback_check(
+    settlements: Sequence[dict],
+    window: int = 120,
+    min_trades: int = 60,
+    *,
+    break_even: float = 0.5,
+) -> tuple[bool, str]:
+    """Has the champion's live record decayed enough to warrant a rollback?
+
+    ``break_even`` is the hit rate this configuration *needs*, not 50%.
+
+    That distinction is the whole point. Losing money here is overwhelmingly a
+    cost problem rather than an accuracy problem: at a realistic M1 ATR the
+    horizon and the spread can demand a 67% hit rate, so a champion running at
+    56% bleeds pips while looking "better than a coin flip". Comparing against
+    0.5 meant the guard could not see the one failure mode that actually
+    happens -- it only fired once accuracy had collapsed too, which is far too
+    late and rarely the cause.
+
+    Pass ``break_even`` as ``inf`` and any losing window rolls back, which is
+    the right answer for a configuration that cannot pay for itself at any
+    hit rate.
+    """
     real = [row for row in settlements if not charter.is_synthetic(row.get("source"))]
     real = [row for row in real if row.get("outcome") in (charter.WIN, charter.LOSS)]
     window_rows = real[-window:]
@@ -340,12 +382,82 @@ def rollback_check(settlements: Sequence[dict], window: int = 120, min_trades: i
     net = sum(float(row.get("net_pips") or 0.0) for row in window_rows)
     wins = sum(1 for row in window_rows if row.get("outcome") == charter.WIN)
     win_rate = wins / len(window_rows)
-    if net < 0 and win_rate < 0.5:
+    if net < 0 and win_rate < break_even:
+        needed = "any rate" if break_even == float("inf") else f"{break_even:.1%}"
         return True, (
-            f"Last {len(window_rows)} real trades: {wins} wins, {net:.1f} net pips. "
+            f"Last {len(window_rows)} real trades: {wins} wins ({win_rate:.1%}), "
+            f"{net:.1f} net pips, but this configuration needs {needed} to break even. "
             "The champion has decayed; rolling back to the previous promoted version."
         )
-    return False, f"Live record holds: {wins}/{len(window_rows)} wins, {net:.1f} net pips."
+    return False, (
+        f"Live record holds: {wins}/{len(window_rows)} wins ({win_rate:.1%}), "
+        f"{net:.1f} net pips."
+    )
+
+
+def _break_even_win_rate(candles: Sequence[Candle], config) -> float:
+    """The hit rate this configuration needs, from the ATR it is trading.
+
+    Falls back to 0.5 when there is too little history to measure the ATR.
+    That is the old behaviour and the safe one: without a measurement we
+    cannot claim a higher bar is required.
+    """
+    from .costs import break_even_win_rate
+    from .indicators import atr
+
+    series = [value for value in atr(list(candles)) if value is not None]
+    if not series:
+        return 0.5
+    m1_atr_pips = (sum(series) / len(series)) * 10000.0
+    if m1_atr_pips <= 0:
+        return 0.5
+    return break_even_win_rate(
+        m1_atr_pips,
+        int(getattr(config, "horizon_minutes", 5) or 5),
+        float(getattr(config, "spread_pips", 0.0) or 0.0),
+    )
+
+
+def _representative_horizon(candles: Sequence[Candle], config) -> int:
+    """The hold length the engine actually trades, for use as a training label.
+
+    With adaptive horizon on, the engine stretches each hold to whatever the
+    market can pay for -- often several times the configured horizon. Training
+    on the base horizon anyway teaches the model to predict a 5-minute move
+    and then asks it to underwrite a 40-minute one. The label has to describe
+    the trade the bot takes, not the number in the config.
+
+    Uses the median across recent bars rather than the mean: one freak quiet
+    bar drives the horizon to the cap, and the cap is not what most trades get.
+    """
+    base = int(getattr(config, "horizon_minutes", 5) or 5)
+    if not getattr(config, "adaptive_horizon", False):
+        return base
+
+    from .costs import resolve_horizon
+    from .indicators import atr
+
+    spread = float(getattr(config, "spread_pips", 0.0) or 0.0)
+    reward = float(getattr(config, "reward_to_cost", 3.0) or 3.0)
+    cap = int(getattr(config, "max_horizon_minutes", 120) or 120)
+
+    recent = [value for value in atr(list(candles)) if value is not None][-500:]
+    horizons: list[int] = []
+    for value in recent:
+        resolved = resolve_horizon(
+            float(value) * 10000.0,
+            spread,
+            base,
+            adaptive=True,
+            reward_to_cost=reward,
+            max_horizon=cap,
+        )
+        if resolved is not None:
+            horizons.append(int(resolved))
+    if not horizons:
+        return base
+    horizons.sort()
+    return horizons[len(horizons) // 2]
 
 
 def run_nightly(
@@ -356,7 +468,7 @@ def run_nightly(
     champion: OnlineLogisticModel | None,
 ) -> tuple[OnlineLogisticModel | None, BootstrapEnsemble, WalkForwardReport]:
     """Full nightly job: walk-forward, promote or keep, refit calibration."""
-    samples = build_training_samples(candles, horizon=config.horizon_minutes)
+    samples = build_training_samples(candles, horizon=_representative_horizon(candles, config))
     report = walk_forward(
         samples,
         spread_pips=config.spread_pips,
@@ -364,7 +476,9 @@ def run_nightly(
         min_samples=config.nightly_min_samples,
     )
 
-    should_rollback, rollback_reason = rollback_check(settlements)
+    should_rollback, rollback_reason = rollback_check(
+        settlements, break_even=_break_even_win_rate(candles, config)
+    )
     if should_rollback:
         report.rolled_back = True
         report.reason = rollback_reason

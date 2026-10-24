@@ -80,6 +80,22 @@ class TestKeyPool(unittest.TestCase):
         self.assertFalse(slot.enabled)
         self.assertIn("rejected", slot.disabled_reason)
 
+    def test_a_local_network_fault_does_not_punish_the_key(self):
+        """The call never reached the provider, so the key is not at fault.
+
+        Credits are refunded on this path precisely because nothing was sent.
+        Cooling the slot as well would charge the key for our own network and,
+        since the fault is shared, would empty the pool one slot at a time.
+        """
+        reservation = self.pool.reserve(1)
+        self.pool.report_network_error(reservation)
+        self.pool.refund(reservation)
+        slot = self.pool.slots[reservation.key_index]
+        self.assertLessEqual(slot.cooldown_until, self.clock())
+        self.assertEqual(slot.consecutive_failures, 0)
+        self.assertEqual(slot.total_failures, 1)
+        self.assertEqual(slot.minute_used, 0)
+
     def test_network_failure_gets_a_short_cooldown(self):
         reservation = self.pool.reserve()
         self.pool.report_failure(reservation, None)

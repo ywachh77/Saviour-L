@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Sequence
 
-from . import charter, digest, heartbeat, learning, settle
+from . import charter, digest, heartbeat, learning, settle, stats
 from .config import Config
 from .council import CouncilWeights, Vote
 from .domain import Candle, Signal
@@ -186,7 +186,14 @@ class FusionBot:
         self._save_state(force=True)
 
     def _wait_for_minute(self) -> None:
-        """Sleep to just after the next minute boundary, staying responsive."""
+        """Sleep to just after the next minute boundary, staying responsive.
+
+        The wait is punctuated so /pause and /status still land, but at
+        TICK_SECONDS rather than once a second. Waking every second costs about
+        86,000 Telegram reads a day to service a handful of commands, and buys
+        nothing on a bot whose cycle is a minute long anyway.
+        """
+        interval = max(1.0, float(self.config.tick_seconds))
         deadline = time.time() + seconds_until_next_minute() + SEAL_OFFSET_SECONDS
         while self.running and time.time() < deadline:
             try:
@@ -194,7 +201,7 @@ class FusionBot:
                 self.flush_outbox()
             except Exception:  # noqa: BLE001
                 pass
-            time.sleep(min(1.0, max(0.05, deadline - time.time())))
+            time.sleep(min(interval, max(0.05, deadline - time.time())))
 
     # ---------------------------------------------------------- housekeeping
     def housekeeping(self, at: datetime | None = None) -> None:
@@ -311,14 +318,25 @@ class FusionBot:
 
         known = {candle.timestamp: candle for candle in self.candles}
         added = 0
+        revised = 0
         rows = []
         for candle in fresh:
-            if candle.timestamp in known:
+            existing = known.get(candle.timestamp)
+            if existing is not None and existing == candle:
                 continue
+            # A timestamp we have seen before is not automatically news we have
+            # heard before. The newest bar is still forming: its high, low and
+            # close keep moving until the minute closes. Skipping it froze the
+            # forming bar at whatever it looked like the first time we asked,
+            # so every feature for the current minute was computed on a stale
+            # snapshot. Re-uptake it when it actually changed.
             known[candle.timestamp] = candle
             rows.append(dict(candle.to_dict(), pair=self.config.pair))
-            added += 1
-        if added:
+            if existing is None:
+                added += 1
+            else:
+                revised += 1
+        if rows:
             self.candles = sorted(known.values(), key=lambda item: item.timestamp)[-MAX_STORED_CANDLES:]
             self.store.save_candles(rows)
         return added
@@ -404,7 +422,14 @@ class FusionBot:
             )
 
     def flush_outbox(self) -> None:
-        """Retry anything still pending. Telegram has no 'did I send?' query."""
+        """Retry anything still pending. Telegram has no 'did I send?' query.
+
+        A retry that lands has to clear the *signal's* delivery_state too, not
+        just the outbox row. Leaving it alone means the signal stays marked
+        FAILED in the signals table while the message is sitting in the chat --
+        the record and reality disagree, and every digest downstream counts a
+        delivered signal as lost.
+        """
         if self.telegram is None or not self.telegram.configured:
             return
         for row in self.store.outbox_pending():
@@ -417,9 +442,26 @@ class FusionBot:
                 "state": charter.DELIVERY_SENT if result.confirmed else result.state,
                 "last_error": (result.error or "")[:300],
             }
+            signal_id = self._signal_id_from_key(row.get("message_key"))
             if result.confirmed:
                 patch["message_id"] = result.message_id or ""
+                self.store.update_signal(
+                    signal_id,
+                    {"delivery_state": charter.DELIVERY_SENT, "message_id": patch["message_id"]},
+                )
+            else:
+                # Still failing. Say which state, and on the last attempt admit
+                # we have given up rather than leaving it looking pending.
+                state = charter.DELIVERY_FAILED if attempts + 1 >= 3 else result.state
+                patch["state"] = state
+                self.store.update_signal(signal_id, {"delivery_state": state})
             self.store.outbox_update(str(row.get("message_key")), patch)
+
+    @staticmethod
+    def _signal_id_from_key(message_key: object) -> str:
+        """`signal|<id>` -> `<id>`. Outbox rows are keyed by what they carry."""
+        key = str(message_key or "")
+        return key.split("|", 1)[-1] if key.startswith("signal|") else key
 
     # ------------------------------------------------------------ settlement
     def settle_due(self, at: datetime | None = None) -> int:
@@ -500,21 +542,34 @@ class FusionBot:
         learning.refit_calibration(self.model, self.calibration_points, self.config.min_calibration_points)
 
     def _check_expectancy(self) -> None:
+        """Warn only when a losing record is statistically real.
+
+        This used to fire whenever the running total was negative across 60
+        trades, while stats refuses to judge an edge below 200. So it rang on
+        ordinary variance, and an alert that cries wolf trains you to ignore
+        the one time it is telling the truth.
+
+        Waits for EDGE_REFUTED: the confidence interval sits entirely below
+        zero, meaning the loss is resolved rather than sampled from noise.
+        """
         rows = [
             _settlement_from_row(row)
-            for row in self.store.load_settlements(limit=200)
+            for row in self.store.load_settlements(limit=400)
             if not charter.is_synthetic(row.get("source"))
         ]
         rows = [item for item in rows if item.outcome in (charter.WIN, charter.LOSS)]
-        if len(rows) < 60:
+        if len(rows) < 3:
             return
-        net = sum(float(item.net_pips or 0.0) for item in rows)
-        if net < 0:
-            self._alert_once(
-                digest.ALERT_NEGATIVE_EXPECTANCY,
-                f"Last {len(rows)} settled real trades net {net:.1f} pips after costs.",
-                key=f"expectancy|{minute_bucket()[:10]}",
-            )
+        verdict = stats.edge_verdict([float(item.net_pips or 0.0) for item in rows])
+        if not verdict.refuted:
+            return
+        self._alert_once(
+            digest.ALERT_NEGATIVE_EXPECTANCY,
+            f"Last {verdict.n} settled real trades net {verdict.mean_net_pips:.1f} pips "
+            f"after costs (95% CI {verdict.ci_low:.1f} to {verdict.ci_high:.1f}). "
+            "Resolved as a loss, not noise.",
+            key=f"expectancy|{minute_bucket()[:10]}",
+        )
 
     def _has_candle(self, stamp: datetime) -> bool:
         target = parse_datetime(stamp)

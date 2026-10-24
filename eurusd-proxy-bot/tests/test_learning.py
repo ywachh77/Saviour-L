@@ -134,6 +134,45 @@ class TestWalkForward(unittest.TestCase):
         self.assertIn("worse than the champion", reason)
 
 
+class TestPromotionNeedsMoreThanAPositiveTotal(unittest.TestCase):
+    def _report(self, trade_pips):
+        from fusion.learning import WalkForwardReport
+
+        report = WalkForwardReport()
+        report.folds = 3
+        report.accuracy = 0.60
+        report.brier_skill = 0.05
+        report.brier = 0.20
+        report.net_pips = sum(trade_pips)
+        report.trades = len(trade_pips)
+        report.trade_pips = list(trade_pips)
+        return report
+
+    def test_a_positive_total_from_noise_does_not_promote(self):
+        """The whole point of stats.py is that this must not pass.
+
+        Two hundred coin flips finish above zero about half the time. A gate
+        that reads only the sign of the running total promotes noise.
+        """
+        pips = [1.0 if index % 2 else -0.98 for index in range(240)]
+        self.assertGreater(sum(pips), 0.0)
+        promoted, reason = promotion_gate(self._report(pips), None)
+        self.assertFalse(promoted)
+        self.assertIn("not distinguishable from noise", reason)
+
+    def test_a_resolved_edge_does_promote(self):
+        pips = [0.65 if index % 3 else -0.85 for index in range(300)]
+        promoted, _ = promotion_gate(self._report(pips), None)
+        self.assertTrue(promoted)
+
+    def test_a_losing_total_is_rejected_before_the_interval_is_consulted(self):
+        pips = [-0.65 if index % 3 else 0.85 for index in range(300)]
+        self.assertLess(sum(pips), 0.0)
+        promoted, reason = promotion_gate(self._report(pips), None)
+        self.assertFalse(promoted)
+        self.assertIn("is not positive", reason)
+
+
 class TestRollback(unittest.TestCase):
     def test_a_decayed_record_triggers_a_rollback(self):
         rows = [
@@ -158,6 +197,40 @@ class TestRollback(unittest.TestCase):
         should, reason = rollback_check(rows, window=120, min_trades=60)
         self.assertFalse(should)
         self.assertIn("needed to judge", reason)
+
+    def test_losing_money_at_a_good_hit_rate_still_rolls_back(self):
+        """The failure mode that actually happens.
+
+        Cost, not accuracy. 56% is comfortably better than a coin flip, but if
+        the horizon and spread demand 67% then this champion is bleeding. The
+        old guard compared against 0.5 and so could never see it.
+        """
+        rows = []
+        for index in range(100):
+            win = index < 56
+            rows.append(
+                {
+                    "outcome": charter.WIN if win else charter.LOSS,
+                    "net_pips": 1.0 if win else -1.6,
+                    "source": "LIVE",
+                }
+            )
+        # 56 wins x 1.0 - 44 losses x 1.6 = -14.4 pips: losing, at 56%.
+        should, reason = rollback_check(rows, window=120, min_trades=60, break_even=0.67)
+        self.assertTrue(should)
+        self.assertIn("break even", reason)
+
+        # Same record, judged against 50%, looks fine -- which is the bug.
+        should_old, _ = rollback_check(rows, window=120, min_trades=60, break_even=0.5)
+        self.assertFalse(should_old)
+
+    def test_an_unpayable_configuration_rolls_back_at_any_hit_rate(self):
+        rows = [{"outcome": charter.WIN, "net_pips": -0.2, "source": "LIVE"} for _ in range(80)]
+        should, reason = rollback_check(
+            rows, window=120, min_trades=60, break_even=float("inf")
+        )
+        self.assertTrue(should)
+        self.assertIn("any rate", reason)
 
 
 class TestNightlyJob(unittest.TestCase):

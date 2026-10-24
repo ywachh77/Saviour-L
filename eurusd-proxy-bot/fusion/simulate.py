@@ -9,6 +9,7 @@ the model, the calibrator and the council weights stay untouched.
 from __future__ import annotations
 
 import random
+from datetime import datetime, timezone
 from typing import Sequence
 
 from fusion.domain import Candle
@@ -25,11 +26,23 @@ def synthetic_series(
     drift: float = 0.000004,
     start=None,
 ) -> list[Candle]:
-    """A reproducible random walk aligned to whole minutes, ending near 'now'."""
+    """A reproducible random walk aligned to whole minutes.
+
+    The start defaults to a fixed timestamp rather than "now". Anchoring the
+    series to the wall clock made every replay a function of what time you ran
+    it: the session filter gates strategies by UTC hour, so the same seed
+    produced 50 signals from a London window and none at all from an off-hours
+    one. Tests that needed a signal to exist passed at 09:00 UTC and failed at
+    02:00 UTC with no code change in between. Random data must still be
+    *deterministic* data.
+
+    The chosen default sits in the London session so that even short windows
+    (a couple of hundred bars) contain minutes the engine is willing to trade.
+    """
     from datetime import datetime, timedelta
 
     rng = random.Random(seed)
-    first = start or (now().replace(second=0, microsecond=0) - timedelta(minutes=count))
+    first = start or datetime(2026, 1, 5, 8, 0, tzinfo=timezone.utc)
     candles: list[Candle] = []
     price = base
     for index in range(count):

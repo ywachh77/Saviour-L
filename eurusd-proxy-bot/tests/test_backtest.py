@@ -171,6 +171,12 @@ class TestPromotionUsesTheReplay(unittest.TestCase):
         report.brier_skill = 0.05
         report.net_pips = 25.0
         report.folds = 3
+        # These tests are about the system-replay gate, so the walk-forward
+        # gate has to pass first. Override the per-trade outcomes as well as
+        # the total: promotion is judged on the distribution now, and leaving
+        # the real (losing) walk-forward trades in place would make the fixture
+        # contradict itself -- a 25 pip total built from -1.3 pips of trades.
+        report.trade_pips = [0.65 if index % 3 else -0.85 for index in range(300)]
         return report
 
     def test_a_negative_system_replay_blocks_promotion(self):
