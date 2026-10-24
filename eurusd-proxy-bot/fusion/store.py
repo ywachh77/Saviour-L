@@ -409,9 +409,17 @@ class Store:
                 row.update(patch)
         self.local.replace("outbox", rows)
 
-    def outbox_pending(self) -> list[dict]:
-        rows = self._read("outbox", limit=200)
-        return [row for row in rows if row.get("state") in ("PENDING", "UNRESOLVED")]
+    def outbox_pending(self, limit: int = 200) -> list[dict]:
+        """Rows still waiting for a send, newest last.
+
+        The filter belongs to the read, not to a pass over the result. Fetching
+        the newest 200 rows and then discarding the ones that are not pending
+        silently drops work: once 200 newer rows pile up behind it, an older
+        pending row falls off the end and is never retried again.
+        """
+        # Keyword filters, not a filters= argument: _read forwards **filters
+        # to PostgREST, so this becomes state=in.(PENDING,UNRESOLVED).
+        return self._read("outbox", limit=limit, state="in.(PENDING,UNRESOLVED)")
 
     # ----------------------------------------------------------------- alerts
     def alert(self, kind: str, message: str, *, dedupe_key: str | None = None) -> None:
@@ -429,9 +437,21 @@ def _matches(row: dict, key: str, value: str) -> bool:
 
     Python stringifies False as "False" while PostgREST spells it "false", so a
     naive equality check silently drops every pending-signal row.
+
+    Also understands PostgREST's `in.(a,b,c)` list form, so the local mirror
+    and the remote query select the same rows. Without it a caller has to
+    filter in Python after fetching, which is exactly how rows get dropped.
     """
     left = row.get(key)
     right = _filter_value(value)
+
+    # in.(PENDING,UNRESOLVED)
+    if right.startswith("in.(") and right.endswith(")"):
+        choices = [item.strip() for item in right[4:-1].split(",") if item.strip()]
+        if not choices:
+            return False
+        return any(_matches(row, key, choice) for choice in choices)
+
     if isinstance(left, bool) or right.lower() in ("true", "false"):
         return str(left).lower() == right.lower()
     return str(left) == right

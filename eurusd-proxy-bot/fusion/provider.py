@@ -88,7 +88,10 @@ class TwelveDataProvider:
             raise ProviderError(f"HTTP {error.code}", status=int(error.code)) from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             self.failures += 1
-            self.pool.report_failure(reservation, None, str(error))
+            # Refunded because the call never reached the provider, so it is not
+            # charged against the key either. Cooling a slot for our own network
+            # being unreachable would empty the pool over a fault no key caused.
+            self.pool.report_network_error(reservation)
             self.pool.refund(reservation)
             raise ProviderError(f"Network error: {error}", status=None) from error
         except json.JSONDecodeError as error:

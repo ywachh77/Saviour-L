@@ -216,6 +216,23 @@ class KeyPool:
             # Network-level failure (timeout, DNS). Short cooldown, then retry.
             slot.cooldown_until = now + min(60.0, 10.0 * slot.consecutive_failures)
 
+    def report_network_error(self, reservation: Reservation) -> None:
+        """Record a failure that was not the key's fault, without punishing it.
+
+        For timeouts, DNS failures and connection resets: the request never
+        reached the provider, which is precisely why the caller refunds the
+        credits. Cooling the key on top of that charges it for our own network
+        being down -- and because a local fault is shared by every slot, one
+        flaky connection would walk the whole pool into cooldown, one key at a
+        time, for a problem none of them caused.
+
+        Counted in total_failures so it stays visible, deliberately left out of
+        consecutive_failures so it cannot escalate into a cooldown.
+        """
+        if not reservation.ok:
+            return
+        self.slots[reservation.key_index].total_failures += 1
+
     def key_for(self, index: int, keys: list[str]) -> str:
         return keys[index]
 
