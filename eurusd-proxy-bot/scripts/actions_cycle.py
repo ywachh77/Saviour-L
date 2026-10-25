@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +38,12 @@ from fusion.store import build_store  # noqa: E402
 from fusion.telegram import TelegramClient  # noqa: E402
 from fusion.timeutil import now  # noqa: E402
 
+# Default 18-minute container budget inside fusion-cycle.yml's 20-minute job
+# ceiling. An ordinary cycle takes ~4s so the full 720s Telegram listen window
+# runs untouched; if a scheduled job (e.g. 23:55Z nightly) consumed part of the
+# budget, LISTEN_SECONDS shrinks automatically instead of hitting SIGKILL.
+DEFAULT_MAX_RUN_SECONDS = 1080.0
+
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -45,7 +52,22 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def resolve_listen_seconds(
+    requested: float,
+    elapsed: float,
+    max_run_seconds: float = DEFAULT_MAX_RUN_SECONDS,
+) -> float:
+    """Cap Telegram long-polling so cycle + scheduled work + listen stays inside budget."""
+    if requested <= 0:
+        return 0.0
+    if max_run_seconds <= 0:
+        return float(requested)
+    remaining = max(0.0, float(max_run_seconds) - max(0.0, float(elapsed)))
+    return min(float(requested), remaining)
+
+
 def main() -> int:
+    started = time.monotonic()
     config = load_config(ROOT / ".env")
     config.runner = "github-actions"
     store = build_store(config)
@@ -58,20 +80,26 @@ def main() -> int:
     stamp = now()
     bot = FusionBot(config=config, store=store, telegram=telegram)
     bot.startup()
-    report = bot.minute_cycle(at=stamp)
-    bot.settle_due(at=stamp)
-    bot.flush_outbox()
-    bot.run_scheduled(at=stamp)
-    print(report.to_dict())
+    try:
+        report = bot.minute_cycle(at=stamp)
+        bot.settle_due(at=stamp)
+        bot.flush_outbox()
+        bot.run_scheduled(at=stamp)
+        print(report.to_dict())
 
-    # Stay on the line for a while. The cron decides when this container
-    # exists; long polling decides whether a command sent during that window is
-    # answered at once or not at all. Without it every /signals waits for the
-    # next scheduled wake-up.
-    listen_seconds = _env_float("LISTEN_SECONDS", 180.0)
-    if listen_seconds > 0:
-        handled = bot.listen(listen_seconds)
-        print(f"listened for {listen_seconds:.0f}s, handled {handled} command(s)")
+        # Stay on the line for a while, bounded by remaining container budget.
+        requested_listen = _env_float("LISTEN_SECONDS", 180.0)
+        max_run = _env_float("MAX_RUN_SECONDS", DEFAULT_MAX_RUN_SECONDS)
+        listen_seconds = resolve_listen_seconds(
+            requested_listen,
+            elapsed=time.monotonic() - started,
+            max_run_seconds=max_run,
+        )
+        if listen_seconds > 0:
+            handled = bot.listen(listen_seconds)
+            print(f"listened for {listen_seconds:.0f}s, handled {handled} command(s)")
+    finally:
+        bot.flush_key_pool()
 
     return 0
 

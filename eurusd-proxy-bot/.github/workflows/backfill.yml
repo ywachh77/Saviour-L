@@ -1,0 +1,50 @@
+name: fusion-backfill
+
+# Standalone historical backfill mirror (02:17 UTC).
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: fusion-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Locate the bot directory
+        id: locate
+        run: |
+          if [ -d eurusd-proxy-bot/fusion ]; then
+            echo "dir=eurusd-proxy-bot" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extend candle history
+        env:
+          BACKFILL: "1"
+          PAIRS: "EUR/USD,BTC/USD,ETH/USD"
+          BACKFILL_MINUTES: "40000"
+          BACKFILL_TARGET_BARS: "250000"
+          BACKFILL_PACE_SECONDS: "8.0"
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TWELVE_DATA_KEY_1: ${{ secrets.TWELVE_DATA_KEY_1 }}
+          TWELVE_DATA_KEY_2: ${{ secrets.TWELVE_DATA_KEY_2 }}
+          TWELVE_DATA_KEY_3: ${{ secrets.TWELVE_DATA_KEY_3 }}
+          TWELVE_DATA_KEY_4: ${{ secrets.TWELVE_DATA_KEY_4 }}
+          TWELVE_DATA_KEY_5: ${{ secrets.TWELVE_DATA_KEY_5 }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: python3 scripts/backfill.py

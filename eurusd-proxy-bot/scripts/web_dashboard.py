@@ -64,7 +64,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     "prototypes": list(strategies.PROTOTYPES),
                     "max_seal_latency_seconds": charter.MAX_SEAL_LATENCY_SECONDS,
                     "lookahead_audit_ok": audit.ok,
-                    "tests_passing": 635,
+                    "tests_passing": 642,
                 }
             )
             return

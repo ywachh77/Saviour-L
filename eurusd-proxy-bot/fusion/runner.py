@@ -27,6 +27,7 @@ from .config import Config
 from .council import CouncilWeights, Vote
 from .domain import Candle, Signal
 from .engine import FusionEngine
+from .keypool import KeyPool
 from .model import MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
 from .mistakes import MistakeMemory
 from .provider import TwelveDataProvider
@@ -189,14 +190,39 @@ class FusionBot:
     def from_config(cls, config: Config, **kwargs) -> "FusionBot":
         return cls(config=config, **kwargs)
 
-    def startup(self) -> None:
+    def startup(self, *, _as_peer: bool = False) -> None:
         """Load persisted state. Safe to call twice."""
         self._load_state()
+        if not _as_peer:
+            self._hydrate_key_pool()
         self._load_candles()
         self.running = True
         for peer in self.peer_bots.values():
-            peer.startup()
+            peer.startup(_as_peer=True)
             peer.paused = self.paused
+
+    def _hydrate_key_pool(self) -> None:
+        if not isinstance(self.provider, TwelveDataProvider) or not self.provider.configured:
+            return
+        saved = self.store.load_key_pool()
+        if not saved:
+            return
+        first = self.provider.pool.slots[0]
+        self.provider.pool = KeyPool.from_state(
+            self.provider.keys,
+            saved,
+            minute_limit=first.minute_limit,
+            day_limit=first.day_limit,
+            clock=self.provider.pool._clock,
+        )
+
+    def flush_key_pool(self) -> None:
+        if (
+            self.provider is not None
+            and hasattr(self.provider, "pool")
+            and getattr(self.provider.pool, "configured", False)
+        ):
+            self.store.save_key_pool(self.provider.pool.to_dict())
 
     def _load_state(self) -> None:
         row = self.store.load_model_state(pair=self.config.pair) or {}
@@ -504,6 +530,7 @@ class FusionBot:
         if not self.peer_bots:
             if self.provider is not None and getattr(self.provider, "configured", False):
                 self.ingest(at=stamp)
+                self.flush_key_pool()
             if not self.candles:
                 return "No price data available. The provider may be unreachable; try again shortly."
 
@@ -564,6 +591,7 @@ class FusionBot:
             member.deliver(signal, brief=True)
             emitted.append(format_brief_signal(signal))
 
+        self.flush_key_pool()
         self.settle_due(at=stamp)
         if emitted:
             return "\n\n".join(emitted)
@@ -633,7 +661,7 @@ class FusionBot:
             return stamp
         return opened + timedelta(minutes=1, seconds=1)
 
-    def minute_cycle(self, at: datetime | None = None) -> CycleReport:
+    def minute_cycle(self, at: datetime | None = None, *, _as_peer: bool = False) -> CycleReport:
         stamp = self._sealable_stamp(at or now())
         bucket = minute_bucket(stamp)
         job_bucket = bucket if self.config.pair == "EUR/USD" else f"{self.config.pair}|{bucket}"
@@ -645,22 +673,28 @@ class FusionBot:
 
         self.ingest(at=stamp)
         report = self.evaluate_minute(bucket=bucket, at=stamp)
-        for peer in self.peer_bots.values():
-            peer_report = peer.minute_cycle(at=stamp)
-            if report.seal_state != charter.SEAL_SIGNAL and peer_report.seal_state == charter.SEAL_SIGNAL:
-                report = peer_report
+        if self.peer_bots:
+            per_pair: list[tuple[str, CycleReport]] = [(self.config.pair, report)]
+            for symbol, peer in self.peer_bots.items():
+                peer_report = peer.minute_cycle(at=stamp, _as_peer=True)
+                per_pair.append((symbol, peer_report))
+            report = _summarise_market_reports(bucket, per_pair)
+
         self.last_cycle = report
-        if not self.peer_bots and self.config.pair != "EUR/USD":
-            # Peer bots already run under the primary cycle's heartbeat; emit a
-            # standalone heartbeat only when this non-EUR/USD bot is top-level.
-            pass
+        hb_extra = report.to_dict()
+        if _as_peer or (not self.peer_bots and self.config.pair != "EUR/USD"):
+            hb_extra["bucket"] = job_bucket
+            if not str(hb_extra.get("reason", "")).startswith(f"{self.config.pair}:"):
+                hb_extra["reason"] = f"{self.config.pair}: {hb_extra.get('reason', '')}"
         self.store.heartbeat(
             heartbeat.build_heartbeat(
                 runner=self.config.runner,
                 phase="minute",
-                extra=report.to_dict(),
+                extra=hb_extra,
             )
         )
+        if not _as_peer:
+            self.flush_key_pool()
         return report
 
     def ingest(self, at: datetime | None = None) -> int:
@@ -1250,6 +1284,52 @@ def _settlement_from_row(row: dict):
     from .domain import Settlement
 
     return Settlement.from_dict(row)
+
+
+def _summarise_market_reports(bucket: str, per_pair: Sequence[tuple[str, CycleReport]]) -> CycleReport:
+    """Build a single top-level CycleReport across all evaluated markets.
+
+    Without this, an off-hours FX data-gate abstention overwrote the summary
+    heartbeat last, hiding active 24/7 crypto evaluations from /status and
+    store.latest_heartbeat().
+    """
+    emitted = [(sym, rep) for sym, rep in per_pair if rep.seal_state == charter.SEAL_SIGNAL]
+    if emitted:
+        first_sym, first_rep = emitted[0]
+        summary_reason = " | ".join(f"{sym}: {rep.reason}" for sym, rep in emitted)
+        return CycleReport(
+            bucket=bucket,
+            seal_state=charter.SEAL_SIGNAL,
+            reason=summary_reason,
+            regime=first_rep.regime,
+            signal_id=first_rep.signal_id,
+        )
+
+    late = [rep for _, rep in per_pair if rep.seal_state == charter.SEAL_DISCARDED_LATE]
+    seal_state = (
+        charter.SEAL_DISCARDED_LATE
+        if late
+        else charter.SEAL_ABSTAIN
+        if any(rep.seal_state == charter.SEAL_ABSTAIN for _, rep in per_pair)
+        else per_pair[0][1].seal_state
+    )
+    active_regime = next(
+        (rep.regime for _, rep in per_pair if rep.regime and rep.regime != "UNKNOWN"),
+        "UNKNOWN",
+    )
+    parts: list[str] = []
+    for sym, rep in per_pair:
+        short = str(rep.reason or "").split(";")[0].strip()
+        if rep.regime and rep.regime != "UNKNOWN":
+            parts.append(f"{sym} ({rep.regime}): {short}")
+        else:
+            parts.append(f"{sym}: {short}")
+    return CycleReport(
+        bucket=bucket,
+        seal_state=seal_state,
+        reason=" | ".join(parts),
+        regime=active_regime,
+    )
 
 
 def votes_to_dicts(votes: Sequence[Vote]) -> list[dict]:

@@ -1,12 +1,6 @@
 name: fusion-nightly
 
-# Nightly walk-forward at 23:55 UTC.
-#
-# Walk-forward, promotion gates and rollback at 23:55 UTC.
-#
-# This is a scheduled job, not a safety net: Actions is the runner. If you also
-# run scripts/run_bot.py somewhere always-on, job slots make a double-run
-# harmless — the second one is skipped.
+# Standalone nightly walk-forward mirror (23:55 UTC).
 
 on:
   schedule:
@@ -20,7 +14,7 @@ concurrency:
 jobs:
   nightly:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -39,11 +33,22 @@ jobs:
 
       - name: Walk-forward, promote or roll back
         env:
+          RUNNER: github-actions
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TWELVE_DATA_KEY_1: ${{ secrets.TWELVE_DATA_KEY_1 }}
+          TWELVE_DATA_KEY_2: ${{ secrets.TWELVE_DATA_KEY_2 }}
+          TWELVE_DATA_KEY_3: ${{ secrets.TWELVE_DATA_KEY_3 }}
+          TWELVE_DATA_KEY_4: ${{ secrets.TWELVE_DATA_KEY_4 }}
+          TWELVE_DATA_KEY_5: ${{ secrets.TWELVE_DATA_KEY_5 }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
-          SIGNAL_HORIZON_MINUTES: ${{ vars.SIGNAL_HORIZON_MINUTES }}
+          ADAPTIVE_HORIZON: "1"
+          MAX_HORIZON_MINUTES: "120"
+          PAIRS: "EUR/USD,BTC/USD,ETH/USD"
+          MTF_FILTER: "1"
+          MTF_MINUTES: "15"
+          NEWS_FILTER: "1"
         working-directory: ${{ steps.locate.outputs.dir }}
-        run: |
-          python scripts/nightly.py
+        run: python3 scripts/nightly.py

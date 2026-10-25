@@ -122,6 +122,20 @@ class TestKeyPool(unittest.TestCase):
         restored = KeyPool.from_state(["key-one", "key-two", "key-three"], state, minute_limit=2, day_limit=5)
         self.assertEqual(restored.slots[reservation.key_index].minute_used, 1)
 
+    def test_replacing_a_key_resets_disabled_state_and_counters_for_that_slot(self):
+        first = self.pool.reserve()
+        self.pool.report_failure(first, 401)
+        second = self.pool.reserve()
+        self.assertEqual(second.key_index, 1)
+        state = self.pool.to_dict()
+
+        restored = KeyPool.from_state(["brand-new-secret-key", "key-two", "key-three"], state, minute_limit=2, day_limit=5)
+        self.assertTrue(restored.slots[0].enabled)
+        self.assertEqual(restored.slots[0].day_used, 0)
+        self.assertEqual(restored.slots[0].label, mask_key("brand-new-secret-key"))
+        # Unchanged slot keeps its persisted usage.
+        self.assertEqual(restored.slots[1].day_used, 1)
+
     def test_slot_count_is_capped(self):
         pool = KeyPool([f"key-{index}" for index in range(MAX_SLOTS + 12)], clock=self.clock)
         self.assertEqual(len(pool), MAX_SLOTS)
