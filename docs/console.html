@@ -79,7 +79,7 @@
     </nav>
 
     <div class="rail-footer">
-      <a href="index.html" class="rail-gate-btn mono">SEAL GATE // 門</a>
+      <a href="index.html" class="rail-gate-btn mono"><span class="gate-emoji" aria-hidden="true">&#x26E9;&#xFE0F;</span> OPEN GATE // 門</a>
       <p class="rail-note">Research &amp; paper execution only. Zero broker orders.</p>
     </div>
   </aside>
@@ -89,7 +89,7 @@
     <!-- Mobile + Desktop Top Bar -->
     <header class="topbar">
       <div class="topbar-left">
-        <a href="index.html" class="mobile-crest-link" aria-label="Return to Gate">
+        <a href="index.html" class="mobile-crest-link" aria-label="Return to Open Gate">
           <svg class="mobile-crest" viewBox="0 0 48 48" fill="none" aria-hidden="true">
             <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="1.3"/>
             <polygon points="24,5 26.5,21 24,43 21.5,21" fill="currentColor"/>
@@ -97,7 +97,7 @@
           </svg>
         </a>
         <div>
-          <div class="topbar-kicker mono" id="top-page-code">DIVISION 01 // SIGNALS</div>
+          <div class="topbar-kicker mono"><span id="top-page-code">DIVISION 01 // SIGNALS</span> <span class="motion-sig" id="top-motion-sig">一閃 · BLADE CLEAVE</span></div>
           <h1 class="topbar-title"><span id="top-page-title">Signal Execution</span> <span class="topbar-jp" id="top-page-jp" lang="ja">信号</span></h1>
         </div>
       </div>
@@ -105,11 +105,18 @@
       <div class="topbar-right">
         <span class="pill" id="top-state-pill">BOT ACTIVE</span>
         <button type="button" class="btn btn-sm btn-ghost" id="top-toggle-pause">Pause Bot</button>
-        <a href="index.html" class="btn btn-sm btn-ghost hide-desktop">Gate</a>
+        <a href="index.html" class="btn btn-sm btn-ghost open-gate-top-btn"><span class="gate-emoji" aria-hidden="true">&#x26E9;&#xFE0F;</span> Open Gate</a>
       </div>
     </header>
 
     <div id="global-toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <!-- Per-Page Shinigami / Fuinjutsu Transition Stage -->
+    <div class="page-fx" id="page-fx" aria-hidden="true">
+      <div class="page-fx-primary"></div>
+      <div class="page-fx-secondary"></div>
+      <div class="page-fx-stamp" id="page-fx-stamp" lang="ja">信号</div>
+    </div>
 
     <!-- =================================================================
          PAGE 01 : SIGNALS (信号)

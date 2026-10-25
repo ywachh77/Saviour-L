@@ -67,7 +67,8 @@
         var enEl = document.getElementById("gate-engine-state");
         if (mkEl && st.active_pairs) mkEl.textContent = st.active_pairs.join(" · ");
         if (enEl) {
-          enEl.textContent = st.council_members + " COUNCIL GATES · " + (st.feed_mode === "LIVE" ? "LIVE SPOT FEED" : "PAPER ENGINE READY");
+          var feedTag = st.feed_mode === "LIVE" ? "LIVE SPOT FEED" : (st.feed_mode === "SUPABASE_SYNC" ? "SUPABASE CREDENTIALS CONNECTED" : "PAPER ENGINE READY");
+          enEl.textContent = st.council_members + " COUNCIL GATES · " + feedTag;
         }
       })
       .catch(function () {});
@@ -99,12 +100,12 @@
   if (!document.querySelector(".console-body")) return;
 
   var PAGE_META = {
-    signals:     { code: "DIVISION 01 // SIGNALS",     title: "Signal Execution",    jp: "信号" },
-    telegram:    { code: "DIVISION 02 // TELEGRAM",    title: "Telegram Dispatch",   jp: "電信" },
-    health:      { code: "DIVISION 03 // HEALTH",      title: "Health & Causality",  jp: "健全" },
-    strategies:  { code: "DIVISION 04 // STRATEGIES",  title: "Council & Filters",   jp: "戦術" },
-    credentials: { code: "DIVISION 05 // CREDENTIALS", title: "Credentials Vault",   jp: "機密" },
-    risk:        { code: "DIVISION 06 // DISCIPLINE",  title: "Risk & Charter",      jp: "規律" }
+    signals:     { code: "DIVISION 01 // SIGNALS",     title: "Signal Execution",    jp: "信号", sig: "一閃 · BLADE CLEAVE",    fx: "fx-signals",     stamp: "一閃 · 信号" },
+    telegram:    { code: "DIVISION 02 // TELEGRAM",    title: "Telegram Dispatch",   jp: "電信", sig: "巻物 · SCROLL UNFURL",   fx: "fx-telegram",    stamp: "巻物 · 電信" },
+    health:      { code: "DIVISION 03 // HEALTH",      title: "Health & Causality",  jp: "健全", sig: "検診 · DIAGNOSTIC SCAN", fx: "fx-health",      stamp: "検診 · 健全" },
+    strategies:  { code: "DIVISION 04 // STRATEGIES",  title: "Council & Filters",   jp: "戦術", sig: "陣形 · TACTICAL FLANK",  fx: "fx-strategies",  stamp: "陣形 · 戦術" },
+    credentials: { code: "DIVISION 05 // CREDENTIALS", title: "Credentials Vault",   jp: "機密", sig: "解錠 · VAULT UNSEAL",    fx: "fx-credentials", stamp: "解錠 · 機密" },
+    risk:        { code: "DIVISION 06 // DISCIPLINE",  title: "Risk & Charter",      jp: "規律", sig: "鉄則 · MONOLITH DESCENT", fx: "fx-risk",        stamp: "鉄則 · 規律" }
   };
 
   var MARKETS_STATIC = {
@@ -127,24 +128,55 @@
     toastTimer = setTimeout(function () { el.hidden = true; }, 4500);
   }
 
+  var fxTimer = null;
+
+  function triggerPageFx(meta) {
+    if (reduceMotion) return;
+    var fxEl = document.getElementById("page-fx");
+    var stampEl = document.getElementById("page-fx-stamp");
+    if (!fxEl || !meta) return;
+    if (fxTimer) clearTimeout(fxTimer);
+    fxEl.className = "page-fx";
+    if (stampEl) stampEl.textContent = meta.stamp || meta.jp;
+    // Force reflow so switching between pages always replays the unique keyframe
+    void fxEl.offsetWidth;
+    fxEl.className = "page-fx is-playing " + meta.fx;
+    fxTimer = setTimeout(function () {
+      fxEl.className = "page-fx";
+    }, 480);
+  }
+
   /* Navigation & Hash Routing -------------------------------------------- */
-  function activatePage(pageId, pushHash) {
+  function activatePage(pageId, pushHash, playTransition) {
     if (!PAGE_META[pageId]) pageId = "signals";
     var meta = PAGE_META[pageId];
 
     Array.prototype.forEach.call(document.querySelectorAll(".page"), function (sec) {
-      sec.classList.toggle("is-active", sec.getAttribute("data-page") === pageId);
+      var match = sec.getAttribute("data-page") === pageId;
+      if (match) {
+        sec.classList.remove("is-active");
+        void sec.offsetWidth;
+        sec.classList.add("is-active");
+      } else {
+        sec.classList.remove("is-active");
+      }
     });
     Array.prototype.forEach.call(document.querySelectorAll("[data-nav]"), function (btn) {
       btn.classList.toggle("is-active", btn.getAttribute("data-nav") === pageId);
     });
 
     var codeEl = document.getElementById("top-page-code");
+    var sigEl = document.getElementById("top-motion-sig");
     var titleEl = document.getElementById("top-page-title");
     var jpEl = document.getElementById("top-page-jp");
     if (codeEl) codeEl.textContent = meta.code;
+    if (sigEl) sigEl.textContent = meta.sig;
     if (titleEl) titleEl.textContent = meta.title;
     if (jpEl) jpEl.textContent = meta.jp;
+
+    if (playTransition !== false) {
+      triggerPageFx(meta);
+    }
 
     if (pushHash && window.location.hash !== "#" + pageId) {
       history.replaceState(null, "", "#" + pageId);
@@ -160,13 +192,13 @@
 
   Array.prototype.forEach.call(document.querySelectorAll("[data-nav]"), function (btn) {
     btn.addEventListener("click", function () {
-      activatePage(btn.getAttribute("data-nav"), true);
+      activatePage(btn.getAttribute("data-nav"), true, true);
     });
   });
 
   window.addEventListener("hashchange", function () {
     var h = (window.location.hash || "").replace(/^#/, "");
-    if (PAGE_META[h]) activatePage(h, false);
+    if (PAGE_META[h]) activatePage(h, false, true);
   });
 
   /* Shared Bot State Sync ------------------------------------------------ */
@@ -187,7 +219,9 @@
     }
     if (topBtn) topBtn.textContent = currentPaused ? "Resume Bot" : "Pause Bot";
     if (feedMode) {
-      var label = feedMode === "LIVE" ? "LIVE SPOT FEED" : "PAPER SIMULATION";
+      var label = feedMode === "LIVE"
+        ? "LIVE SPOT FEED"
+        : (feedMode === "SUPABASE_SYNC" ? "SUPABASE REAL M1 SYNC" : "PAPER SIMULATION");
       if (railFeed) railFeed.textContent = label;
       if (sigFeed) sigFeed.textContent = "MODE: " + label;
     }
@@ -473,7 +507,10 @@
       .then(function (tg) {
         var pill = document.getElementById("tg-conn-pill");
         if (pill) {
-          pill.textContent = tg.configured ? "CONFIGURED" : "WEB ONLY";
+          var lbl = tg.local_send_ready
+            ? "DIRECT CONNECTED"
+            : (tg.configured ? "CLOUD RUNNER ACTIVE" : "WEB ONLY");
+          pill.textContent = lbl;
           pill.className = "pill " + (tg.configured ? "pill-live" : "pill-warn");
         }
         document.getElementById("tg-token-mask").textContent = tg.token_masked || "Not configured";
@@ -647,13 +684,23 @@
     var tg = c.telegram || {};
 
     document.getElementById("cred-td-count").textContent = (td.slot_count || 0) + " / " + (c.max_twelvedata_slots || 30);
-    document.getElementById("cred-td-detail").textContent = td.configured ? "Masked slots active in .env" : "No Twelve Data key set yet";
+    document.getElementById("cred-td-detail").textContent = td.local_keys_ready
+      ? "Masked slots active in local .env"
+      : (td.configured ? "Synced from Supabase / GitHub Actions" : "No Twelve Data key set yet");
 
-    document.getElementById("cred-sb-state").textContent = sb.configured ? "READY" : "LOCAL ONLY";
-    document.getElementById("cred-sb-url").textContent = sb.url_masked || "Using local JSONL store";
+    document.getElementById("cred-sb-state").textContent = sb.configured
+      ? (sb.mode === "LIVE" ? "CONNECTED (LIVE)" : "CONNECTED")
+      : "LOCAL ONLY";
+    document.getElementById("cred-sb-url").textContent = sb.url_masked
+      ? (sb.url_masked + (sb.key_masked ? " · " + sb.key_masked : ""))
+      : "Using local JSONL store";
 
-    document.getElementById("cred-tg-state").textContent = tg.configured ? "READY" : "WEB ONLY";
-    document.getElementById("cred-tg-chat").textContent = tg.owner_chat_masked ? ("Chat " + tg.owner_chat_masked) : "Operate from web console";
+    document.getElementById("cred-tg-state").textContent = tg.local_send_ready
+      ? "CONNECTED"
+      : (tg.configured ? "CLOUD ACTIVE" : "WEB ONLY");
+    document.getElementById("cred-tg-chat").textContent = tg.local_send_ready
+      ? ("Chat " + tg.owner_chat_masked)
+      : (tg.configured ? ("GitHub Actions · " + tg.owner_chat_masked) : "Operate from web console");
 
     var chips = document.getElementById("cred-slot-chips");
     if (chips) {
@@ -774,5 +821,5 @@
 
   /* Initial Boot --------------------------------------------------------- */
   var initPage = (window.location.hash || "").replace(/^#/, "") || "signals";
-  activatePage(initPage, false);
+  activatePage(initPage, false, false);
 })();

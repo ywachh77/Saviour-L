@@ -146,6 +146,76 @@ class TestOperatorDashboardAPI(unittest.TestCase):
         self.assertTrue(data["lookahead"]["ok"])
         self.assertEqual(len(data["lookahead"]["checks"]), 5)
 
+    def test_cloud_synced_credentials_and_persisted_candles(self):
+        from datetime import datetime, timedelta, timezone
+        from fusion.store import LocalStore
+        from fusion.timeutil import format_datetime
+
+        local = LocalStore(str(self.state_dir))
+        local.replace(
+            "api_keys",
+            [{"id": "keypool", "slots": [{"index": 0, "label": "f6df...fb(32)", "enabled": True, "day_used": 2, "day_limit": 800}]}],
+        )
+        local.replace(
+            "model_state",
+            [{"id": "champion", "runtime": {"paused": False, "telegram_offset": 309256988}}],
+        )
+        t0 = datetime(2026, 10, 25, 6, 0, tzinfo=timezone.utc)
+        bars = [
+            {
+                "timestamp": format_datetime(t0 + timedelta(minutes=i)),
+                "pair": "BTC/USD",
+                "open": 80200.0 + i,
+                "high": 80215.0 + i,
+                "low": 80190.0 + i,
+                "close": 80210.0 + i,
+                "volume": 0.0,
+            }
+            for i in range(90)
+        ]
+        local.replace("candles_m1", bars)
+
+        self.runtime.reload()
+        _, status = self._get("/api/status")
+        self.assertEqual(status["feed_mode"], "SUPABASE_SYNC")
+        btc_mkt = [m for m in status["markets"] if m["symbol"] == "BTC/USD"][0]
+        self.assertAlmostEqual(btc_mkt["latest_price"], 80299.0, places=2)
+
+        _, creds = self._get("/api/credentials")
+        self.assertTrue(creds["twelvedata"]["configured"])
+        self.assertEqual(creds["twelvedata"]["source"], "CLOUD_SYNCED")
+        self.assertEqual(creds["twelvedata"]["slots_masked"][0]["masked"], "f6df...fb(32)")
+        self.assertTrue(creds["telegram"]["configured"])
+        self.assertEqual(creds["telegram"]["source"], "CLOUD_SYNCED")
+
+    def test_open_gate_emoji_and_six_distinct_page_animations(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "docs" / "index.html").read_text(encoding="utf-8")
+        console_html = (repo_root / "docs" / "console.html").read_text(encoding="utf-8")
+        style_css = (repo_root / "docs" / "assets" / "style.css").read_text(encoding="utf-8")
+        main_js = (repo_root / "docs" / "assets" / "main.js").read_text(encoding="utf-8")
+
+        # Open Gate emoji present on Home Gate and Console Gate controls
+        self.assertIn("&#x26E9;&#xFE0F;", index_html)
+        self.assertIn("OPEN GATE", index_html)
+        self.assertIn("&#x26E9;&#xFE0F;", console_html)
+        self.assertIn("Open Gate", console_html)
+
+        # Six distinct page transition FX & keyframes present
+        for fx_cls in ("fx-signals", "fx-telegram", "fx-health", "fx-strategies", "fx-credentials", "fx-risk"):
+            self.assertIn(fx_cls, style_css)
+            self.assertIn(fx_cls, main_js)
+
+        for kf in (
+            "pageSignalsCleave",
+            "pageTelegramUnfurl",
+            "pageHealthDiag",
+            "flankFromLeft",
+            "pageCredentialsIris",
+            "pageRiskMonolith",
+        ):
+            self.assertIn(kf, style_css)
+
 
 if __name__ == "__main__":
     unittest.main()

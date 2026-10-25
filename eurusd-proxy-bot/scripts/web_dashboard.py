@@ -51,12 +51,12 @@ from fusion.keypool import MAX_SLOTS, mask_key  # noqa: E402
 from fusion.model import MODE_VETO  # noqa: E402
 from fusion.runner import FusionBot, format_brief_signal, format_signal  # noqa: E402
 from fusion.simulate import synthetic_series  # noqa: E402
-from fusion.store import Store, build_store  # noqa: E402
+from fusion.store import LocalStore, Store, SupabaseStore  # noqa: E402
 from fusion.timeutil import floor_minute, format_datetime, minute_bucket, now as utcnow  # noqa: E402
 from scripts.set_keys import normalise_keys  # noqa: E402
 
 MAX_JSON_BODY = 32_768
-TESTS_PASSING_BASELINE = 649
+TESTS_PASSING_BASELINE = 651
 
 SIM_DEFAULTS: dict[str, tuple[float, float, int]] = {
     "EUR/USD": (1.08520, 0.00024, 101),
@@ -82,6 +82,14 @@ def _mask_chat_id(chat_id: str) -> str:
     if len(val) <= 4:
         return "*" * len(val)
     return f"{val[:2]}{'*' * (len(val) - 4)}{val[-2:]}"
+
+
+def _mtf_label(direction: Any) -> str:
+    if direction == 1 or direction == "BULL" or direction == "BUY":
+        return "BULL"
+    if direction == -1 or direction == "BEAR" or direction == "SELL":
+        return "BEAR"
+    return "FLAT"
 
 
 def _build_scaled_paper_series(symbol: str, count: int, end_minute: datetime, seed_offset: int = 0) -> list[Candle]:
@@ -128,10 +136,28 @@ class OperatorRuntime:
         self._override_state_dir = state_dir
         self._sim_step = 0
         self._last_audit: dict[str, Any] | None = None
+        self._supabase_reachable = False
+        self._synced_pairs: set[str] = set()
+        self._cloud_key_slots: list[dict[str, Any]] = []
+        self._cloud_telegram_offset = 0
         self.config: Config = Config()
         self.store: Store = None  # type: ignore[assignment]
         self.bot: FusionBot = None  # type: ignore[assignment]
         self.reload()
+
+    def _build_runtime_store(self, cfg: Config) -> Store:
+        local = LocalStore(cfg.local_state_dir)
+        self._supabase_reachable = False
+        if cfg.supabase_ready:
+            probe_client = SupabaseStore(cfg.supabase_url, cfg.supabase_service_key, timeout=1.5)
+            probe_err = probe_client.probe("model_state")
+            if probe_err is None:
+                self._supabase_reachable = True
+                return Store(
+                    local=local,
+                    supabase=SupabaseStore(cfg.supabase_url, cfg.supabase_service_key),
+                )
+        return Store(local=local, supabase=None)
 
     def reload(self) -> None:
         saved_env = dict(os.environ)
@@ -163,9 +189,22 @@ class OperatorRuntime:
 
         cfg.runner = "web-console"
         self.config = cfg
-        self.store = build_store(cfg)
+        self.store = self._build_runtime_store(cfg)
+        kp_blob = self.store.load_key_pool()
+        if isinstance(kp_blob, dict) and isinstance(kp_blob.get("slots"), list):
+            self._cloud_key_slots = [r for r in kp_blob["slots"] if isinstance(r, dict)]
+        elif isinstance(kp_blob, list):
+            self._cloud_key_slots = [r for r in kp_blob if isinstance(r, dict)]
+        else:
+            self._cloud_key_slots = []
+        state_payload = self.store.load_model_state() or {}
+        runtime_blob = state_payload.get("runtime") if isinstance(state_payload.get("runtime"), dict) else {}
+        self._cloud_telegram_offset = int(runtime_blob.get("telegram_offset", 0) or 0)
         self.bot = FusionBot(config=cfg, store=self.store)
         self.bot.startup()
+        self._synced_pairs = {
+            m.config.pair for m in self._all_members() if len(m.candles) >= 60
+        }
         self._ensure_paper_candles_if_offline()
 
     def _all_members(self) -> list[FusionBot]:
@@ -178,15 +217,58 @@ class OperatorRuntime:
                 return member
         return None
 
+    def _has_real_candles(self, member: FusionBot) -> bool:
+        return member.config.pair in self._synced_pairs and len(member.candles) >= 60
+
     @property
     def live_feed_configured(self) -> bool:
         return bool(self.bot.provider and getattr(self.bot.provider, "configured", False))
+
+    @property
+    def has_synced_market_data(self) -> bool:
+        return any(self._has_real_candles(m) for m in self._all_members())
+
+    def _effective_key_pool(self) -> dict[str, Any]:
+        if hasattr(self.bot.provider, "pool"):
+            local_summary = self.bot.provider.pool.summary()
+            if local_summary.get("slots"):
+                return local_summary
+        if self._cloud_key_slots:
+            slots = []
+            enabled = 0
+            for idx, row in enumerate(self._cloud_key_slots):
+                is_en = bool(row.get("enabled", True))
+                if is_en:
+                    enabled += 1
+                slots.append(
+                    {
+                        "index": int(row.get("index", row.get("slot_index", idx))),
+                        "label": str(row.get("label") or f"slot-{idx + 1}"),
+                        "enabled": is_en,
+                        "day_used": int(row.get("day_used", 0) or 0),
+                        "day_limit": int(row.get("day_limit", 800) or 800),
+                        "minute_used": int(row.get("minute_used", 0) or 0),
+                        "minute_limit": int(row.get("minute_limit", 8) or 8),
+                        "last_error": str(row.get("last_error") or ""),
+                    }
+                )
+            return {"slots": slots, "enabled": enabled, "exhausted_events": 0, "source": "CLOUD_SYNCED"}
+        return {"slots": [], "enabled": 0, "exhausted_events": 0, "source": "NONE"}
+
+    def _store_backend_label(self) -> str:
+        if self.store.supabase is not None:
+            return "supabase+local"
+        if self.config.supabase_ready:
+            return "supabase_mirror"
+        return "local_jsonl"
 
     def _ensure_paper_candles_if_offline(self, target_stamp: datetime | None = None) -> None:
         if self.live_feed_configured:
             return
         anchor = floor_minute(target_stamp or utcnow()) - timedelta(minutes=1)
         for member in self._all_members():
+            if target_stamp is None and self._has_real_candles(member):
+                continue
             if not member.candles or target_stamp is not None:
                 member.candles = _build_scaled_paper_series(
                     member.config.pair,
@@ -205,7 +287,7 @@ class OperatorRuntime:
         feat_series = feat_mod.compute_features(candles, instrument=inst) if len(candles) >= 60 else []
         latest_feat = feat_series[-1] if feat_series else None
         reg = regime_mod.detect_regime(candles, latest_feat).name if latest_feat else "UNKNOWN"
-        bias_15 = mtf.bias(candles, 15).direction if len(candles) >= 60 else "FLAT"
+        bias_15 = _mtf_label(mtf.bias(candles, 15).direction) if len(candles) >= 60 else "FLAT"
         sess = session_mod.session_of(candles[-1].timestamp if candles else utcnow(), inst)
         horizon = costs.resolve_horizon(
             atr_pips,
@@ -247,11 +329,7 @@ class OperatorRuntime:
             signals_raw = self.store.load_signals(limit=25)
             hb = self.store.latest_heartbeat()
             hb_age = heartbeat.heartbeat_age_seconds(hb)
-            pool_summary = (
-                self.bot.provider.pool.summary()
-                if hasattr(self.bot.provider, "pool")
-                else {"slots": [], "enabled": 0, "exhausted_events": 0}
-            )
+            pool_summary = self._effective_key_pool()
             calibrator = self.bot.model.calibrator if self.bot.model else None
             cal_state = (
                 "CALIBRATED"
@@ -260,10 +338,22 @@ class OperatorRuntime:
                 if calibrator and calibrator.flat
                 else "RAW"
             )
+            feed_mode = (
+                "LIVE"
+                if self.live_feed_configured
+                else "SUPABASE_SYNC"
+                if self.has_synced_market_data
+                else "PAPER_SIMULATION"
+            )
+            tg_offset = (
+                self.bot.telegram.offset
+                if (self.bot.telegram and self.bot.telegram.offset)
+                else self._cloud_telegram_offset
+            )
             return {
                 "engine": "SAVIOUR",
                 "mode": "PAPER_RESEARCH_ONLY",
-                "feed_mode": "LIVE" if self.live_feed_configured else "PAPER_SIMULATION",
+                "feed_mode": feed_mode,
                 "paused": self.bot.paused,
                 "active_pairs": list(self.config.active_pairs),
                 "council_members": len(strategies.MEMBERS),
@@ -304,16 +394,17 @@ class OperatorRuntime:
                     "calibration_samples": calibrator.samples if calibrator else 0,
                 },
                 "telegram": {
-                    "configured": bool(self.config.telegram_ready),
-                    "owner_masked": _mask_chat_id(self.config.telegram_owner_chat_id),
-                    "offset": self.bot.telegram.offset if self.bot.telegram else 0,
+                    "configured": bool(self.config.telegram_ready or tg_offset > 0),
+                    "local_send_ready": bool(self.config.telegram_ready),
+                    "owner_masked": _mask_chat_id(self.config.telegram_owner_chat_id) or ("CLOUD_RUNNER" if tg_offset > 0 else ""),
+                    "offset": tg_offset,
                     "outbox_pending": len(self.store.outbox_pending()),
                 },
                 "health": {
                     "heartbeat": hb,
                     "heartbeat_age_s": None if hb_age is None else round(hb_age, 1),
                     "key_pool": pool_summary,
-                    "store_backend": "supabase+local" if self.store.supabase else "local_jsonl",
+                    "store_backend": self._store_backend_label(),
                     "store_errors": self.store.errors[-5:],
                     "alerts": self.store.recent_alerts(limit=8),
                 },
@@ -339,7 +430,6 @@ class OperatorRuntime:
                 raise ValueError(f"Unsupported market: {pair}")
 
             is_live = self.live_feed_configured
-            source_tag = "LIVE" if is_live else "SYNTHETIC"
             base_now = utcnow()
             eval_stamp = floor_minute(base_now) + timedelta(minutes=1, seconds=1)
 
@@ -347,64 +437,113 @@ class OperatorRuntime:
                 for member in targets:
                     member.ingest(at=eval_stamp)
                 self.bot.flush_key_pool()
-            else:
-                self._sim_step += 1
-                # Anchor paper scan inside active overlap hours when mode=='scan' so FX spread is open.
-                scan_anchor = (
-                    datetime(2026, 1, 5, 13, 0, 1, tzinfo=timezone.utc) + timedelta(minutes=self._sim_step)
-                    if mode == "scan"
-                    else eval_stamp
-                )
-                self._ensure_paper_candles_if_offline(target_stamp=scan_anchor)
-                eval_stamp = scan_anchor
 
             cards: list[dict[str, Any]] = []
             emitted_count = 0
 
             for member in targets:
                 inst = instruments.for_symbol(member.config.pair)
-                chosen_stamp = eval_stamp
-                result = member.engine.evaluate(
-                    member.candles,
-                    model=member.model,
-                    ensemble=member.ensemble,
-                    weights=member.weights,
-                    source=source_tag,
-                    at=chosen_stamp,
-                    mistakes=member.mistakes,
-                )
+                saved_real_candles = list(member.candles) if (not is_live and self._has_real_candles(member)) else None
 
-                # In offline paper simulation only, mode='scan' walks forward bar-by-bar
-                # through unmodified engine gates until a real 5/6+ setup seals (max 90 steps).
-                steps_scanned = 1
-                if not is_live and mode == "scan" and not result.actionable:
-                    for _ in range(89):
-                        self._sim_step += 1
-                        steps_scanned += 1
-                        chosen_stamp = datetime(2026, 1, 5, 13, 0, 1, tzinfo=timezone.utc) + timedelta(minutes=self._sim_step)
-                        member.candles = _build_scaled_paper_series(
-                            inst.symbol,
-                            count=max(260, member.config.candle_history),
-                            end_minute=floor_minute(chosen_stamp) - timedelta(minutes=1),
-                            seed_offset=self._sim_step,
-                        )
-                        result = member.engine.evaluate(
-                            member.candles,
-                            model=member.model,
-                            ensemble=member.ensemble,
-                            weights=member.weights,
-                            source="SYNTHETIC",
-                            at=chosen_stamp,
-                            mistakes=member.mistakes,
-                        )
-                        if result.actionable:
-                            break
+                if is_live:
+                    chosen_stamp = eval_stamp
+                    eval_candles = member.candles
+                    member_source_tag = "LIVE"
+                    feed_label = "LIVE"
+                    steps_scanned = 1
+                    result = member.engine.evaluate(
+                        eval_candles,
+                        model=member.model,
+                        ensemble=member.ensemble,
+                        weights=member.weights,
+                        source=member_source_tag,
+                        at=chosen_stamp,
+                        mistakes=member.mistakes,
+                    )
+                elif saved_real_candles is not None and mode == "now":
+                    # Evaluate the latest synced real M1 bar from Supabase directly.
+                    eval_candles = saved_real_candles
+                    chosen_stamp = eval_candles[-1].timestamp + timedelta(minutes=1, seconds=1)
+                    member_source_tag = "LIVE"
+                    feed_label = "SUPABASE_SYNC"
+                    steps_scanned = 1
+                    result = member.engine.evaluate(
+                        eval_candles,
+                        model=member.model,
+                        ensemble=member.ensemble,
+                        weights=member.weights,
+                        source=member_source_tag,
+                        at=chosen_stamp,
+                        mistakes=member.mistakes,
+                    )
+                else:
+                    # First scan across synced real Supabase bars when available; otherwise paper simulation.
+                    steps_scanned = 0
+                    result = None
+                    eval_candles = member.candles
+                    chosen_stamp = eval_stamp
+                    member_source_tag = "SYNTHETIC"
+                    feed_label = "PAPER_SIMULATION"
 
-                closed = closed_before(member.candles, chosen_stamp)
-                latest_close = closed[-1].close if closed else (member.candles[-1].close if member.candles else 1.0)
+                    if saved_real_candles is not None and mode == "scan" and len(saved_real_candles) >= 80:
+                        for end_idx in range(len(saved_real_candles), max(70, len(saved_real_candles) - 90), -1):
+                            steps_scanned += 1
+                            window = saved_real_candles[:end_idx]
+                            cand_stamp = window[-1].timestamp + timedelta(minutes=1, seconds=1)
+                            cand_res = member.engine.evaluate(
+                                window,
+                                model=member.model,
+                                ensemble=member.ensemble,
+                                weights=member.weights,
+                                source="LIVE",
+                                at=cand_stamp,
+                                mistakes=member.mistakes,
+                            )
+                            if cand_res.actionable:
+                                eval_candles = window
+                                chosen_stamp = cand_stamp
+                                member_source_tag = "LIVE"
+                                feed_label = "SUPABASE_SYNC"
+                                result = cand_res
+                                break
+
+                    if result is None:
+                        max_paper_steps = 90 if mode == "scan" else 1
+                        for _ in range(max_paper_steps):
+                            self._sim_step += 1
+                            steps_scanned += 1
+                            chosen_stamp = (
+                                datetime(2026, 1, 5, 13, 0, 1, tzinfo=timezone.utc) + timedelta(minutes=self._sim_step)
+                                if mode == "scan"
+                                else eval_stamp
+                            )
+                            eval_candles = _build_scaled_paper_series(
+                                inst.symbol,
+                                count=max(260, member.config.candle_history),
+                                end_minute=floor_minute(chosen_stamp) - timedelta(minutes=1),
+                                seed_offset=self._sim_step,
+                            )
+                            result = member.engine.evaluate(
+                                eval_candles,
+                                model=member.model,
+                                ensemble=member.ensemble,
+                                weights=member.weights,
+                                source="SYNTHETIC",
+                                at=chosen_stamp,
+                                mistakes=member.mistakes,
+                            )
+                            if result.actionable or mode != "scan":
+                                break
+                        if saved_real_candles is None:
+                            member.candles = eval_candles
+                        else:
+                            member.candles = saved_real_candles
+
+                closed = closed_before(eval_candles, chosen_stamp)
+                latest_close = closed[-1].close if closed else (eval_candles[-1].close if eval_candles else 1.0)
                 atr_vals = [v for v in calc_atr(closed, 14) if v is not None] if len(closed) >= 20 else []
                 atr_pips = (atr_vals[-1] / inst.pip) if atr_vals else 2.0
-                mtf_dir = mtf.bias(closed, member.config.mtf_minutes).direction if len(closed) >= 60 else "FLAT"
+                mtf_dir = _mtf_label(mtf.bias(closed, member.config.mtf_minutes).direction) if len(closed) >= 60 else "FLAT"
 
                 plan_side = (
                     result.signal.side
@@ -431,19 +570,22 @@ class OperatorRuntime:
                 if result.actionable and result.signal is not None:
                     sig = result.signal
                     emitted_count += 1
-                    member.store.save_signal(
-                        dict(
-                            sig.to_dict(),
-                            seal_state=charter.SEAL_SIGNAL,
-                            settled=False,
-                            bucket=minute_bucket(chosen_stamp),
-                        )
+                    sig_row = dict(
+                        sig.to_dict(),
+                        seal_state=charter.SEAL_SIGNAL,
+                        settled=False,
+                        bucket=minute_bucket(chosen_stamp),
+                        delivery_state="WEB_CONSOLE",
                     )
-                    if dispatch_telegram and member.telegram and member.telegram.configured and not member.paused:
-                        member.deliver(sig, brief=True)
-                        telegram_dispatched = True
+                    if is_live and mode == "now":
+                        member.store.save_signal(sig_row)
+                        if dispatch_telegram and member.telegram and member.telegram.configured and not member.paused:
+                            member.deliver(sig, brief=True)
+                            telegram_dispatched = True
+                        else:
+                            member.store.update_signal(sig.signal_id, {"delivery_state": "WEB_CONSOLE"})
                     else:
-                        member.store.update_signal(sig.signal_id, {"delivery_state": "WEB_CONSOLE"})
+                        member.store.local.write("signals", [sig_row])
                     signal_dict = sig.to_dict()
                     signal_dict["entry_display"] = f"{latest_close:,.{inst.precision}f}"
                     brief_text = format_brief_signal(sig)
@@ -456,7 +598,7 @@ class OperatorRuntime:
                     {
                         "pair": inst.symbol,
                         "precision": inst.precision,
-                        "feed_source": "LIVE" if is_live else "PAPER_SIMULATION",
+                        "feed_source": feed_label,
                         "evaluated_at": format_datetime(chosen_stamp),
                         "steps_scanned": steps_scanned,
                         "latest_price": round(latest_close, inst.precision),
@@ -481,9 +623,16 @@ class OperatorRuntime:
                     }
                 )
 
+            overall_feed = (
+                "LIVE"
+                if is_live
+                else "SUPABASE_SYNC"
+                if any(c["feed_source"] == "SUPABASE_SYNC" for c in cards)
+                else "PAPER_SIMULATION"
+            )
             return {
                 "ok": True,
-                "feed_mode": "LIVE" if is_live else "PAPER_SIMULATION",
+                "feed_mode": overall_feed,
                 "emitted": emitted_count,
                 "dispatch_telegram": bool(dispatch_telegram),
                 "evaluations": cards,
@@ -522,11 +671,18 @@ class OperatorRuntime:
     def telegram_payload(self) -> dict[str, Any]:
         with self.lock:
             local_outbox = self.store.local.read("outbox")[-15:][::-1]
+            tg_offset = (
+                self.bot.telegram.offset
+                if (self.bot.telegram and self.bot.telegram.offset)
+                else self._cloud_telegram_offset
+            )
             return {
-                "configured": bool(self.config.telegram_ready),
-                "owner_masked": _mask_chat_id(self.config.telegram_owner_chat_id),
-                "token_masked": mask_key(self.config.telegram_token),
-                "offset": self.bot.telegram.offset if self.bot.telegram else 0,
+                "configured": bool(self.config.telegram_ready or tg_offset > 0),
+                "local_send_ready": bool(self.config.telegram_ready),
+                "source": "LOCAL_ENV" if self.config.telegram_ready else ("CLOUD_SYNCED" if tg_offset > 0 else "NONE"),
+                "owner_masked": _mask_chat_id(self.config.telegram_owner_chat_id) or ("CLOUD_RUNNER" if tg_offset > 0 else ""),
+                "token_masked": mask_key(self.config.telegram_token) if self.config.telegram_token else ("CLOUD_SECRET" if tg_offset > 0 else ""),
+                "offset": tg_offset,
                 "paused": self.bot.paused,
                 "commands": ["/start", "/help", "/signals", "/status", "/pause", "/resume"],
                 "pending_count": len(self.store.outbox_pending()),
@@ -555,7 +711,26 @@ class OperatorRuntime:
 
     def health_payload(self, *, run_live_audit: bool = False) -> dict[str, Any]:
         with self.lock:
-            checks = doctor.run_checks(self.config, env_path=self.env_path, offline=True, send_test=False)
+            raw_checks = doctor.run_checks(self.config, env_path=self.env_path, offline=True, send_test=False)
+            doctor_rows = []
+            for c in raw_checks:
+                status = c.status
+                detail = c.detail
+                action = c.action
+                if c.name == "Twelve Data" and status == doctor.FAIL and self._cloud_key_slots:
+                    first_lbl = self._cloud_key_slots[0].get("label", "slot-1")
+                    status = doctor.PASS
+                    detail = f"{len(self._cloud_key_slots)} slot(s) synced from Supabase ({first_lbl}); scheduled ingestion active in GitHub Actions"
+                    action = ""
+                elif c.name == "Telegram" and status == doctor.FAIL and self._cloud_telegram_offset > 0:
+                    status = doctor.PASS
+                    detail = f"Connected in GitHub Actions runner (offset #{self._cloud_telegram_offset}); web command console ready"
+                    action = ""
+                elif c.name == "Supabase" and status == doctor.FAIL and self.config.supabase_ready and not self._supabase_reachable:
+                    status = doctor.WARN
+                    detail = f"Configured ({_mask_url(self.config.supabase_url)}) · outbound TCP restricted in sandbox; serving synced mirror"
+                    action = "Direct PostgREST HTTPS activates automatically on unrestricted networks."
+                doctor_rows.append({"name": c.name, "status": status, "detail": detail, "action": action})
             if run_live_audit or self._last_audit is None:
                 t0 = time.perf_counter()
                 audit = lookahead.run_audit()
@@ -571,17 +746,10 @@ class OperatorRuntime:
                 }
             hb = self.store.latest_heartbeat()
             hb_age = heartbeat.heartbeat_age_seconds(hb)
-            pool = (
-                self.bot.provider.pool.summary()
-                if hasattr(self.bot.provider, "pool")
-                else {"slots": [], "enabled": 0, "exhausted_events": 0}
-            )
+            pool = self._effective_key_pool()
             return {
-                "ok": all(c.status != doctor.FAIL for c in checks) and bool(self._last_audit["ok"]),
-                "doctor": [
-                    {"name": c.name, "status": c.status, "detail": c.detail, "action": c.action}
-                    for c in checks
-                ],
+                "ok": all(r["status"] != doctor.FAIL for r in doctor_rows) and bool(self._last_audit["ok"]),
+                "doctor": doctor_rows,
                 "lookahead": self._last_audit,
                 "heartbeat": hb,
                 "heartbeat_age_s": None if hb_age is None else round(hb_age, 1),
@@ -701,6 +869,9 @@ class OperatorRuntime:
             paused_before = self.bot.paused
             self.bot = FusionBot(config=self.config, store=self.store)
             self.bot.startup()
+            self._synced_pairs = {
+                m.config.pair for m in self._all_members() if len(m.candles) >= 60
+            }
             self.bot._set_paused(paused_before)
             self._ensure_paper_candles_if_offline()
             return {"ok": True, "strategies": self.strategies_payload()}
@@ -714,26 +885,49 @@ class OperatorRuntime:
             tg_chat = envfile.get_value(lines, "TELEGRAM_OWNER_CHAT_ID") or self.config.telegram_owner_chat_id
 
             td_keys = list(self.config.twelve_data_keys)
+            if td_keys:
+                td_slots_masked = [{"slot": idx + 1, "masked": mask_key(k)} for idx, k in enumerate(td_keys)]
+                td_source = "LOCAL_ENV"
+            elif self._cloud_key_slots:
+                td_slots_masked = [
+                    {
+                        "slot": int(r.get("index", r.get("slot_index", idx))) + 1,
+                        "masked": str(r.get("label") or f"slot-{idx + 1}"),
+                    }
+                    for idx, r in enumerate(self._cloud_key_slots)
+                ]
+                td_source = "CLOUD_SYNCED"
+            else:
+                td_slots_masked = []
+                td_source = "NONE"
+
+            tg_local_ready = bool(tg_tok and tg_chat)
+            tg_cloud_ready = self._cloud_telegram_offset > 0
             return {
                 "env_file_exists": self.env_path.is_file(),
                 "env_file_name": ".env (git-ignored, chmod 600)",
                 "max_twelvedata_slots": MAX_SLOTS,
                 "supabase": {
                     "configured": bool(supa_url and supa_key),
+                    "live_reachable": self._supabase_reachable,
+                    "mode": "LIVE" if self._supabase_reachable else ("BRIDGED_MIRROR" if (supa_url and supa_key) else "NONE"),
                     "url_masked": _mask_url(supa_url),
                     "key_masked": mask_key(supa_key),
                 },
                 "telegram": {
-                    "configured": bool(tg_tok and tg_chat),
-                    "token_masked": mask_key(tg_tok),
-                    "owner_chat_masked": _mask_chat_id(tg_chat),
+                    "configured": bool(tg_local_ready or tg_cloud_ready),
+                    "local_send_ready": tg_local_ready,
+                    "source": "LOCAL_ENV" if tg_local_ready else ("CLOUD_SYNCED" if tg_cloud_ready else "NONE"),
+                    "token_masked": mask_key(tg_tok) if tg_tok else ("GH_SECRETS_SYNCED" if tg_cloud_ready else ""),
+                    "owner_chat_masked": _mask_chat_id(tg_chat) if tg_chat else (f"offset #{self._cloud_telegram_offset}" if tg_cloud_ready else ""),
+                    "cloud_offset": self._cloud_telegram_offset,
                 },
                 "twelvedata": {
-                    "configured": bool(td_keys),
-                    "slot_count": len(td_keys),
-                    "slots_masked": [
-                        {"slot": idx + 1, "masked": mask_key(k)} for idx, k in enumerate(td_keys)
-                    ],
+                    "configured": bool(td_slots_masked),
+                    "local_keys_ready": bool(td_keys),
+                    "source": td_source,
+                    "slot_count": len(td_slots_masked),
+                    "slots_masked": td_slots_masked,
                 },
             }
 

@@ -728,6 +728,32 @@ body.is-unleashing .fuin-flash {
   font-size: 0.66rem;
   letter-spacing: 0.2em;
   color: var(--bone-3);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.motion-sig {
+  display: inline-block;
+  padding: 0.08rem 0.42rem;
+  border: 1px solid var(--line-hi);
+  color: var(--bone-2);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  background: var(--ink-3);
+}
+
+.gate-emoji {
+  display: inline-block;
+  font-style: normal;
+  margin-right: 0.28rem;
+  transform: translateY(-0.03em);
+}
+
+.open-gate-top-btn {
+  display: inline-flex;
+  align-items: center;
 }
 
 .topbar-title {
@@ -757,6 +783,182 @@ body.is-unleashing .fuin-flash {
   display: none;
 }
 
+/* ==========================================================================
+   PER-PAGE SHINIGAMI & FUINJUTSU TRANSITION STAGE
+   6 distinct animations:
+     01 Signals     -> Zanpakuto Horizontal Blade Cleave (一閃)
+     02 Telegram    -> Makimono Vertical Scroll Unfurl (巻物)
+     03 Health      -> Kaido Diagnostic Laser Scan (検診)
+     04 Strategies  -> Gotei Alternating Tactical Flank (陣形)
+     05 Credentials -> Octagonal Vault Iris Unseal (解錠)
+     06 Risk        -> Weighted Monolith Pillar Descent (鉄則)
+   ========================================================================== */
+
+.workspace {
+  position: relative;
+  overflow-x: clip;
+}
+
+.page-fx {
+  position: fixed;
+  top: 64px;
+  left: var(--rail-w);
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 18;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.page-fx.is-playing {
+  opacity: 1;
+}
+
+.page-fx-primary,
+.page-fx-secondary {
+  position: absolute;
+  opacity: 0;
+}
+
+.page-fx-stamp {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.8);
+  font-family: var(--font-jp);
+  font-size: clamp(3.6rem, 9vw, 6.4rem);
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: rgba(242, 239, 233, 0.07);
+  border: 1px solid rgba(158, 31, 31, 0.32);
+  padding: 0.35rem 1.1rem;
+  opacity: 0;
+}
+
+/* FX 01: Signals — Horizontal Blade Slash */
+.page-fx.fx-signals .page-fx-primary {
+  left: 0;
+  right: 0;
+  top: 38%;
+  height: 2px;
+  background: var(--bone);
+  transform-origin: left center;
+  animation: fxBladeSlash 0.38s var(--ease-snap) forwards;
+}
+.page-fx.fx-signals .page-fx-stamp {
+  animation: fxStampBrief 0.38s var(--ease-out) forwards;
+}
+
+/* FX 02: Telegram — Cinnabar Scroll Roller Drop */
+.page-fx.fx-telegram .page-fx-primary {
+  left: 5%;
+  right: 5%;
+  top: 0;
+  height: 2px;
+  background: var(--seal-hi);
+  animation: fxScrollDrop 0.42s var(--ease-out) forwards;
+}
+.page-fx.fx-telegram .page-fx-stamp {
+  animation: fxStampBrief 0.40s var(--ease-out) forwards;
+}
+
+/* FX 03: Health — Diagnostic Scanline Sweep */
+.page-fx.fx-health .page-fx-primary {
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: var(--moss-text);
+  box-shadow: 0 0 18px rgba(143, 184, 154, 0.45);
+  animation: fxScanSweep 0.42s linear forwards;
+}
+.page-fx.fx-health .page-fx-stamp {
+  border-color: rgba(143, 184, 154, 0.32);
+  animation: fxStampBrief 0.40s var(--ease-out) forwards;
+}
+
+/* FX 04: Strategies — Twin Opposing Tactical Bars */
+.page-fx.fx-strategies .page-fx-primary {
+  left: 0;
+  right: 0;
+  top: 28%;
+  height: 1px;
+  background: var(--bone-2);
+  transform-origin: left center;
+  animation: fxBladeSlash 0.38s var(--ease-snap) forwards;
+}
+.page-fx.fx-strategies .page-fx-secondary {
+  left: 0;
+  right: 0;
+  top: 66%;
+  height: 1px;
+  background: var(--seal-hi);
+  transform-origin: right center;
+  animation: fxBladeSlash 0.38s var(--ease-snap) forwards;
+}
+.page-fx.fx-strategies .page-fx-stamp {
+  animation: fxStampBrief 0.38s var(--ease-out) forwards;
+}
+
+/* FX 05: Credentials — Vault Seal Stamp Unseal */
+.page-fx.fx-credentials .page-fx-stamp {
+  color: rgba(196, 43, 43, 0.24);
+  border: 2px solid rgba(196, 43, 43, 0.55);
+  animation: fxVaultSeal 0.44s var(--ease-snap) forwards;
+}
+
+/* FX 06: Risk & Charter — Vertical Pillar Strike */
+.page-fx.fx-risk .page-fx-primary {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: var(--brass);
+  transform-origin: top center;
+  animation: fxPillarStrike 0.40s var(--ease-out) forwards;
+}
+.page-fx.fx-risk .page-fx-stamp {
+  border-color: rgba(181, 148, 91, 0.38);
+  animation: fxStampBrief 0.40s var(--ease-out) forwards;
+}
+
+@keyframes fxBladeSlash {
+  0%   { opacity: 0.95; transform: scaleX(0); }
+  55%  { opacity: 0.95; transform: scaleX(1); }
+  100% { opacity: 0; transform: scaleX(1); }
+}
+
+@keyframes fxScrollDrop {
+  0%   { opacity: 0.9; transform: translateY(0); }
+  75%  { opacity: 0.7; transform: translateY(56vh); }
+  100% { opacity: 0; transform: translateY(72vh); }
+}
+
+@keyframes fxScanSweep {
+  0%   { opacity: 0.95; transform: translateY(0); }
+  80%  { opacity: 0.85; transform: translateY(68vh); }
+  100% { opacity: 0; transform: translateY(84vh); }
+}
+
+@keyframes fxVaultSeal {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.55) rotate(-8deg); }
+  45%  { opacity: 1; transform: translate(-50%, -50%) scale(1.02) rotate(0deg); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.32) rotate(4deg); }
+}
+
+@keyframes fxPillarStrike {
+  0%   { opacity: 0.9; transform: scaleY(0); }
+  60%  { opacity: 0.8; transform: scaleY(1); }
+  100% { opacity: 0; transform: scaleY(1); }
+}
+
+@keyframes fxStampBrief {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.88); }
+  38%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.06); }
+}
+
 /* Isolated Pages */
 .page {
   display: none;
@@ -768,12 +970,142 @@ body.is-unleashing .fuin-flash {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
-  animation: pageFade 0.22s var(--ease-out);
 }
 
-@keyframes pageFade {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
+/* 01 SIGNALS: Horizontal Blade Slit Reveal */
+#page-signals.is-active {
+  animation: pageSignalsCleave 0.40s var(--ease-out) both;
+}
+#page-signals.is-active > .panel,
+#page-signals.is-active > .grid-2 {
+  animation: panelSnapForward 0.42s var(--ease-out) both;
+}
+#page-signals.is-active > *:nth-child(2) { animation-delay: 0.05s; }
+#page-signals.is-active > *:nth-child(3) { animation-delay: 0.10s; }
+
+/* 02 TELEGRAM: Makimono Vertical Scroll Unfurl */
+#page-telegram.is-active {
+  transform-origin: top center;
+  animation: pageTelegramUnfurl 0.44s var(--ease-out) both;
+}
+#page-telegram.is-active .panel {
+  animation: panelUnfurlChild 0.40s var(--ease-out) both;
+}
+#page-telegram.is-active > *:nth-child(2) .panel { animation-delay: 0.08s; }
+
+/* 03 HEALTH: Diagnostic Scan Lock + Staggered Stat Cards */
+#page-health.is-active {
+  animation: pageHealthDiag 0.36s var(--ease-out) both;
+}
+#page-health.is-active .stat-card {
+  animation: statDiagnosticPop 0.38s var(--ease-out) both;
+}
+#page-health.is-active .stat-card:nth-child(1) { animation-delay: 0.03s; }
+#page-health.is-active .stat-card:nth-child(2) { animation-delay: 0.08s; }
+#page-health.is-active .stat-card:nth-child(3) { animation-delay: 0.13s; }
+#page-health.is-active .stat-card:nth-child(4) { animation-delay: 0.18s; }
+#page-health.is-active .panel {
+  animation: panelBorderPulse 0.48s var(--ease-out) both;
+}
+
+/* 04 STRATEGIES: Alternating Tactical Flank Formation */
+#page-strategies.is-active > *:nth-child(odd) {
+  animation: flankFromLeft 0.42s var(--ease-out) both;
+}
+#page-strategies.is-active > *:nth-child(even) {
+  animation: flankFromRight 0.42s 0.06s var(--ease-out) both;
+}
+#page-strategies.is-active > *:nth-child(3) {
+  animation-delay: 0.11s;
+}
+
+/* 05 CREDENTIALS: Circular Iris Vault Unseal */
+#page-credentials.is-active {
+  animation: pageCredentialsIris 0.46s var(--ease-snap) both;
+}
+#page-credentials.is-active .stat-card {
+  animation: vaultCardLock 0.42s 0.08s var(--ease-out) both;
+}
+#page-credentials.is-active .stat-card:nth-child(2) { animation-delay: 0.13s; }
+#page-credentials.is-active .stat-card:nth-child(3) { animation-delay: 0.18s; }
+
+/* 06 RISK & CHARTER: Weighted Stone Monolith Descent */
+#page-risk.is-active {
+  animation: pageRiskMonolith 0.42s var(--ease-out) both;
+}
+#page-risk.is-active .charter-item {
+  animation: stoneSettle 0.38s var(--ease-out) both;
+}
+#page-risk.is-active .charter-item:nth-child(1) { animation-delay: 0.04s; }
+#page-risk.is-active .charter-item:nth-child(2) { animation-delay: 0.08s; }
+#page-risk.is-active .charter-item:nth-child(3) { animation-delay: 0.12s; }
+#page-risk.is-active .charter-item:nth-child(4) { animation-delay: 0.16s; }
+#page-risk.is-active .charter-item:nth-child(5) { animation-delay: 0.20s; }
+#page-risk.is-active .charter-item:nth-child(6) { animation-delay: 0.24s; }
+
+@keyframes pageSignalsCleave {
+  0%   { opacity: 0.25; clip-path: inset(46% 0 46% 0); transform: scale(0.99); }
+  100% { opacity: 1; clip-path: inset(0 0 0 0); transform: scale(1); }
+}
+
+@keyframes panelSnapForward {
+  0%   { opacity: 0; transform: translateX(-14px) scale(0.99); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes pageTelegramUnfurl {
+  0%   { opacity: 0.2; clip-path: inset(0 0 96% 0); transform: translateY(-10px); }
+  100% { opacity: 1; clip-path: inset(0 0 0 0); transform: translateY(0); }
+}
+
+@keyframes panelUnfurlChild {
+  0%   { opacity: 0; transform: translateY(-12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pageHealthDiag {
+  0%   { opacity: 0; transform: scale(0.985); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes statDiagnosticPop {
+  0%   { opacity: 0; transform: translateY(12px) scale(0.96); border-color: var(--moss-text); }
+  100% { opacity: 1; transform: translateY(0) scale(1); border-color: var(--line); }
+}
+
+@keyframes panelBorderPulse {
+  0%   { opacity: 0.35; border-color: rgba(143, 184, 154, 0.55); }
+  100% { opacity: 1; border-color: var(--line); }
+}
+
+@keyframes flankFromLeft {
+  0%   { opacity: 0; transform: translateX(-32px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes flankFromRight {
+  0%   { opacity: 0; transform: translateX(32px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pageCredentialsIris {
+  0%   { opacity: 0.3; clip-path: circle(0% at 50% 32%); }
+  100% { opacity: 1; clip-path: circle(145% at 50% 32%); }
+}
+
+@keyframes vaultCardLock {
+  0%   { opacity: 0; transform: translateY(10px) scale(0.97); border-color: var(--seal-hi); }
+  100% { opacity: 1; transform: translateY(0) scale(1); border-color: var(--line); }
+}
+
+@keyframes pageRiskMonolith {
+  0%   { opacity: 0; transform: translateY(-24px) scale(1.012); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes stoneSettle {
+  0%   { opacity: 0; transform: translateY(-14px); border-color: var(--brass); }
+  100% { opacity: 1; transform: translateY(0); border-color: var(--line); }
 }
 
 /* Panels & Cards */
@@ -1428,6 +1760,10 @@ body.is-unleashing .fuin-flash {
   .workspace {
     margin-left: 0;
     padding-bottom: calc(var(--mobile-tab) + env(safe-area-inset-bottom, 0px) + 1.5rem);
+  }
+
+  .page-fx {
+    left: 0;
   }
 
   .mobile-crest-link,
