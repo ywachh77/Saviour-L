@@ -111,6 +111,24 @@ class Config:
     # inert anyway, because prototypes need 30 real outcomes to earn a voice
     # and synthetic data grants none. See fusion/session.py.
     session_filter: bool = True
+    # Only take a trade that goes with the higher-timeframe tilt. The feed is
+    # one-minute only, so the tilt is resampled from the bars already in memory
+    # and costs no extra credits -- five one-minute bars are a five-minute bar.
+    #
+    # OFF BY DEFAULT, AND MEASURED RATHER THAN ASSUMED. Across five 2,500-bar
+    # replays the gate removed 22% of signals and made both numbers worse:
+    # win rate 51.2% -> 49.5%, expectancy -0.824 -> -0.992 pips per trade. It
+    # removed more winners than losers. Total loss only looked smaller because
+    # there were fewer trades to lose on.
+    #
+    # That measurement is on synthetic data, which is a random walk and cannot
+    # validate a trend filter at all -- on a random walk every filter is noise.
+    # So this stays available and off until there is enough real history to
+    # settle it. The tilt is still computed and fed to the model as features
+    # (mtf_bias_5 / mtf_gap_5 / mtf_bias_15 / mtf_gap_15), where it can do no
+    # harm and may do some good.
+    mtf_filter: bool = False
+    mtf_minutes: int = 5
     reward_to_cost: float = 3.0
     max_horizon_minutes: int = 120
     max_seal_latency_seconds: int = charter.MAX_SEAL_LATENCY_SECONDS
@@ -196,6 +214,8 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         horizon_minutes=_int("SIGNAL_HORIZON_MINUTES", 5),
         adaptive_horizon=_bool("ADAPTIVE_HORIZON", False),
         session_filter=_bool("SESSION_FILTER", True),
+        mtf_filter=_bool("MTF_FILTER", False),
+        mtf_minutes=_int("MTF_MINUTES", 5),
         reward_to_cost=_float("REWARD_TO_COST", 3.0),
         max_horizon_minutes=_int("MAX_HORIZON_MINUTES", 120),
         max_seal_latency_seconds=_int("MAX_SEAL_LATENCY_SECONDS", charter.MAX_SEAL_LATENCY_SECONDS),

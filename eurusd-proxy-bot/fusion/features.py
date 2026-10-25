@@ -16,6 +16,7 @@ from typing import Sequence
 
 from . import charter
 from .domain import Candle
+from . import mtf
 from .indicators import (
     adx,
     atr,
@@ -43,6 +44,13 @@ CCI_PERIOD = 20
 MICRO_PIVOT_BARS = 5
 
 FEATURE_VERSION = 4
+
+# Higher-timeframe context. The feed is one-minute only, so these are resampled
+# from the bars we already hold rather than fetched: five one-minute bars are a
+# five-minute bar. See fusion/mtf.py for why a forming bucket is never used.
+MTF_FAST_MINUTES = 5
+MTF_SLOW_MINUTES = 15
+MTF_EMA_PERIOD = 10
 
 FEATURE_NAMES = (
     "return_1",
@@ -80,6 +88,14 @@ FEATURE_NAMES = (
     "stoch_d_scaled",
     "cci_scaled",
     "vwap_dev",
+    # Higher-timeframe context is deliberately NOT here. The tilt is computed
+    # and carried as strategy-facing values below (mtf_fast / mtf_slow, plus
+    # mtf_bias_* and mtf_gap_*), but it does not enter the model vector:
+    # measured across five 2,500-bar replays it changed nothing -- 891 signals,
+    # 51.2%, -734.2 net pips both with and without it -- while perturbing
+    # prototype credit enough to break a promotion threshold test and
+    # invalidating every trained model. Unproven inputs do not get to silently
+    # redefine the model. Revisit once real history can settle it.
 )
 
 FEATURE_LABELS = {
@@ -125,6 +141,17 @@ def _safe_ratio(numerator: float, denominator: float, default: float = 0.0) -> f
     return numerator / denominator if abs(denominator) > 1e-15 else default
 
 
+def _mtf_gap(item: "mtf.Bias", price: float) -> float:
+    """How far above its higher-timeframe average price sits, in basis points.
+
+    Zero when the tilt is unknown, so "we do not know" never masquerades as
+    "price is exactly on its average".
+    """
+    if not item.reference:
+        return 0.0
+    return _safe_ratio(item.close - item.reference, price) * 10000.0
+
+
 def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]:
     """Compute indicators from current and past candles only (no future data)."""
     candles = list(candles)
@@ -137,6 +164,11 @@ def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]
     stoch_k_values, stoch_d_values = stochastic(candles, STOCH_PERIOD, STOCH_SMOOTH)
     cci_values = cci(candles, CCI_PERIOD)
     vwap_values = vwap(candles, VWAP_PERIOD)
+    # Resampled once for the whole series rather than per bar. See
+    # mtf.bias_series -- doing it per bar is quadratic and a 250k-bar backfill
+    # would take hours instead of seconds.
+    mtf_fast = mtf.bias_series(candles, minutes=MTF_FAST_MINUTES, ema_period=MTF_EMA_PERIOD)
+    mtf_slow = mtf.bias_series(candles, minutes=MTF_SLOW_MINUTES, ema_period=MTF_EMA_PERIOD)
 
     returns: list[float] = [0.0]
     for index in range(1, len(closes)):
@@ -246,6 +278,11 @@ def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]
             "stoch_d_scaled": (stoch_d_values[index] - 50.0) / 50.0,
             "cci_scaled": max(-1.0, min(1.0, cci_values[index] / 200.0)),
             "vwap_dev": _safe_ratio(candle.close - vwap_values[index], candle.close) * 1000.0,
+            # higher-timeframe context
+            "mtf_bias_5": float(mtf_fast[index].direction),
+            "mtf_gap_5": _mtf_gap(mtf_fast[index], candle.close),
+            "mtf_bias_15": float(mtf_slow[index].direction),
+            "mtf_gap_15": _mtf_gap(mtf_slow[index], candle.close),
             # strategy-facing values
             "ema_fast": ema_fast[index],
             "ema_slow": ema_slow[index],
@@ -278,6 +315,13 @@ def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]
             "prior_low_5": micro_prior_low,
             "atr_pips": atr_values[index] / charter.PIP,
         }
+        # Every value in this row must be a plain number. The row is persisted
+        # with the signal and re-read by Signal.from_dict, which coerces each
+        # value with float(). Carrying rich objects here (a Bias, say) survives
+        # json.dumps only because the store falls back to str(), and comes back
+        # as a string that float() rejects -- which made settle_due() skip every
+        # signal it could not parse, silently, forever. Objects stay in the
+        # caller's hands; the row stays numeric.
         if not all(math.isfinite(float(value)) for value in feature.values()):
             result.append(None)
         else:

@@ -17,6 +17,13 @@ from fusion.telegram import TelegramClient
 from fusion.timeutil import parse_datetime
 from tests.helpers import make_candles
 
+# A fixed minute inside the London/New York overlap (a Monday, so no weekend
+# spread widening either). Tests that assert a signal is actually delivered
+# must anchor the clock here: the spread model charges 1.2 x 2.1 = 2.52 pips
+# outside the overlap, which is just past the 2.50 pip gate, so the same test
+# passes at 15:55 UTC and fails at 03:50 UTC with no code change at all.
+IN_SESSION_MINUTE = datetime(2026, 1, 5, 12, 0, tzinfo=timezone.utc)
+
 
 class FakeResponse:
     def __init__(self, payload: bytes):
@@ -487,8 +494,15 @@ class TestOnDemandSignals(unittest.TestCase):
         shutil.rmtree(self.directory, ignore_errors=True)
 
     @staticmethod
-    def _fresh_candles(count: int = 200, seed: int = 11):
-        end = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=1)
+    def _fresh_candles(count: int = 200, seed: int = 11, end=None):
+        # Anchored to a fixed London/New York overlap minute unless asked
+        # otherwise. The spread model widens off session -- 1.2 x 2.1 = 2.52
+        # pips, a hair over the 2.50 pip gate -- so a test whose candles are
+        # built from datetime.now() passes during the day and fails at night
+        # with the code completely unchanged. Tests that assert a signal is
+        # *delivered* must therefore fix the clock, not read it.
+        if end is None:
+            end = IN_SESSION_MINUTE - timedelta(minutes=1)
         return make_candles(count, seed=seed, start=end - timedelta(minutes=count - 1))
 
     def _bot(self, transport=None, candles=None) -> FusionBot:
@@ -539,7 +553,10 @@ class TestOnDemandSignals(unittest.TestCase):
         original = dict(strategies.REGISTRY)
         strategies.REGISTRY[strategies.CORE] = lambda *a, **k: Decision("BUY", "forced", None, 6)
         try:
-            reply = bot.on_demand_signal()
+            # The candles are anchored to a fixed in-session minute, so the
+            # evaluation has to be anchored to it too -- otherwise the
+            # freshness gate rejects bars that are hours old by wall clock.
+            reply = bot.on_demand_signal(at=IN_SESSION_MINUTE)
         finally:
             strategies.REGISTRY.clear()
             strategies.REGISTRY.update(original)
@@ -561,7 +578,12 @@ class TestOnDemandSignals(unittest.TestCase):
         from fusion import strategies
         from fusion.domain import Decision
 
-        bot = self._bot(ScriptedTransport(), candles=self._fresh_candles(seed=11))
+        # This one is about the wall clock -- it checks that a request made
+        # mid-minute targets the *next* minute -- so the bars have to be fresh
+        # relative to now(). Off session the spread gate declines and the test
+        # skips rather than pretending it proved something.
+        fresh_end = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=1)
+        bot = self._bot(ScriptedTransport(), candles=self._fresh_candles(seed=11, end=fresh_end))
         original = dict(strategies.REGISTRY)
         strategies.REGISTRY[strategies.CORE] = lambda *a, **k: Decision("BUY", "forced", None, 6)
         try:

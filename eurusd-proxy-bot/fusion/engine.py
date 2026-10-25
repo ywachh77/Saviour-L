@@ -13,6 +13,7 @@ Order matters and is fixed:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
@@ -22,6 +23,7 @@ from .calibration import IsotonicCalibrator
 from .council import CouncilResult, CouncilWeights, run_council
 from .domain import Candle, ModelRead, Signal, closed_before
 from .features import compute_features
+from . import mtf
 from .model import MODE_ADVISORY, MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
 from .mistakes import MistakeMemory
 from .regime import RegimeState, detect_regime
@@ -38,6 +40,30 @@ AGREE_MARGIN_RAW = 0.02
 RAW = "RAW"
 CALIBRATED = "CALIBRATED"
 FLAT = "FLAT"
+
+
+def _mtf_tilt(features: dict | None, minutes: int) -> float | None:
+    """The higher-timeframe tilt as -1, 0 or +1, or None when it is unknown.
+
+    Read from the numeric row (``mtf_bias_5`` / ``mtf_bias_15``) rather than
+    from a rich object: the row is persisted and re-read by Signal.from_dict,
+    which floats every value, so anything non-numeric poisons the round-trip.
+
+    Returns None when the tilt was never computed -- an absent filter must
+    never be mistaken for a filter that agrees.
+    """
+    if not isinstance(features, dict):
+        return None
+    primary = "mtf_bias_15" if minutes >= 15 else "mtf_bias_5"
+    fallback = "mtf_bias_5" if minutes >= 15 else "mtf_bias_15"
+    for key in (primary, fallback):
+        if key in features:
+            try:
+                value = float(features[key])
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+    return None
 
 
 def build_read(
@@ -219,6 +245,24 @@ class FusionEngine:
         )
         if not council.actionable:
             return Verdict("NO SIGNAL", council.reason, regime.name, read=read, council=council)
+
+        # Higher-timeframe agreement. A one-minute chart is mostly noise, and
+        # the commonest way a scalp fails is by being a pullback inside a larger
+        # move going the other way. The tilt was computed alongside the
+        # features, so this costs nothing extra.
+        if config.mtf_filter:
+            tilt = _mtf_tilt(features, config.mtf_minutes)
+            wanted = mtf.UP if council.side == "BUY" else mtf.DOWN
+            if tilt is not None and tilt != mtf.FLAT and tilt != wanted:
+                leaning = "up" if tilt == mtf.UP else "down"
+                return Verdict(
+                    "NO SIGNAL",
+                    f"Higher-timeframe filter: {config.mtf_minutes}-minute bias is {leaning}"
+                    f" and the trade is {council.side}.",
+                    regime.name,
+                    read=read,
+                    council=council,
+                )
 
         mode = model.mode if model is not None else MODE_VETO
         allowed, model_reason = model_verdict(council.side, read, mode=mode)

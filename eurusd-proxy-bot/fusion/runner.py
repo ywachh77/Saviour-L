@@ -799,7 +799,20 @@ class FusionBot:
         for row in self.store.pending_signals(self.config.pair):
             try:
                 signal = Signal.from_dict(row)
-            except (KeyError, ValueError, TypeError):
+            except (KeyError, ValueError, TypeError) as exc:
+                # A signal we cannot read must never just disappear. This is
+                # what a non-numeric value in the feature row did once: every
+                # sealed signal failed to parse, was skipped here without a
+                # trace, and stayed "pending" for ever while the bot carried
+                # on reporting that it was working. Record it and move on
+                # rather than pretending the queue is clean.
+                self.store.log_event(
+                    {
+                        "kind": "signal_unreadable",
+                        "signal_id": str(row.get("signal_id", "unknown")),
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    }
+                )
                 continue
             expiry = parse_datetime(signal.expiry_time)
             if expiry > stamp:
