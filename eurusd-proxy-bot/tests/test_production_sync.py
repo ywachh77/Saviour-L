@@ -90,6 +90,9 @@ class TestWorkflowParity(unittest.TestCase):
         "MTF_FILTER",
         "MTF_MINUTES",
         "NEWS_FILTER",
+        "SIGNAL_COOLDOWN_MINUTES",
+        "LOSS_GUARD_STREAK",
+        "FX_ROLLOVER_GUARD",
     )
 
     def test_cycle_and_nightly_workflows_share_identical_strategy_flags(self):

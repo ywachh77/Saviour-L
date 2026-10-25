@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
 
-from . import charter, costs, datagate, instruments, news
+from . import charter, costs, datagate, instruments, news, protections
 from .calibration import IsotonicCalibrator
 from .council import CouncilResult, CouncilWeights, run_council
 from .domain import Candle, ModelRead, Signal, closed_before
@@ -362,7 +362,8 @@ class FusionEngine:
         Used by the backtest, which precomputes those once for the whole series
         instead of per bar. The decision and seal code is identical to live.
         """
-        candles = list(candles)
+        if not isinstance(candles, (list, tuple)):
+            candles = list(candles)
         latest = candles[-1]
         previous_close = candles[-2].close if len(candles) > 1 else latest.close
         verdict = self.decide(
@@ -455,6 +456,21 @@ class FusionEngine:
                 council=verdict.council,
                 model_reason=verdict.model_reason,
             )
+
+        if getattr(self.config, "fx_rollover_guard", False):
+            inst = instruments.for_symbol(getattr(self.config, "pair", None))
+            rollover = protections.check_fx_rollover(entry_time, horizon, crypto=inst.crypto)
+            if rollover.blocked:
+                return EngineResult(
+                    charter.SEAL_ABSTAIN,
+                    None,
+                    rollover.reason,
+                    gate=gate,
+                    regime=verdict.regime,
+                    read=verdict.read,
+                    council=verdict.council,
+                    model_reason=verdict.model_reason,
+                )
 
         read = verdict.read
         signal = Signal.create(

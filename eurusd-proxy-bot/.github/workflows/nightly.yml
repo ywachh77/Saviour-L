@@ -50,5 +50,8 @@ jobs:
           MTF_FILTER: "1"
           MTF_MINUTES: "15"
           NEWS_FILTER: "1"
+          SIGNAL_COOLDOWN_MINUTES: "15"
+          LOSS_GUARD_STREAK: "3"
+          FX_ROLLOVER_GUARD: "1"
         working-directory: ${{ steps.locate.outputs.dir }}
         run: python3 scripts/nightly.py

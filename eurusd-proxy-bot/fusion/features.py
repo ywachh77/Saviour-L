@@ -22,7 +22,9 @@ from .indicators import (
     atr,
     autocorrelation,
     cci,
+    choppiness_index,
     ema,
+    kaufman_er,
     mean,
     median,
     pstdev,
@@ -174,6 +176,8 @@ def compute_features(
     stoch_k_values, stoch_d_values = stochastic(candles, STOCH_PERIOD, STOCH_SMOOTH)
     cci_values = cci(candles, CCI_PERIOD)
     vwap_values = vwap(candles, VWAP_PERIOD)
+    ker_10_values = kaufman_er(closes, 10)
+    chop_14_values = choppiness_index(candles, 14)
     # Resampled once for the whole series rather than per bar. See
     # mtf.bias_series -- doing it per bar is quadratic and a 250k-bar backfill
     # would take hours instead of seconds.
@@ -324,6 +328,8 @@ def compute_features(
             "prior_high_5": micro_prior_high,
             "prior_low_5": micro_prior_low,
             "atr_pips": atr_values[index] / pip,
+            "ker_10": float(ker_10_values[index]) if ker_10_values[index] is not None else 0.0,
+            "chop_14": float(chop_14_values[index]) if chop_14_values[index] is not None else 50.0,
         }
         # Every value in this row must be a plain number. The row is persisted
         # with the signal and re-read by Signal.from_dict, which coerces each

@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Sequence
 
-from . import charter, instruments, digest, heartbeat, learning, settle, stats
+from . import charter, instruments, digest, heartbeat, learning, protections, settle, stats
 from .config import Config
 from .council import CouncilWeights, Vote
 from .domain import Candle, Signal
@@ -33,7 +33,13 @@ from .mistakes import MistakeMemory
 from .provider import TwelveDataProvider
 from .session import session_of
 from .store import Store, build_store
-from .telegram import HELP_TEXT, TelegramClient
+from .telegram import (
+    HELP_TEXT,
+    TelegramClient,
+    TelegramFormatConfig,
+    render_result_message,
+    render_signal_message,
+)
 from .timeutil import minute_bucket, now, parse_datetime, seconds_until_next_minute, floor_minute
 
 # How far past the minute boundary the pipeline is allowed to seal before the
@@ -44,86 +50,18 @@ MAX_STORED_CANDLES = 600
 SAVE_STATE_EVERY = 10
 
 
-def format_signal(signal: Signal) -> str:
-    probability = "n/a" if signal.probability_up is None else f"{signal.probability_up:.3f}"
-    raw = "n/a" if signal.probability_raw is None else f"{signal.probability_raw:.3f}"
-    state = {
-        "RAW": "raw (not enough outcomes to calibrate yet)",
-        "CALIBRATED": "calibrated",
-        "FLAT": "flat — abstained, never sent",
-    }[signal.calibration_state]
-    lines = [
-        f"{signal.pair} {signal.side}",
-        f"Entry: open of the {signal.entry_time.strftime('%H:%M')}Z candle",
-        f"Expires: {signal.expiry_time.strftime('%H:%M')}Z ({signal.horizon_minutes} min)",
-        f"Regime: {signal.regime}",
-        f"Model: {probability} — {state} (raw {raw})",
-        f"Why: {signal.reason}",
-        f"Cost: {signal.spread_pips:.2f} pip spread charged on settlement.",
-        "Paper research signal. No broker order is placed.",
-    ]
-    return "\n".join(lines)
+def format_signal(signal: Signal, fmt: TelegramFormatConfig | None = None) -> str:
+    return render_signal_message(signal, fmt, brief=False)
 
 
-def format_brief_signal(signal: Signal) -> str:
-    """Pair, direction, entry, expiry. Nothing else.
-
-    The full message carries the model read and the reasoning, and both still
-    go to the database where they can be audited. The phone gets the four
-    things a trade actually needs, because a wall of text at 2am is how a
-    number gets misread.
-    """
-    return "\n".join(
-        [
-            f"{signal.pair} {signal.side}",
-            f"Entry  open of {signal.entry_time.strftime('%H:%M')}Z candle",
-            f"Expiry {signal.expiry_time.strftime('%H:%M')}Z  ({signal.horizon_minutes} min)",
-            f"#{signal.signal_id[:8]}",
-            "",
-            "Paper — research only, no broker order.",
-        ]
-    )
+def format_brief_signal(signal: Signal, fmt: TelegramFormatConfig | None = None) -> str:
+    """Pair, direction, entry, expiry (unless custom format overrides /signals)."""
+    return render_signal_message(signal, fmt, brief=True)
 
 
-def format_result(signal: Signal, settlement) -> str:
-    """What the prediction actually did, sent the moment it is known.
-
-    Net, not gross: the spread is charged on every trade, so a result that
-    ignores it is a different number from the one that would have hit an
-    account. UNRESOLVED is reported as UNRESOLVED rather than as a zero.
-    """
-    header = f"RESULT {signal.pair} {signal.side}  #{signal.signal_id[:8]}"
-    # A price is shown with the precision its own market uses. Five decimals
-    # is right for EUR/USD and absurd for bitcoin, where it invites the reader
-    # to believe a fill was accurate to a hundred-thousandth of a dollar.
-    precision = instruments.for_symbol(signal.pair).precision
-    if settlement.outcome == charter.UNRESOLVED:
-        return "\n".join(
-            [
-                header,
-                "UNRESOLVED — the price data never arrived.",
-                "No result is claimed for this trade.",
-            ]
-        )
-    if settlement.outcome == charter.TIED:
-        return "\n".join(
-            [
-                header,
-                f"Entry {settlement.entry_price:,.{precision}f} -> Exit {settlement.exit_price:,.{precision}f}",
-                "TIED — no movement, no result either way.",
-            ]
-        )
-    net = settlement.net_pips or 0.0
-    gross = settlement.gross_pips or 0.0
-    verdict = "WIN" if settlement.outcome == charter.WIN else "LOSS"
-    return "\n".join(
-        [
-            header,
-            f"Entry {settlement.entry_price:,.{precision}f} -> Exit {settlement.exit_price:,.{precision}f}",
-            f"Move {gross:+.1f} pips | cost {settlement.spread_pips:.1f} | net {net:+.1f}",
-            verdict,
-        ]
-    )
+def format_result(signal: Signal, settlement, fmt: TelegramFormatConfig | None = None) -> str:
+    """What the prediction actually did, sent the moment it is known."""
+    return render_result_message(signal, settlement, fmt)
 
 
 @dataclass
@@ -167,6 +105,7 @@ class FusionBot:
     nightly_report: dict | None = None
     calibration_points: list[tuple[float, int]] = field(default_factory=list)
     mistakes: MistakeMemory = field(default_factory=MistakeMemory)
+    telegram_format: TelegramFormatConfig = field(default_factory=TelegramFormatConfig)
     peer_bots: dict[str, "FusionBot"] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ setup
@@ -177,6 +116,13 @@ class FusionBot:
             self.provider = TwelveDataProvider(self.config.twelve_data_keys)
         if self.telegram is None and self.config.telegram_ready:
             self.telegram = TelegramClient(self.config.telegram_token, self.config.telegram_owner_chat_id)
+        self.telegram_format = TelegramFormatConfig(
+            signal_style=getattr(self.config, "telegram_signal_style", "standard"),
+            signal_template=getattr(self.config, "telegram_signal_template", ""),
+            result_style=getattr(self.config, "telegram_result_style", "standard"),
+            result_template=getattr(self.config, "telegram_result_template", ""),
+            apply_to_signals_cmd=bool(getattr(self.config, "telegram_apply_to_signals_cmd", False)),
+        )
         self.engine = FusionEngine(self.config)
         for symbol in self.config.active_pairs[1:]:
             self.peer_bots[symbol] = FusionBot(
@@ -200,6 +146,14 @@ class FusionBot:
         for peer in self.peer_bots.values():
             peer.startup(_as_peer=True)
             peer.paused = self.paused
+            peer.telegram_format = self.telegram_format
+
+    def set_telegram_format(self, fmt: TelegramFormatConfig) -> None:
+        """Update and persist the Telegram message format across all active markets."""
+        self.telegram_format = fmt
+        for peer in self.peer_bots.values():
+            peer.telegram_format = fmt
+        self._save_state(force=True)
 
     def _hydrate_key_pool(self) -> None:
         if not isinstance(self.provider, TwelveDataProvider) or not self.provider.configured:
@@ -239,6 +193,9 @@ class FusionBot:
         if self.telegram is not None and isinstance(offset, int) and offset > 0:
             self.telegram.offset = offset
         self.stale_feed_minutes = int(runtime.get("stale_feed_minutes") or 0)
+        saved_fmt = runtime.get("telegram_format")
+        if isinstance(saved_fmt, dict):
+            self.telegram_format = TelegramFormatConfig.from_dict(saved_fmt)
         self.mistakes = MistakeMemory.from_dict(row.get("mistakes"))
         points = row.get("calibration_points") or []
         self.calibration_points = [
@@ -534,6 +491,15 @@ class FusionBot:
             if not self.candles:
                 return "No price data available. The provider may be unreachable; try again shortly."
 
+            guard = self._check_runtime_protections(stamp)
+            if guard.blocked:
+                return (
+                    "No setup right now.\n"
+                    f"{guard.reason}\n\n"
+                    "The bot only reports what its gates actually agree on. "
+                    "Asking again will not change the answer until the market does."
+                )
+
             result = self.engine.evaluate(
                 self.candles,
                 model=self.model,
@@ -558,7 +524,7 @@ class FusionBot:
             )
             self.deliver(signal, brief=True)
             self.settle_due(at=stamp)
-            return format_brief_signal(signal)
+            return format_brief_signal(signal, self.telegram_format)
 
         # Multi-market evaluation across every configured instrument.
         emitted: list[str] = []
@@ -571,6 +537,10 @@ class FusionBot:
                 refusals.append(f"{member.config.pair}: no price data available.")
                 continue
             any_candles = True
+            guard = member._check_runtime_protections(stamp)
+            if guard.blocked:
+                refusals.append(f"{member.config.pair}: {guard.reason}")
+                continue
             result = member.engine.evaluate(
                 member.candles,
                 model=member.model,
@@ -589,7 +559,7 @@ class FusionBot:
                      bucket=minute_bucket(stamp))
             )
             member.deliver(signal, brief=True)
-            emitted.append(format_brief_signal(signal))
+            emitted.append(format_brief_signal(signal, self.telegram_format))
 
         self.flush_key_pool()
         self.settle_due(at=stamp)
@@ -734,10 +704,43 @@ class FusionBot:
             self.store.save_candles(rows)
         return added
 
+    def _check_runtime_protections(self, at: datetime) -> protections.ProtectionVerdict:
+        """Evaluate CooldownPeriod and StoplossGuard against persisted ledger rows."""
+        cd_mins = int(getattr(self.config, "signal_cooldown_minutes", 0) or 0)
+        if cd_mins > 0:
+            verdict = protections.check_cooldown_period(
+                at,
+                self.store.load_signals(limit=120),
+                pair=self.config.pair,
+                cooldown_minutes=cd_mins,
+            )
+            if verdict.blocked:
+                return verdict
+
+        streak_cap = int(getattr(self.config, "loss_guard_streak", 0) or 0)
+        if streak_cap > 0:
+            verdict = protections.check_stoploss_guard(
+                at,
+                self.store.load_settlements(limit=200),
+                pair=self.config.pair,
+                max_loss_streak=streak_cap,
+                lookback_minutes=int(getattr(self.config, "loss_guard_lookback_minutes", 180) or 180),
+                cooldown_minutes=int(getattr(self.config, "loss_guard_cooldown_minutes", 60) or 60),
+            )
+            if verdict.blocked:
+                return verdict
+
+        return protections.CLEAR
+
     def evaluate_minute(self, *, bucket: str, at: datetime | None = None) -> CycleReport:
         stamp = at or now()
         if not self.candles:
             return CycleReport(bucket, charter.SEAL_ABSTAIN, "No candles available yet.")
+
+        guard = self._check_runtime_protections(stamp)
+        if guard.blocked:
+            self.abstentions += 1
+            return CycleReport(bucket, charter.SEAL_ABSTAIN, guard.reason)
 
         result = self.engine.evaluate(
             self.candles,
@@ -809,12 +812,16 @@ class FusionBot:
         self.store.outbox_append(
             {
                 "message_key": key,
-                "text": format_signal(signal),
+                "text": format_signal(signal, self.telegram_format),
                 "kind": "signal",
                 "state": charter.DELIVERY_PENDING,
             }
         )
-        outgoing = format_brief_signal(signal) if brief else format_signal(signal)
+        outgoing = (
+            format_brief_signal(signal, self.telegram_format)
+            if brief
+            else format_signal(signal, self.telegram_format)
+        )
         if self.telegram is None or not self.telegram.configured:
             self.store.outbox_update(key, {"state": charter.DELIVERY_FAILED, "last_error": "Telegram not configured"})
             self.store.update_signal(signal.signal_id, {"delivery_state": charter.DELIVERY_FAILED})
@@ -849,7 +856,7 @@ class FusionBot:
         retry rather than assumed delivered.
         """
         key = f"result|{signal.signal_id}"
-        text = format_result(signal, settlement)
+        text = format_result(signal, settlement, self.telegram_format)
         if self.telegram is None or not self.telegram.configured:
             return
         self.store.outbox_append(
@@ -1231,6 +1238,7 @@ class FusionBot:
                 "paused": self.paused,
                 "telegram_offset": self.telegram.offset if self.telegram else None,
                 "stale_feed_minutes": self.stale_feed_minutes,
+                "telegram_format": self.telegram_format.to_dict(),
             },
             "calibration_points": [[point[0], point[1]] for point in self.calibration_points[-2000:]],
             "mistakes": self.mistakes.to_dict(),

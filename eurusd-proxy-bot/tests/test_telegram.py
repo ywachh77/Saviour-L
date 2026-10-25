@@ -228,5 +228,114 @@ class TestSilentFailureModes(unittest.TestCase):
         self.assertNotIn("secret-token-abc", client.last_poll_error)
 
 
+class TestCustomTelegramFormat(unittest.TestCase):
+    def _sample_signal_and_settlement(self, outcome: str = charter.WIN):
+        from datetime import datetime, timedelta, timezone
+        from fusion.domain import Settlement, Signal
+
+        entry_t = datetime(2026, 10, 25, 14, 15, tzinfo=timezone.utc)
+        sig = Signal(
+            signal_id="deadbeef12345678",
+            pair="BTC/USD",
+            side="SELL",
+            entry_time=entry_t,
+            expiry_time=entry_t + timedelta(minutes=15),
+            horizon_minutes=15,
+            strategy="fusion_council",
+            reason="Core 5/6 aligned with 15m bear tilt.",
+            source="LIVE",
+            generated_at=entry_t - timedelta(seconds=55),
+            probability_up=0.412,
+            probability_raw=0.425,
+            calibration_state="CALIBRATED",
+            uncertainty=0.031,
+            regime="TREND",
+            council=({"name": "orbix_confluence", "side": "SELL", "score": 5, "weight": 1.0, "reason": "5/6"},),
+            features={},
+            spread_pips=8.0,
+        )
+        stl = Settlement(
+            signal_id=sig.signal_id,
+            outcome=outcome,
+            entry_price=None if outcome == charter.UNRESOLVED else 80450.25,
+            exit_price=None if outcome == charter.UNRESOLVED else 80398.75,
+            gross_pips=None if outcome == charter.UNRESOLVED else 51.5,
+            move_pips=None if outcome == charter.UNRESOLVED else -51.5,
+            net_pips=None if outcome == charter.UNRESOLVED else 43.5,
+            spread_pips=8.0,
+            settled_at=entry_t + timedelta(minutes=15),
+            source="LIVE",
+        )
+        return sig, stl
+
+    def test_six_commands_remain_exact(self):
+        from fusion.telegram import COMMANDS
+        self.assertEqual(COMMANDS, ("/start", "/help", "/signals", "/status", "/pause", "/resume"))
+
+    def test_presets_and_custom_templates_render_safely_without_traversal(self):
+        from fusion.telegram import TelegramFormatConfig, render_result_message, render_signal_message
+
+        sig, stl = self._sample_signal_and_settlement()
+        for style in ("standard", "brief", "tactical", "compact"):
+            out = render_signal_message(sig, TelegramFormatConfig(signal_style=style))
+            self.assertIn("BTC/USD", out)
+            self.assertIn("SELL", out)
+            self.assertIn("paper", out.lower())
+
+        # Attempted attribute traversal or stray braces never raise or leak internals
+        fmt = TelegramFormatConfig(
+            signal_style="custom",
+            signal_template="CALL {pair} {side} core={core_score}/6 {signal.__class__} {0} {unclosed",
+            result_style="custom",
+            result_template="DONE {pair} -> {verdict} net={net_pips}p",
+        )
+        custom_sig = render_signal_message(sig, fmt)
+        self.assertIn("CALL BTC/USD SELL core=5/6", custom_sig)
+        self.assertIn("{signal.__class__}", custom_sig)
+        self.assertIn("Paper — research only", custom_sig)
+
+        custom_res = render_result_message(sig, stl, fmt)
+        self.assertEqual(custom_res, "DONE BTC/USD -> WIN net=+43.5p")
+
+    def test_custom_result_template_never_hides_unresolved_outcome(self):
+        from fusion.telegram import TelegramFormatConfig, render_result_message
+
+        sig, unresolved_stl = self._sample_signal_and_settlement(outcome=charter.UNRESOLVED)
+        fmt = TelegramFormatConfig(
+            result_style="custom",
+            result_template="{pair} {side} entry={entry_price} net={net_pips}",
+        )
+        out = render_result_message(sig, unresolved_stl, fmt)
+        self.assertIn("UNRESOLVED", out)
+        self.assertIn("entry=n/a", out)
+
+    def test_format_persists_across_bot_restarts_via_model_state(self):
+        import tempfile
+        from fusion.config import Config
+        from fusion.runner import FusionBot
+        from fusion.store import LocalStore, Store
+        from fusion.telegram import TelegramFormatConfig
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(local=LocalStore(tmp), supabase=None)
+            bot1 = FusionBot(config=Config(pairs=("EUR/USD", "BTC/USD")), store=store)
+            bot1.startup()
+            bot1.set_telegram_format(
+                TelegramFormatConfig(
+                    signal_style="custom",
+                    signal_template="SEAL {pair} {side} @{entry_hm}Z",
+                    result_style="compact",
+                    apply_to_signals_cmd=True,
+                )
+            )
+
+            bot2 = FusionBot(config=Config(pairs=("EUR/USD", "BTC/USD")), store=store)
+            bot2.startup()
+            self.assertEqual(bot2.telegram_format.signal_style, "custom")
+            self.assertEqual(bot2.telegram_format.result_style, "compact")
+            self.assertTrue(bot2.telegram_format.apply_to_signals_cmd)
+            self.assertEqual(bot2.peer_bots["BTC/USD"].telegram_format.signal_style, "custom")
+
+
 if __name__ == "__main__":
     unittest.main()

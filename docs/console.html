@@ -240,6 +240,7 @@
             <div class="kv"><dt>Owner Chat ID</dt><dd class="mono" id="tg-owner-mask">Not set</dd></div>
             <div class="kv"><dt>Update Offset Cursor</dt><dd class="mono" id="tg-offset">0</dd></div>
             <div class="kv"><dt>Pending Outbox</dt><dd class="mono" id="tg-pending">0</dd></div>
+            <div class="kv"><dt>Output Format</dt><dd class="mono" id="tg-active-style">standard / standard</dd></div>
             <div class="kv"><dt>Delivery Law</dt><dd>SENT recorded only on confirmed message_id</dd></div>
           </dl>
         </div>
@@ -265,6 +266,87 @@
             <span>Also send reply to Telegram chat (requires token)</span>
           </label>
           <pre class="terminal-box mono" id="tg-terminal-output">Select a command above to inspect the live bot response.</pre>
+        </div>
+      </div>
+
+      <div class="panel" id="tg-format-studio-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">CUSTOMISABLE MESSAGE TEMPLATES</p>
+            <h2 class="panel-title">Telegram Output Format Studio</h2>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-sm btn-ghost" id="btn-reset-tg-format">Reset Default</button>
+            <button type="button" class="btn btn-sm btn-primary" id="btn-save-tg-format">Save Output Format</button>
+          </div>
+        </div>
+        <p class="panel-desc">Choose a clean preset or compose your own <span class="mono">{placeholder}</span> layout for live signal dispatches and cost-charged <span class="mono">RESULT</span> settlements. Saved settings persist to runtime state and sync across scheduled runs while keeping all six Telegram commands unchanged.</p>
+
+        <div class="config-grid">
+          <label class="field">
+            <span class="field-label">Signal Dispatch Style</span>
+            <select id="tg-sig-style" class="input mono">
+              <option value="standard">standard — Full Audit (8 lines)</option>
+              <option value="brief">brief — 4-Field Phone Read</option>
+              <option value="tactical">tactical — Structured Desk Seal</option>
+              <option value="compact">compact — Single-Line Ticker</option>
+              <option value="custom">custom — User {placeholder} Template</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Settlement (RESULT) Style</span>
+            <select id="tg-res-style" class="input mono">
+              <option value="standard">standard — Full Ledger Verdict</option>
+              <option value="compact">compact — Single-Line Result</option>
+              <option value="custom">custom — User {placeholder} Template</option>
+            </select>
+          </label>
+
+          <div class="config-block">
+            <span class="field-label">Format Scope &amp; Charter Guard</span>
+            <div class="inline-checks">
+              <label class="check-field">
+                <input type="checkbox" id="tg-apply-cmd">
+                <span>Apply signal style to <span class="mono">/signals</span> command too</span>
+              </label>
+              <label class="check-field">
+                <input type="checkbox" id="tg-paper-footer" checked>
+                <span>Ensure paper-research notice on custom templates</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2 mt-md" id="tg-custom-editors">
+          <div class="fmt-editor-box">
+            <div class="fmt-editor-head">
+              <span class="field-label">Custom Signal Template</span>
+              <span class="mono dim fmt-hint">Click token to insert</span>
+            </div>
+            <div class="token-bar" id="tg-sig-tokens"></div>
+            <textarea id="tg-sig-template" class="input mono fmt-textarea" rows="5" spellcheck="false" placeholder="{pair} {side} ({horizon}m) #{short_id}&#10;Entry: {entry_hm}Z -> Expiry: {expiry_hm}Z&#10;Regime: {regime} | Model: {probability}&#10;Gate: {reason}"></textarea>
+          </div>
+
+          <div class="fmt-editor-box">
+            <div class="fmt-editor-head">
+              <span class="field-label">Custom Settlement (RESULT) Template</span>
+              <span class="mono dim fmt-hint">UNRESOLVED honesty enforced</span>
+            </div>
+            <div class="token-bar" id="tg-res-tokens"></div>
+            <textarea id="tg-res-template" class="input mono fmt-textarea" rows="5" spellcheck="false" placeholder="RESULT {pair} {side} #{short_id} -> {verdict}&#10;Fill: {entry_price} -> {exit_price}&#10;Gross {gross_pips}p | Cost {spread_pips}p | Net {net_pips}p"></textarea>
+          </div>
+        </div>
+
+        <div class="grid-2 mt-md">
+          <div class="preview-pane">
+            <span class="field-label mono">LIVE SIGNAL PREVIEW</span>
+            <pre class="terminal-box mono preview-box" id="tg-preview-signal"></pre>
+          </div>
+          <div class="preview-pane">
+            <span class="field-label mono">LIVE SETTLEMENT (RESULT) PREVIEW</span>
+            <pre class="terminal-box mono preview-box" id="tg-preview-result"></pre>
+          </div>
         </div>
       </div>
 
@@ -301,7 +383,7 @@
       <div class="grid-3">
         <div class="stat-card">
           <span class="stat-label mono">UNIT SUITE</span>
-          <strong class="stat-val mono" id="hl-tests">649</strong>
+          <strong class="stat-val mono" id="hl-tests">665</strong>
           <span class="stat-sub">Passing verification checks</span>
         </div>
         <div class="stat-card">
@@ -388,6 +470,25 @@
               <label class="check-field"><input type="checkbox" id="cfg-news" checked><span>Macro / US NFP Blackout</span></label>
               <label class="check-field"><input type="checkbox" id="cfg-adaptive" checked><span>Adaptive Cost Horizon</span></label>
               <label class="check-field"><input type="checkbox" id="cfg-session"><span>FX Session Filter</span></label>
+              <label class="check-field"><input type="checkbox" id="cfg-rollover" checked><span>FX Friday 21:55Z Rollover Guard</span></label>
+            </div>
+          </div>
+
+          <div class="config-block">
+            <span class="field-label">Drawdown &amp; De-Clustering Protections</span>
+            <div class="inline-checks">
+              <select id="cfg-cooldown" class="input input-sm mono" aria-label="Signal Cooldown">
+                <option value="0">Cooldown: Off (0m)</option>
+                <option value="15" selected>Cooldown: 15m (-73% MDD)</option>
+                <option value="30">Cooldown: 30m</option>
+                <option value="60">Cooldown: 60m</option>
+              </select>
+              <select id="cfg-loss-streak" class="input input-sm mono" aria-label="Stoploss Streak Guard">
+                <option value="0">StoplossGuard: Off</option>
+                <option value="2">2 Losses -&gt; 60m Pause</option>
+                <option value="3" selected>3 Losses -&gt; 60m Pause</option>
+                <option value="4">4 Losses -&gt; 60m Pause</option>
+              </select>
             </div>
           </div>
         </div>
@@ -432,6 +533,13 @@
                 <td class="mono pos">+0.378 pips</td>
                 <td class="mono">55.02%</td>
                 <td class="mono pos">+0.382 pips</td>
+              </tr>
+              <tr>
+                <td><strong>Adaptive-Horizon Label Alignment + Cooldown Guard (80k 2026)</strong></td>
+                <td class="mono">51.30%</td>
+                <td class="mono">-0.910 pips</td>
+                <td class="mono">53.39%</td>
+                <td class="mono">+0.47p lift / -73% MDD</td>
               </tr>
             </tbody>
           </table>

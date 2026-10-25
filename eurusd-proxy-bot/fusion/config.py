@@ -80,6 +80,11 @@ class Config:
     # --- Telegram (owner-only) ---
     telegram_token: str = ""
     telegram_owner_chat_id: str = ""
+    telegram_signal_style: str = "standard"
+    telegram_signal_template: str = ""
+    telegram_result_style: str = "standard"
+    telegram_result_template: str = ""
+    telegram_apply_to_signals_cmd: bool = False
 
     # --- Supabase ---
     supabase_url: str = ""
@@ -188,6 +193,13 @@ class Config:
     min_confluence_checks: int = 5
     min_calibration_points: int = charter.MIN_CALIBRATION_POINTS
 
+    # --- protections (Freqtrade-style guards, opt-in on bare Config()) ---
+    signal_cooldown_minutes: int = 0
+    loss_guard_streak: int = 0
+    loss_guard_lookback_minutes: int = 180
+    loss_guard_cooldown_minutes: int = 60
+    fx_rollover_guard: bool = False
+
     # --- learning ---
     nightly_min_samples: int = 400
     nightly_train_fraction: float = 0.70
@@ -233,6 +245,11 @@ class Config:
             "mtf_minutes": self.mtf_minutes,
             "news_filter": self.news_filter,
             "reward_to_cost": self.reward_to_cost,
+            "signal_cooldown_minutes": self.signal_cooldown_minutes,
+            "loss_guard_streak": self.loss_guard_streak,
+            "fx_rollover_guard": self.fx_rollover_guard,
+            "telegram_signal_style": self.telegram_signal_style,
+            "telegram_result_style": self.telegram_result_style,
             "synthetic_learning_allowed": self.allow_synthetic_learning,
         }
 
@@ -292,6 +309,11 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
     return Config(
         telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_owner_chat_id=os.environ.get("TELEGRAM_OWNER_CHAT_ID", "").strip(),
+        telegram_signal_style=os.environ.get("TELEGRAM_SIGNAL_STYLE", "standard").strip() or "standard",
+        telegram_signal_template=os.environ.get("TELEGRAM_SIGNAL_TEMPLATE", "").replace("\\n", "\n"),
+        telegram_result_style=os.environ.get("TELEGRAM_RESULT_STYLE", "standard").strip() or "standard",
+        telegram_result_template=os.environ.get("TELEGRAM_RESULT_TEMPLATE", "").replace("\\n", "\n"),
+        telegram_apply_to_signals_cmd=_bool("TELEGRAM_APPLY_TO_SIGNALS_CMD", False),
         supabase_url=os.environ.get("SUPABASE_URL", "").strip().rstrip("/"),
         supabase_service_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip(),
         twelve_data_keys=_keys_from_env(),
@@ -318,6 +340,11 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         max_uncertainty=_float("MAX_UNCERTAINTY", 0.10),
         min_confluence_checks=_int("MIN_CONFLUENCE_CHECKS", 5),
         min_calibration_points=_int("MIN_CALIBRATION_POINTS", charter.MIN_CALIBRATION_POINTS),
+        signal_cooldown_minutes=_int("SIGNAL_COOLDOWN_MINUTES", 0),
+        loss_guard_streak=_int("LOSS_GUARD_STREAK", 0),
+        loss_guard_lookback_minutes=_int("LOSS_GUARD_LOOKBACK_MINUTES", 180),
+        loss_guard_cooldown_minutes=_int("LOSS_GUARD_COOLDOWN_MINUTES", 60),
+        fx_rollover_guard=_bool("FX_ROLLOVER_GUARD", False),
         nightly_min_samples=_int("NIGHTLY_MIN_SAMPLES", 400),
         nightly_train_fraction=_float("NIGHTLY_TRAIN_FRACTION", 0.70),
         online_learning_rate=_float("ONLINE_LEARNING_RATE", 0.02),

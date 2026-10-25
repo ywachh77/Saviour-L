@@ -38,6 +38,7 @@ from fusion import (  # noqa: E402
     instruments,
     lookahead,
     mtf,
+    protections,
     regime as regime_mod,
     risk,
     session as session_mod,
@@ -49,14 +50,25 @@ from fusion.domain import Candle, Settlement, Signal, closed_before  # noqa: E40
 from fusion.indicators import atr as calc_atr  # noqa: E402
 from fusion.keypool import MAX_SLOTS, mask_key  # noqa: E402
 from fusion.model import MODE_VETO  # noqa: E402
-from fusion.runner import FusionBot, format_brief_signal, format_signal  # noqa: E402
+from fusion.runner import FusionBot, format_brief_signal, format_result, format_signal  # noqa: E402
 from fusion.simulate import synthetic_series  # noqa: E402
 from fusion.store import LocalStore, Store, SupabaseStore  # noqa: E402
+from fusion.telegram import (  # noqa: E402
+    DEFAULT_CUSTOM_RESULT_TEMPLATE,
+    DEFAULT_CUSTOM_SIGNAL_TEMPLATE,
+    RESULT_PLACEHOLDERS,
+    RESULT_STYLES,
+    SIGNAL_PLACEHOLDERS,
+    SIGNAL_STYLES,
+    TelegramFormatConfig,
+    render_result_message,
+    render_signal_message,
+)
 from fusion.timeutil import floor_minute, format_datetime, minute_bucket, now as utcnow  # noqa: E402
 from scripts.set_keys import normalise_keys  # noqa: E402
 
 MAX_JSON_BODY = 32_768
-TESTS_PASSING_BASELINE = 651
+TESTS_PASSING_BASELINE = 665
 
 SIM_DEFAULTS: dict[str, tuple[float, float, int]] = {
     "EUR/USD": (1.08520, 0.00024, 101),
@@ -309,6 +321,8 @@ class OperatorRuntime:
             "latest_price": round(latest_close, inst.precision),
             "latest_timestamp": latest_ts,
             "atr_pips": round(atr_pips, 2),
+            "ker_10": round(float(latest_feat.get("ker_10", 0.0)), 3) if latest_feat else 0.0,
+            "chop_14": round(float(latest_feat.get("chop_14", 50.0)), 1) if latest_feat else 50.0,
             "regime": reg,
             "mtf_15m": bias_15,
             "session": sess,
@@ -371,6 +385,9 @@ class OperatorRuntime:
                     "session_filter": self.config.session_filter,
                     "horizon_minutes": self.config.horizon_minutes,
                     "min_confluence_checks": self.config.min_confluence_checks,
+                    "signal_cooldown_minutes": self.config.signal_cooldown_minutes,
+                    "loss_guard_streak": self.config.loss_guard_streak,
+                    "fx_rollover_guard": self.config.fx_rollover_guard,
                 },
                 "markets": [self._market_snapshot(m) for m in self._all_members()],
                 "ledger": {
@@ -399,6 +416,8 @@ class OperatorRuntime:
                     "owner_masked": _mask_chat_id(self.config.telegram_owner_chat_id) or ("CLOUD_RUNNER" if tg_offset > 0 else ""),
                     "offset": tg_offset,
                     "outbox_pending": len(self.store.outbox_pending()),
+                    "signal_style": self.bot.telegram_format.signal_style,
+                    "result_style": self.bot.telegram_format.result_style,
                 },
                 "health": {
                     "heartbeat": hb,
@@ -588,8 +607,8 @@ class OperatorRuntime:
                         member.store.local.write("signals", [sig_row])
                     signal_dict = sig.to_dict()
                     signal_dict["entry_display"] = f"{latest_close:,.{inst.precision}f}"
-                    brief_text = format_brief_signal(sig)
-                    full_text = format_signal(sig)
+                    brief_text = format_brief_signal(sig, member.telegram_format)
+                    full_text = format_signal(sig, member.telegram_format)
 
                 votes_list = [v.to_dict() for v in result.council.votes] if result.council else []
                 core_score = result.council.core_score if result.council else 0
@@ -668,6 +687,113 @@ class OperatorRuntime:
                 return {"ok": True, "settled": settled, "message": f"Checked pending queue: {settled} signal(s) settled."}
             raise ValueError(f"Unknown control action: {action}")
 
+    def _sample_signal_and_settlement(self) -> tuple[Signal, Settlement]:
+        entry_t = datetime(2026, 10, 25, 14, 15, tzinfo=timezone.utc)
+        sig = Signal(
+            signal_id="a8f31c90e4b71209",
+            pair="EUR/USD",
+            side="BUY",
+            entry_time=entry_t,
+            expiry_time=entry_t + timedelta(minutes=30),
+            horizon_minutes=30,
+            strategy="fusion_council",
+            reason="Core 5/6: trend, momentum, RSI band, directional ADX, candle quality.",
+            source="LIVE",
+            generated_at=entry_t - timedelta(seconds=58),
+            probability_up=0.584,
+            probability_raw=0.571,
+            calibration_state="CALIBRATED",
+            uncertainty=0.042,
+            regime="TREND",
+            council=({"name": "orbix_confluence", "side": "BUY", "score": 5, "weight": 1.0, "reason": "5/6"},),
+            features={},
+            spread_pips=1.20,
+        )
+        stl = Settlement(
+            signal_id=sig.signal_id,
+            outcome=charter.WIN,
+            entry_price=1.08520,
+            exit_price=1.08890,
+            gross_pips=3.7,
+            move_pips=3.7,
+            net_pips=2.5,
+            spread_pips=1.2,
+            settled_at=entry_t + timedelta(minutes=30),
+            source="LIVE",
+        )
+        return sig, stl
+
+    def telegram_format_payload(self, fmt_override: TelegramFormatConfig | None = None) -> dict[str, Any]:
+        with self.lock:
+            active_fmt = fmt_override or self.bot.telegram_format
+            sample_sig, sample_stl = self._sample_signal_and_settlement()
+            return {
+                "format": active_fmt.to_dict(),
+                "signal_styles": list(SIGNAL_STYLES),
+                "result_styles": list(RESULT_STYLES),
+                "signal_placeholders": list(SIGNAL_PLACEHOLDERS),
+                "result_placeholders": list(RESULT_PLACEHOLDERS),
+                "default_signal_template": DEFAULT_CUSTOM_SIGNAL_TEMPLATE,
+                "default_result_template": DEFAULT_CUSTOM_RESULT_TEMPLATE,
+                "preview": {
+                    "scheduled_signal": render_signal_message(sample_sig, active_fmt, brief=False),
+                    "signals_command": render_signal_message(sample_sig, active_fmt, brief=True),
+                    "settlement_result": render_result_message(sample_sig, sample_stl, active_fmt),
+                },
+            }
+
+    def update_telegram_format(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            if payload.get("reset"):
+                new_fmt = TelegramFormatConfig()
+            else:
+                sig_style = str(payload.get("signal_style", self.bot.telegram_format.signal_style)).strip().lower()
+                res_style = str(payload.get("result_style", self.bot.telegram_format.result_style)).strip().lower()
+                if sig_style not in SIGNAL_STYLES:
+                    raise ValueError(f"Unsupported signal_style {sig_style!r}. Valid: {', '.join(SIGNAL_STYLES)}.")
+                if res_style not in RESULT_STYLES:
+                    raise ValueError(f"Unsupported result_style {res_style!r}. Valid: {', '.join(RESULT_STYLES)}.")
+                new_fmt = TelegramFormatConfig(
+                    signal_style=sig_style,
+                    signal_template=str(payload.get("signal_template", self.bot.telegram_format.signal_template)),
+                    result_style=res_style,
+                    result_template=str(payload.get("result_template", self.bot.telegram_format.result_template)),
+                    apply_to_signals_cmd=bool(
+                        payload.get("apply_to_signals_cmd", self.bot.telegram_format.apply_to_signals_cmd)
+                    ),
+                    append_paper_footer=bool(
+                        payload.get("append_paper_footer", self.bot.telegram_format.append_paper_footer)
+                    ),
+                )
+
+            if payload.get("preview_only"):
+                return {"ok": True, "saved": False, **self.telegram_format_payload(new_fmt)}
+
+            # Persist in bot runtime state (model_state.runtime["telegram_format"]) + local .env
+            self.config.telegram_signal_style = new_fmt.signal_style
+            self.config.telegram_signal_template = new_fmt.signal_template
+            self.config.telegram_result_style = new_fmt.result_style
+            self.config.telegram_result_template = new_fmt.result_template
+            self.config.telegram_apply_to_signals_cmd = new_fmt.apply_to_signals_cmd
+            self.bot.set_telegram_format(new_fmt)
+
+            if self.env_path.is_file():
+                lines = self.env_path.read_text(encoding="utf-8").splitlines()
+                lines = envfile.set_value(lines, "TELEGRAM_SIGNAL_STYLE", new_fmt.signal_style)
+                lines = envfile.set_value(lines, "TELEGRAM_RESULT_STYLE", new_fmt.result_style)
+                lines = envfile.set_value(
+                    lines, "TELEGRAM_APPLY_TO_SIGNALS_CMD", "1" if new_fmt.apply_to_signals_cmd else "0"
+                )
+                lines = envfile.set_value(
+                    lines, "TELEGRAM_SIGNAL_TEMPLATE", new_fmt.signal_template.replace("\n", "\\n")
+                )
+                lines = envfile.set_value(
+                    lines, "TELEGRAM_RESULT_TEMPLATE", new_fmt.result_template.replace("\n", "\\n")
+                )
+                envfile.write(self.env_path, lines)
+
+            return {"ok": True, "saved": True, **self.telegram_format_payload(new_fmt)}
+
     def telegram_payload(self) -> dict[str, Any]:
         with self.lock:
             local_outbox = self.store.local.read("outbox")[-15:][::-1]
@@ -687,6 +813,7 @@ class OperatorRuntime:
                 "commands": ["/start", "/help", "/signals", "/status", "/pause", "/resume"],
                 "pending_count": len(self.store.outbox_pending()),
                 "recent_outbox": local_outbox,
+                "format_studio": self.telegram_format_payload(),
             }
 
     def run_telegram_command(self, command: str, *, send_to_chat: bool = False) -> dict[str, Any]:
@@ -802,6 +929,9 @@ class OperatorRuntime:
                     "max_horizon_minutes": self.config.max_horizon_minutes,
                     "session_filter": self.config.session_filter,
                     "min_confluence_checks": self.config.min_confluence_checks,
+                    "signal_cooldown_minutes": self.config.signal_cooldown_minutes,
+                    "loss_guard_streak": self.config.loss_guard_streak,
+                    "fx_rollover_guard": self.config.fx_rollover_guard,
                 },
                 "members": rows,
                 "benchmark_101k": [
@@ -825,6 +955,13 @@ class OperatorRuntime:
                         "train_net": 0.378,
                         "oos_wr": 55.02,
                         "oos_net": 0.382,
+                    },
+                    {
+                        "variant": "Adaptive-Horizon Label Alignment (80k 2026)",
+                        "train_wr": 51.30,
+                        "train_net": -0.910,
+                        "oos_wr": 53.39,
+                        "oos_net": -0.440,
                     },
                 ],
             }
@@ -859,6 +996,18 @@ class OperatorRuntime:
                 self.config.adaptive_horizon = bool(payload["adaptive_horizon"])
             if "session_filter" in payload:
                 self.config.session_filter = bool(payload["session_filter"])
+            if "fx_rollover_guard" in payload:
+                self.config.fx_rollover_guard = bool(payload["fx_rollover_guard"])
+            if "signal_cooldown_minutes" in payload:
+                cd = int(payload["signal_cooldown_minutes"])
+                if not 0 <= cd <= 240:
+                    raise ValueError("signal_cooldown_minutes must be between 0 and 240.")
+                self.config.signal_cooldown_minutes = cd
+            if "loss_guard_streak" in payload:
+                ls = int(payload["loss_guard_streak"])
+                if not 0 <= ls <= 10:
+                    raise ValueError("loss_guard_streak must be between 0 and 10.")
+                self.config.loss_guard_streak = ls
             if "max_horizon_minutes" in payload:
                 mh = int(payload["max_horizon_minutes"])
                 if not 5 <= mh <= 240:
@@ -867,12 +1016,14 @@ class OperatorRuntime:
 
             # Rebuild peer bots & engines cleanly with the updated runtime gates.
             paused_before = self.bot.paused
+            fmt_before = self.bot.telegram_format
             self.bot = FusionBot(config=self.config, store=self.store)
             self.bot.startup()
             self._synced_pairs = {
                 m.config.pair for m in self._all_members() if len(m.candles) >= 60
             }
             self.bot._set_paused(paused_before)
+            self.bot.set_telegram_format(fmt_before)
             self._ensure_paper_candles_if_offline()
             return {"ok": True, "strategies": self.strategies_payload()}
 
@@ -1040,6 +1191,10 @@ def make_handler(runtime: OperatorRuntime):
                 self._send_json(runtime.telegram_payload())
                 return
 
+            if route == "/api/telegram/format":
+                self._send_json(runtime.telegram_format_payload())
+                return
+
             if route == "/api/health":
                 self._send_json(runtime.health_payload(run_live_audit=False))
                 return
@@ -1118,6 +1273,10 @@ def make_handler(runtime: OperatorRuntime):
                             send_to_chat=bool(body.get("send_to_chat", False)),
                         )
                     )
+                    return
+
+                if route == "/api/telegram/format":
+                    self._send_json(runtime.update_telegram_format(body))
                     return
 
                 if route == "/api/audit":

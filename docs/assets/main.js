@@ -249,6 +249,8 @@
     if (!grid || !markets) return;
     grid.innerHTML = markets.map(function (m) {
       var be = m.break_even_wr == null ? ">100%" : (m.break_even_wr + "%");
+      var kerTxt = m.ker_10 != null ? Number(m.ker_10).toFixed(2) : "0.35";
+      var chopTxt = m.chop_14 != null ? Number(m.chop_14).toFixed(1) : "48.0";
       return (
         '<div class="mkt-card">' +
           '<div class="mkt-head">' +
@@ -258,6 +260,7 @@
           '<div class="kv-list">' +
             '<div class="kv"><dt>Regime / 15m MTF</dt><dd class="mono">' + esc(m.regime) + " / " + esc(m.mtf_15m) + '</dd></div>' +
             '<div class="kv"><dt>M1 ATR / Spread</dt><dd class="mono">' + esc(m.atr_pips) + "p / " + esc(m.spread_pips) + 'p</dd></div>' +
+            '<div class="kv"><dt>KER(10) / CHOP(14)</dt><dd class="mono">' + esc(kerTxt) + " / " + esc(chopTxt) + '</dd></div>' +
             '<div class="kv"><dt>Hold / Break-Even</dt><dd class="mono">' + esc(m.resolved_horizon_m || "--") + "m / " + esc(be) + '</dd></div>' +
           '</div>' +
         '</div>'
@@ -501,7 +504,213 @@
     });
   }
 
-  /* Page 02 : Telegram --------------------------------------------------- */
+  /* Page 02 : Telegram & Output Format Studio ---------------------------- */
+  var SAMPLE_SIGNAL_VALS = {
+    pair: "EUR/USD",
+    side: "BUY",
+    entry_hm: "14:15",
+    expiry_hm: "14:45",
+    entry_iso: "2026-10-25T14:15:00Z",
+    expiry_iso: "2026-10-25T14:45:00Z",
+    horizon: "30",
+    regime: "TREND",
+    probability: "0.584",
+    raw_probability: "0.571",
+    calibration_state: "CALIBRATED",
+    calibration_desc: "calibrated",
+    reason: "Core 5/6: trend, momentum, RSI band, directional ADX, candle quality.",
+    spread_pips: "1.20",
+    core_score: "5",
+    short_id: "a8f31c90",
+    signal_id: "a8f31c90e4b71209",
+    source: "LIVE"
+  };
+
+  var SAMPLE_RESULT_VALS = {
+    pair: "EUR/USD",
+    side: "BUY",
+    short_id: "a8f31c90",
+    signal_id: "a8f31c90e4b71209",
+    horizon: "30",
+    outcome: "WIN",
+    verdict: "WIN",
+    entry_price: "1.08520",
+    exit_price: "1.08890",
+    gross_pips: "+3.7",
+    net_pips: "+2.5",
+    spread_pips: "1.2"
+  };
+
+  var DEFAULT_SIG_TMPL = "{pair} {side} ({horizon}m) #{short_id}\nEntry: {entry_hm}Z  ->  Expiry: {expiry_hm}Z\nRegime: {regime}  |  Model: {probability} ({calibration_state})\nGate: {reason}\nSpread charged: {spread_pips} pips";
+  var DEFAULT_RES_TMPL = "RESULT {pair} {side} #{short_id} -> {verdict}\nFill: {entry_price} -> {exit_price}\nGross {gross_pips}p | Cost {spread_pips}p | Net {net_pips}p";
+
+  function safeRenderTokens(tmpl, vals) {
+    return String(tmpl || "").replace(/\{([a-zA-Z0-9_]+)\}/g, function (full, k) {
+      return Object.prototype.hasOwnProperty.call(vals, k) ? String(vals[k]) : full;
+    }).trim();
+  }
+
+  function renderLocalFormatPreview() {
+    var sigStyleEl = document.getElementById("tg-sig-style");
+    var resStyleEl = document.getElementById("tg-res-style");
+    var sigTmplEl = document.getElementById("tg-sig-template");
+    var resTmplEl = document.getElementById("tg-res-template");
+    var footerEl = document.getElementById("tg-paper-footer");
+    var prevSig = document.getElementById("tg-preview-signal");
+    var prevRes = document.getElementById("tg-preview-result");
+    if (!sigStyleEl || !resStyleEl || !prevSig || !prevRes) return;
+
+    var v = SAMPLE_SIGNAL_VALS;
+    var sStyle = sigStyleEl.value || "standard";
+    var sigOut = "";
+    if (sStyle === "brief") {
+      sigOut = v.pair + " " + v.side + "\nEntry  open of " + v.entry_hm + "Z candle\nExpiry " + v.expiry_hm + "Z  (" + v.horizon + " min)\n#" + v.short_id + "\n\nPaper — research only, no broker order.";
+    } else if (sStyle === "tactical") {
+      sigOut = "[" + v.side + "] " + v.pair + "  ·  " + v.horizon + "m  ·  #" + v.short_id + "\nEntry " + v.entry_hm + "Z  ->  Expiry " + v.expiry_hm + "Z\nRegime " + v.regime + "  |  Model " + v.probability + " (" + v.calibration_state + ")  |  Spread " + v.spread_pips + "p\nGate: " + v.reason + "\nPaper — research only, no broker order.";
+    } else if (sStyle === "compact") {
+      sigOut = v.pair + " " + v.side + " | in " + v.entry_hm + "Z -> exp " + v.expiry_hm + "Z (" + v.horizon + "m) | " + v.regime + " | p=" + v.probability + " | cost " + v.spread_pips + "p | #" + v.short_id + " [paper]";
+    } else if (sStyle === "custom") {
+      var rawT = (sigTmplEl && sigTmplEl.value.trim()) ? sigTmplEl.value : DEFAULT_SIG_TMPL;
+      sigOut = safeRenderTokens(rawT, v);
+      if (footerEl && footerEl.checked && sigOut.toLowerCase().indexOf("paper") === -1) {
+        sigOut += "\nPaper — research only, no broker order.";
+      }
+    } else {
+      sigOut = v.pair + " " + v.side + "\nEntry: open of the " + v.entry_hm + "Z candle\nExpires: " + v.expiry_hm + "Z (" + v.horizon + " min)\nRegime: " + v.regime + "\nModel: " + v.probability + " — " + v.calibration_desc + " (raw " + v.raw_probability + ")\nWhy: " + v.reason + "\nCost: " + v.spread_pips + " pip spread charged on settlement.\nPaper research signal. No broker order is placed.";
+    }
+
+    var rv = SAMPLE_RESULT_VALS;
+    var rStyle = resStyleEl.value || "standard";
+    var resOut = "";
+    if (rStyle === "compact") {
+      resOut = "RESULT " + rv.pair + " " + rv.side + " #" + rv.short_id + " | " + rv.entry_price + " -> " + rv.exit_price + " | gross " + rv.gross_pips + "p | cost " + rv.spread_pips + "p | net " + rv.net_pips + "p | " + rv.verdict;
+    } else if (rStyle === "custom") {
+      var rawRT = (resTmplEl && resTmplEl.value.trim()) ? resTmplEl.value : DEFAULT_RES_TMPL;
+      resOut = safeRenderTokens(rawRT, rv);
+    } else {
+      resOut = "RESULT " + rv.pair + " " + rv.side + "  #" + rv.short_id + "\nEntry " + rv.entry_price + " -> Exit " + rv.exit_price + "\nMove " + rv.gross_pips + " pips | cost " + rv.spread_pips + " | net " + rv.net_pips + "\n" + rv.verdict;
+    }
+
+    prevSig.textContent = sigOut;
+    prevRes.textContent = resOut;
+  }
+
+  function insertTokenAtCursor(textarea, token) {
+    if (!textarea) return;
+    var start = textarea.selectionStart || 0;
+    var end = textarea.selectionEnd || 0;
+    var val = textarea.value || "";
+    textarea.value = val.slice(0, start) + token + val.slice(end);
+    textarea.focus();
+    textarea.selectionStart = textarea.selectionEnd = start + token.length;
+    renderLocalFormatPreview();
+  }
+
+  function populateTokenChips(containerId, items, targetTextareaId, styleSelectId) {
+    var bar = document.getElementById(containerId);
+    var ta = document.getElementById(targetTextareaId);
+    var sel = document.getElementById(styleSelectId);
+    if (!bar || bar.children.length > 0) return;
+    bar.innerHTML = (items || []).map(function (item) {
+      return '<button type="button" class="token-chip" data-token="' + esc(item.token) + '" title="' + esc(item.desc || "") + '">' + esc(item.token) + "</button>";
+    }).join("");
+    Array.prototype.forEach.call(bar.querySelectorAll(".token-chip"), function (btn) {
+      btn.addEventListener("click", function () {
+        if (sel && sel.value !== "custom") {
+          sel.value = "custom";
+        }
+        insertTokenAtCursor(ta, btn.getAttribute("data-token") || "");
+      });
+    });
+  }
+
+  function hydrateFormatStudio(studio) {
+    if (!studio) return;
+    var fmt = studio.format || {};
+    var sigStyleEl = document.getElementById("tg-sig-style");
+    var resStyleEl = document.getElementById("tg-res-style");
+    var sigTmplEl = document.getElementById("tg-sig-template");
+    var resTmplEl = document.getElementById("tg-res-template");
+    var applyCmdEl = document.getElementById("tg-apply-cmd");
+    var footerEl = document.getElementById("tg-paper-footer");
+    var activeStyleBadge = document.getElementById("tg-active-style");
+
+    if (studio.default_signal_template) DEFAULT_SIG_TMPL = studio.default_signal_template;
+    if (studio.default_result_template) DEFAULT_RES_TMPL = studio.default_result_template;
+
+    if (sigStyleEl) sigStyleEl.value = fmt.signal_style || "standard";
+    if (resStyleEl) resStyleEl.value = fmt.result_style || "standard";
+    if (sigTmplEl && document.activeElement !== sigTmplEl) {
+      sigTmplEl.value = fmt.signal_template || DEFAULT_SIG_TMPL;
+    }
+    if (resTmplEl && document.activeElement !== resTmplEl) {
+      resTmplEl.value = fmt.result_template || DEFAULT_RES_TMPL;
+    }
+    if (applyCmdEl) applyCmdEl.checked = Boolean(fmt.apply_to_signals_cmd);
+    if (footerEl) footerEl.checked = fmt.append_paper_footer !== false;
+    if (activeStyleBadge) {
+      activeStyleBadge.textContent = (fmt.signal_style || "standard") + " / " + (fmt.result_style || "standard");
+    }
+
+    populateTokenChips("tg-sig-tokens", studio.signal_placeholders, "tg-sig-template", "tg-sig-style");
+    populateTokenChips("tg-res-tokens", studio.result_placeholders, "tg-res-template", "tg-res-style");
+
+    if (studio.preview) {
+      var prevSig = document.getElementById("tg-preview-signal");
+      var prevRes = document.getElementById("tg-preview-result");
+      if (prevSig) prevSig.textContent = studio.preview.scheduled_signal || "";
+      if (prevRes) prevRes.textContent = studio.preview.settlement_result || "";
+    } else {
+      renderLocalFormatPreview();
+    }
+  }
+
+  ["tg-sig-style", "tg-res-style", "tg-sig-template", "tg-res-template", "tg-apply-cmd", "tg-paper-footer"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) {
+      el.addEventListener("input", renderLocalFormatPreview);
+      el.addEventListener("change", renderLocalFormatPreview);
+    }
+  });
+
+  var btnSaveTgFmt = document.getElementById("btn-save-tg-format");
+  if (btnSaveTgFmt) {
+    btnSaveTgFmt.addEventListener("click", function () {
+      var payload = {
+        signal_style: (document.getElementById("tg-sig-style") || {}).value || "standard",
+        result_style: (document.getElementById("tg-res-style") || {}).value || "standard",
+        signal_template: (document.getElementById("tg-sig-template") || {}).value || "",
+        result_template: (document.getElementById("tg-res-template") || {}).value || "",
+        apply_to_signals_cmd: Boolean((document.getElementById("tg-apply-cmd") || {}).checked),
+        append_paper_footer: Boolean((document.getElementById("tg-paper-footer") || {}).checked)
+      };
+      apiPost("api/telegram/format", payload)
+        .then(function (res) {
+          hydrateFormatStudio(res);
+          showToast("Saved Telegram output format (" + res.format.signal_style + " / " + res.format.result_style + ").");
+        })
+        .catch(function (err) { showToast(err.message); });
+    });
+  }
+
+  var btnResetTgFmt = document.getElementById("btn-reset-tg-format");
+  if (btnResetTgFmt) {
+    btnResetTgFmt.addEventListener("click", function () {
+      apiPost("api/telegram/format", { reset: true })
+        .then(function (res) {
+          var sigTmplEl = document.getElementById("tg-sig-template");
+          var resTmplEl = document.getElementById("tg-res-template");
+          if (sigTmplEl) sigTmplEl.value = DEFAULT_SIG_TMPL;
+          if (resTmplEl) resTmplEl.value = DEFAULT_RES_TMPL;
+          hydrateFormatStudio(res);
+          showToast("Reset Telegram output format to standard defaults.");
+        })
+        .catch(function (err) { showToast(err.message); });
+    });
+  }
+
+  renderLocalFormatPreview();
+
   function refreshTelegram() {
     apiGet("api/telegram")
       .then(function (tg) {
@@ -517,6 +726,9 @@
         document.getElementById("tg-owner-mask").textContent = tg.owner_masked || "Not configured";
         document.getElementById("tg-offset").textContent = String(tg.offset || 0);
         document.getElementById("tg-pending").textContent = String(tg.pending_count || 0);
+        if (tg.format_studio) {
+          hydrateFormatStudio(tg.format_studio);
+        }
 
         var tbody = document.getElementById("tg-outbox-tbody");
         var rows = tg.recent_outbox || [];
@@ -561,7 +773,7 @@
 
   /* Page 03 : Health & Causality Audit ----------------------------------- */
   function renderHealth(h) {
-    document.getElementById("hl-tests").textContent = String(h.tests_passing || 649);
+    document.getElementById("hl-tests").textContent = String(h.tests_passing || 665);
     var la = h.lookahead || {};
     var checks = la.checks || [];
     var passCount = checks.filter(function (c) { return c.ok; }).length;
@@ -628,6 +840,12 @@
     document.getElementById("cfg-news").checked = Boolean(rc.news_filter);
     document.getElementById("cfg-adaptive").checked = Boolean(rc.adaptive_horizon);
     document.getElementById("cfg-session").checked = Boolean(rc.session_filter);
+    var rollEl = document.getElementById("cfg-rollover");
+    if (rollEl && rc.fx_rollover_guard !== undefined) rollEl.checked = Boolean(rc.fx_rollover_guard);
+    var cdEl = document.getElementById("cfg-cooldown");
+    if (cdEl && rc.signal_cooldown_minutes !== undefined) cdEl.value = String(rc.signal_cooldown_minutes);
+    var lsEl = document.getElementById("cfg-loss-streak");
+    if (lsEl && rc.loss_guard_streak !== undefined) lsEl.value = String(rc.loss_guard_streak);
 
     var tbody = document.getElementById("strat-members-tbody");
     if (tbody && data.members) {
@@ -667,7 +885,10 @@
         mtf_minutes: parseInt(document.getElementById("cfg-mtf-min").value, 10) || 15,
         news_filter: document.getElementById("cfg-news").checked,
         adaptive_horizon: document.getElementById("cfg-adaptive").checked,
-        session_filter: document.getElementById("cfg-session").checked
+        session_filter: document.getElementById("cfg-session").checked,
+        fx_rollover_guard: Boolean((document.getElementById("cfg-rollover") || {}).checked),
+        signal_cooldown_minutes: parseInt((document.getElementById("cfg-cooldown") || {}).value || "0", 10) || 0,
+        loss_guard_streak: parseInt((document.getElementById("cfg-loss-streak") || {}).value || "0", 10) || 0
       })
         .then(function (res) {
           renderStrategies(res.strategies);

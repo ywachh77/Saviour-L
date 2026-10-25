@@ -1836,6 +1836,76 @@ body.is-unleashing .fuin-flash {
   }
 }
 
+/* Telegram Output Format Studio */
+.btn-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.fmt-editor-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.fmt-editor-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.fmt-hint {
+  font-size: 0.68rem;
+}
+
+.token-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.32rem;
+}
+
+.token-chip {
+  appearance: none;
+  background: var(--ink-3);
+  border: 1px solid var(--line-hi);
+  color: var(--bone-2);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  padding: 0.16rem 0.45rem;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.token-chip:hover,
+.token-chip:focus-visible {
+  border-color: var(--seal);
+  color: var(--bone);
+  background: rgba(168, 28, 36, 0.14);
+  outline: none;
+}
+
+.fmt-textarea {
+  min-height: 7.4rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.preview-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.preview-box {
+  min-height: 7.8rem;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Sequence
 
 from . import charter, instruments, stats
@@ -39,6 +40,7 @@ from .timeutil import add_minutes, format_datetime, now
 MIN_WALK_FORWARD_FOLDS = 3
 PROMOTION_MIN_ACCURACY = 0.505  # direction, barely better than a coin
 PROMOTION_MIN_SKILL = 0.0  # Brier better than a 0.50 base rate
+MAX_WALK_FORWARD_TRAIN = 12_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +74,8 @@ def build_training_samples(
         exit_index = index + int(horizon)
         if exit_index >= len(candles):
             break
+        if (candles[exit_index].timestamp - candles[entry_index].timestamp) > timedelta(minutes=int(horizon) + 5):
+            continue
         entry_price = candles[entry_index].open
         exit_price = candles[exit_index].close
         gross_pips = (exit_price - entry_price) / pip
@@ -199,17 +203,17 @@ class WalkForwardReport:
         }
 
 
-def _folds(samples: Sequence[Sample], folds: int) -> list[tuple[list[Sample], list[Sample]]]:
+def _folds(samples: Sequence[Sample], folds: int, purge: int = 0) -> list[tuple[list[Sample], list[Sample]]]:
     size = len(samples)
     folds = max(MIN_WALK_FORWARD_FOLDS, min(folds, 6))
     if size < folds * 40:
         return []
     boundaries = [int(round(size * (index + 1) / (folds + 1))) for index in range(folds)]
     result = []
-    start = 0
+    purge_bars = max(0, int(purge))
     for end in boundaries:
-        result.append((list(samples[:end]), list(samples[end : min(size, end + (size // (folds + 1)))])))
-        start = end
+        train_end = max(0, end - purge_bars)
+        result.append((list(samples[:train_end]), list(samples[end : min(size, end + (size // (folds + 1)))])))
     return [(train, test) for train, test in result if train and test]
 
 
@@ -220,6 +224,7 @@ def walk_forward(
     folds: int = 5,
     champion: OnlineLogisticModel | None = None,
     min_samples: int = 400,
+    purge: int = 0,
 ) -> WalkForwardReport:
     """Expanding-window walk-forward. Every evaluation point is out-of-sample."""
     report = WalkForwardReport(samples=len(samples))
@@ -230,7 +235,7 @@ def walk_forward(
         )
         return report
 
-    splits = _folds(samples, folds)
+    splits = _folds(samples, folds, purge=purge)
     if not splits:
         report.reason = "Not enough labelled bars to build walk-forward folds."
         return report
@@ -242,8 +247,9 @@ def walk_forward(
     champion_points: list[tuple[float, int]] = []
 
     for train, test in splits:
+        fit_slice = train[-MAX_WALK_FORWARD_TRAIN:] if len(train) > MAX_WALK_FORWARD_TRAIN else train
         try:
-            model = OnlineLogisticModel().fit([item.to_pair() for item in train], epochs=90, validation_fraction=0.0)
+            model = OnlineLogisticModel().fit([item.to_pair() for item in fit_slice], epochs=90, validation_fraction=0.0)
         except ValueError:
             continue
         for sample in test:
@@ -474,9 +480,10 @@ def run_nightly(
 ) -> tuple[OnlineLogisticModel | None, BootstrapEnsemble, WalkForwardReport]:
     """Full nightly job: walk-forward, promote or keep, refit calibration."""
     instrument = instruments.for_symbol(getattr(config, "pair", None))
+    rep_horizon = _representative_horizon(candles, config)
     samples = build_training_samples(
         candles,
-        horizon=_representative_horizon(candles, config),
+        horizon=rep_horizon,
         instrument=instrument,
     )
     report = walk_forward(
@@ -484,6 +491,7 @@ def run_nightly(
         spread_pips=config.spread_pips,
         champion=champion,
         min_samples=config.nightly_min_samples,
+        purge=rep_horizon,
     )
 
     should_rollback, rollback_reason = rollback_check(

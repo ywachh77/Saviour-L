@@ -14,14 +14,16 @@ successful HTTP request alone.
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
-from . import charter
+from . import charter, instruments
+from .domain import Signal
 
 COMMANDS = ("/start", "/help", "/signals", "/status", "/pause", "/resume")
 
@@ -284,3 +286,307 @@ class OutboxItem:
             created_at=str(payload.get("created_at", "")),
             last_error=str(payload.get("last_error", "")),
         )
+
+
+# ------------------------------------------------------------------ formatting
+SIGNAL_STYLES = ("standard", "brief", "tactical", "compact", "custom")
+RESULT_STYLES = ("standard", "compact", "custom")
+
+DEFAULT_CUSTOM_SIGNAL_TEMPLATE = (
+    "{pair} {side} ({horizon}m) #{short_id}\n"
+    "Entry: {entry_hm}Z  ->  Expiry: {expiry_hm}Z\n"
+    "Regime: {regime}  |  Model: {probability} ({calibration_state})\n"
+    "Gate: {reason}\n"
+    "Spread charged: {spread_pips} pips"
+)
+
+DEFAULT_CUSTOM_RESULT_TEMPLATE = (
+    "RESULT {pair} {side} #{short_id} -> {verdict}\n"
+    "Fill: {entry_price} -> {exit_price}\n"
+    "Gross {gross_pips}p | Cost {spread_pips}p | Net {net_pips}p"
+)
+
+SIGNAL_PLACEHOLDERS: tuple[dict[str, str], ...] = (
+    {"token": "{pair}", "desc": "Instrument symbol (EUR/USD, BTC/USD, ETH/USD)"},
+    {"token": "{side}", "desc": "Direction (BUY or SELL)"},
+    {"token": "{entry_hm}", "desc": "UTC entry candle HH:MM"},
+    {"token": "{expiry_hm}", "desc": "UTC expiry candle HH:MM"},
+    {"token": "{horizon}", "desc": "Hold duration in minutes"},
+    {"token": "{regime}", "desc": "Market regime (TREND, RANGE, VOLATILE)"},
+    {"token": "{probability}", "desc": "Calibrated/raw upward probability or n/a"},
+    {"token": "{raw_probability}", "desc": "Raw logistic upward score or n/a"},
+    {"token": "{calibration_state}", "desc": "RAW, CALIBRATED, or FLAT"},
+    {"token": "{reason}", "desc": "Transparent council rule explanation"},
+    {"token": "{spread_pips}", "desc": "Assumed round-turn spread in pips"},
+    {"token": "{core_score}", "desc": "Core confluence checks passed (0-6)"},
+    {"token": "{short_id}", "desc": "8-char signal identifier"},
+    {"token": "{source}", "desc": "Feed source tag"},
+)
+
+RESULT_PLACEHOLDERS: tuple[dict[str, str], ...] = (
+    {"token": "{pair}", "desc": "Instrument symbol"},
+    {"token": "{side}", "desc": "Signal direction"},
+    {"token": "{verdict}", "desc": "WIN, LOSS, TIED, or UNRESOLVED"},
+    {"token": "{outcome}", "desc": "Ledger outcome constant"},
+    {"token": "{entry_price}", "desc": "Realised entry candle open or n/a"},
+    {"token": "{exit_price}", "desc": "Realised exit candle close or n/a"},
+    {"token": "{gross_pips}", "desc": "Signed gross move in pips or n/a"},
+    {"token": "{net_pips}", "desc": "Signed net move after spread or n/a"},
+    {"token": "{spread_pips}", "desc": "Round-turn spread charged"},
+    {"token": "{horizon}", "desc": "Hold duration in minutes"},
+    {"token": "{short_id}", "desc": "8-char signal identifier"},
+)
+
+_TOKEN_RE = re.compile(r"\{([a-zA-Z0-9_]+)\}")
+_MAX_TEMPLATE_CHARS = 1600
+
+
+def safe_render_template(template: str, values: Mapping[str, Any]) -> str:
+    """Substitute ``{identifier}`` placeholders without ``str.format`` traversal.
+
+    Attribute access (``{a.__class__}``), index lookups (``{0}``), and stray
+    braces are left untouched so user-supplied templates can never raise
+    formatting exceptions or inspect Python internals.
+    """
+    clean = str(template or "")[:_MAX_TEMPLATE_CHARS]
+
+    def _replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key in values:
+            return str(values[key])
+        return match.group(0)
+
+    return _TOKEN_RE.sub(_replace, clean).strip()
+
+
+@dataclass
+class TelegramFormatConfig:
+    signal_style: str = "standard"
+    signal_template: str = ""
+    result_style: str = "standard"
+    result_template: str = ""
+    apply_to_signals_cmd: bool = False
+    append_paper_footer: bool = True
+
+    def __post_init__(self) -> None:
+        s_style = str(self.signal_style or "standard").strip().lower()
+        r_style = str(self.result_style or "standard").strip().lower()
+        self.signal_style = s_style if s_style in SIGNAL_STYLES else "standard"
+        self.result_style = r_style if r_style in RESULT_STYLES else "standard"
+        self.signal_template = str(self.signal_template or "").replace("\r\n", "\n")[:_MAX_TEMPLATE_CHARS]
+        self.result_template = str(self.result_template or "").replace("\r\n", "\n")[:_MAX_TEMPLATE_CHARS]
+        self.apply_to_signals_cmd = bool(self.apply_to_signals_cmd)
+        self.append_paper_footer = bool(self.append_paper_footer)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "signal_style": self.signal_style,
+            "signal_template": self.signal_template,
+            "result_style": self.result_style,
+            "result_template": self.result_template,
+            "apply_to_signals_cmd": self.apply_to_signals_cmd,
+            "append_paper_footer": self.append_paper_footer,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any] | None) -> "TelegramFormatConfig":
+        if not isinstance(payload, Mapping):
+            return cls()
+        return cls(
+            signal_style=str(payload.get("signal_style") or "standard"),
+            signal_template=str(payload.get("signal_template") or ""),
+            result_style=str(payload.get("result_style") or "standard"),
+            result_template=str(payload.get("result_template") or ""),
+            apply_to_signals_cmd=bool(payload.get("apply_to_signals_cmd", False)),
+            append_paper_footer=bool(payload.get("append_paper_footer", True)),
+        )
+
+
+def signal_template_values(signal: Signal) -> dict[str, str]:
+    probability = "n/a" if signal.probability_up is None else f"{signal.probability_up:.3f}"
+    raw = "n/a" if signal.probability_raw is None else f"{signal.probability_raw:.3f}"
+    cal_map = {
+        "RAW": "raw (not enough outcomes to calibrate yet)",
+        "CALIBRATED": "calibrated",
+        "FLAT": "flat — abstained, never sent",
+    }
+    core_val = "n/a"
+    for vote in getattr(signal, "council", ()) or ():
+        if isinstance(vote, Mapping) and vote.get("name") == "orbix_confluence":
+            core_val = str(vote.get("score", 0))
+            break
+    return {
+        "pair": signal.pair,
+        "side": signal.side,
+        "entry_hm": signal.entry_time.strftime("%H:%M"),
+        "expiry_hm": signal.expiry_time.strftime("%H:%M"),
+        "entry_iso": signal.entry_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "expiry_iso": signal.expiry_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "horizon": str(signal.horizon_minutes),
+        "regime": signal.regime,
+        "probability": probability,
+        "raw_probability": raw,
+        "calibration_state": signal.calibration_state,
+        "calibration_desc": cal_map.get(signal.calibration_state, signal.calibration_state),
+        "reason": signal.reason,
+        "spread_pips": f"{signal.spread_pips:.2f}",
+        "core_score": core_val,
+        "short_id": signal.signal_id[:8],
+        "signal_id": signal.signal_id,
+        "source": signal.source,
+    }
+
+
+def render_signal_message(
+    signal: Signal,
+    fmt: TelegramFormatConfig | None = None,
+    *,
+    brief: bool = False,
+) -> str:
+    """Format a sealed signal according to the active preset or custom template."""
+    cfg = fmt or TelegramFormatConfig()
+    vals = signal_template_values(signal)
+
+    if brief and not cfg.apply_to_signals_cmd:
+        style = "brief"
+    else:
+        style = cfg.signal_style
+
+    if style == "brief":
+        return "\n".join(
+            [
+                f"{vals['pair']} {vals['side']}",
+                f"Entry  open of {vals['entry_hm']}Z candle",
+                f"Expiry {vals['expiry_hm']}Z  ({vals['horizon']} min)",
+                f"#{vals['short_id']}",
+                "",
+                "Paper — research only, no broker order.",
+            ]
+        )
+
+    if style == "tactical":
+        return "\n".join(
+            [
+                f"[{vals['side']}] {vals['pair']}  ·  {vals['horizon']}m  ·  #{vals['short_id']}",
+                f"Entry {vals['entry_hm']}Z  ->  Expiry {vals['expiry_hm']}Z",
+                f"Regime {vals['regime']}  |  Model {vals['probability']} ({vals['calibration_state']})  |  Spread {vals['spread_pips']}p",
+                f"Gate: {vals['reason']}",
+                "Paper — research only, no broker order.",
+            ]
+        )
+
+    if style == "compact":
+        return (
+            f"{vals['pair']} {vals['side']} | in {vals['entry_hm']}Z -> exp {vals['expiry_hm']}Z ({vals['horizon']}m) "
+            f"| {vals['regime']} | p={vals['probability']} | cost {vals['spread_pips']}p | #{vals['short_id']} [paper]"
+        )
+
+    if style == "custom":
+        tmpl = cfg.signal_template.strip() or DEFAULT_CUSTOM_SIGNAL_TEMPLATE
+        rendered = safe_render_template(tmpl, vals)
+        if cfg.append_paper_footer and "paper" not in rendered.lower():
+            rendered = f"{rendered}\nPaper — research only, no broker order."
+        return rendered[:3800]
+
+    # Default "standard" — byte-identical to original format_signal(signal)
+    return "\n".join(
+        [
+            f"{vals['pair']} {vals['side']}",
+            f"Entry: open of the {vals['entry_hm']}Z candle",
+            f"Expires: {vals['expiry_hm']}Z ({vals['horizon']} min)",
+            f"Regime: {vals['regime']}",
+            f"Model: {vals['probability']} — {vals['calibration_desc']} (raw {vals['raw_probability']})",
+            f"Why: {vals['reason']}",
+            f"Cost: {vals['spread_pips']} pip spread charged on settlement.",
+            "Paper research signal. No broker order is placed.",
+        ]
+    )
+
+
+def render_result_message(
+    signal: Signal,
+    settlement: Any,
+    fmt: TelegramFormatConfig | None = None,
+) -> str:
+    """Format a cost-charged settlement result while enforcing UNRESOLVED honesty."""
+    cfg = fmt or TelegramFormatConfig()
+    precision = instruments.for_symbol(signal.pair).precision
+    short_id = signal.signal_id[:8]
+    header = f"RESULT {signal.pair} {signal.side}  #{short_id}"
+    outcome = str(getattr(settlement, "outcome", charter.UNRESOLVED))
+
+    entry_px = getattr(settlement, "entry_price", None)
+    exit_px = getattr(settlement, "exit_price", None)
+    gross_val = getattr(settlement, "gross_pips", None)
+    net_val = getattr(settlement, "net_pips", None)
+    spread_val = float(getattr(settlement, "spread_pips", signal.spread_pips) or 0.0)
+
+    if outcome == charter.UNRESOLVED:
+        verdict = "UNRESOLVED"
+    elif outcome == charter.TIED:
+        verdict = "TIED"
+    elif outcome == charter.WIN:
+        verdict = "WIN"
+    else:
+        verdict = "LOSS"
+
+    vals = {
+        "pair": signal.pair,
+        "side": signal.side,
+        "short_id": short_id,
+        "signal_id": signal.signal_id,
+        "horizon": str(signal.horizon_minutes),
+        "outcome": outcome,
+        "verdict": verdict,
+        "entry_price": "n/a" if entry_px is None else f"{float(entry_px):,.{precision}f}",
+        "exit_price": "n/a" if exit_px is None else f"{float(exit_px):,.{precision}f}",
+        "gross_pips": "n/a" if gross_val is None else f"{float(gross_val):+.1f}",
+        "net_pips": "n/a" if net_val is None else f"{float(net_val):+.1f}",
+        "spread_pips": f"{spread_val:.1f}",
+    }
+
+    style = cfg.result_style
+
+    if style == "compact":
+        if outcome == charter.UNRESOLVED:
+            return f"RESULT {vals['pair']} {vals['side']} #{short_id} | UNRESOLVED — price data never arrived (no result claimed)"
+        if outcome == charter.TIED:
+            return f"RESULT {vals['pair']} {vals['side']} #{short_id} | {vals['entry_price']} -> {vals['exit_price']} | TIED"
+        return (
+            f"RESULT {vals['pair']} {vals['side']} #{short_id} | {vals['entry_price']} -> {vals['exit_price']} "
+            f"| gross {vals['gross_pips']}p | cost {vals['spread_pips']}p | net {vals['net_pips']}p | {verdict}"
+        )
+
+    if style == "custom":
+        tmpl = cfg.result_template.strip() or DEFAULT_CUSTOM_RESULT_TEMPLATE
+        rendered = safe_render_template(tmpl, vals)
+        if outcome == charter.UNRESOLVED and "unresolved" not in rendered.lower():
+            rendered = f"{rendered}\nUNRESOLVED — the price data never arrived; no result is claimed."
+        return rendered[:3800]
+
+    # Default "standard" — byte-identical to original format_result(signal, settlement)
+    if outcome == charter.UNRESOLVED:
+        return "\n".join(
+            [
+                header,
+                "UNRESOLVED — the price data never arrived.",
+                "No result is claimed for this trade.",
+            ]
+        )
+    if outcome == charter.TIED:
+        return "\n".join(
+            [
+                header,
+                f"Entry {vals['entry_price']} -> Exit {vals['exit_price']}",
+                "TIED — no movement, no result either way.",
+            ]
+        )
+    return "\n".join(
+        [
+            header,
+            f"Entry {vals['entry_price']} -> Exit {vals['exit_price']}",
+            f"Move {vals['gross_pips']} pips | cost {vals['spread_pips']} | net {vals['net_pips']}",
+            verdict,
+        ]
+    )
+

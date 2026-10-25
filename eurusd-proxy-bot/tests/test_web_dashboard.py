@@ -216,6 +216,51 @@ class TestOperatorDashboardAPI(unittest.TestCase):
         ):
             self.assertIn(kf, style_css)
 
+    def test_telegram_format_studio_and_protection_config_endpoints(self):
+        code, initial = self._get("/api/telegram/format")
+        self.assertEqual(code, 200)
+        self.assertEqual(initial["format"]["signal_style"], "standard")
+        self.assertIn("scheduled_signal", initial["preview"])
+        self.assertGreaterEqual(len(initial["signal_placeholders"]), 10)
+
+        code, updated = self._post(
+            "/api/telegram/format",
+            {
+                "signal_style": "custom",
+                "signal_template": "DESK {pair} {side} | {horizon}m | #{short_id}",
+                "result_style": "compact",
+                "apply_to_signals_cmd": True,
+            },
+        )
+        self.assertEqual(code, 200)
+        self.assertTrue(updated["saved"])
+        self.assertEqual(updated["format"]["signal_style"], "custom")
+        self.assertIn("DESK EUR/USD BUY | 30m", updated["preview"]["scheduled_signal"])
+        self.assertIn("RESULT EUR/USD BUY", updated["preview"]["settlement_result"])
+
+        code, bad = self._post("/api/telegram/format", {"signal_style": "nonexistent_style"})
+        self.assertEqual(code, 400)
+        self.assertFalse(bad["ok"])
+
+        code, reset_res = self._post("/api/telegram/format", {"reset": True})
+        self.assertEqual(code, 200)
+        self.assertEqual(reset_res["format"]["signal_style"], "standard")
+
+        code, cfg_res = self._post(
+            "/api/config",
+            {
+                "pairs": ["EUR/USD", "BTC/USD", "ETH/USD"],
+                "signal_cooldown_minutes": 30,
+                "loss_guard_streak": 3,
+                "fx_rollover_guard": True,
+            },
+        )
+        self.assertEqual(code, 200)
+        rc = cfg_res["strategies"]["runtime_config"]
+        self.assertEqual(rc["signal_cooldown_minutes"], 30)
+        self.assertEqual(rc["loss_guard_streak"], 3)
+        self.assertTrue(rc["fx_rollover_guard"])
+
 
 if __name__ == "__main__":
     unittest.main()
