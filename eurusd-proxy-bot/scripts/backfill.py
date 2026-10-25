@@ -63,73 +63,76 @@ def main() -> int:
     store = build_store(config)
     provider = TwelveDataProvider(config.twelve_data_keys, base_url=config.provider_base_url)
     target = int(os.environ.get("BACKFILL_TARGET_BARS") or os.environ.get("BACKFILL_TARGET") or 0)
-    have = store.count_candles(config.pair)
-    if target and have >= target:
-        print(f"Already holding {have} bars for {config.pair}, target is {target}. "
-              "Nothing to do, and no credits spent.")
-        return 0
-    if target:
-        print(f"Holding {have} bars for {config.pair}; target is {target}.")
-
-    print(f"Fetching up to {minutes} further one-minute candles for {config.pair}...")
-
-    # Walk backwards from the earliest bar we already hold. Starting from "now"
-    # every time would re-buy the same history on each scheduled run.
-    oldest = store.oldest_candle(config.pair)
-    if oldest:
-        print(f"History already starts at {oldest}; extending further back.")
-    else:
-        print("No history yet; starting from now and walking back.")
-
     try:
         pace = float(os.environ.get("BACKFILL_PACE_SECONDS", "8.0"))
     except ValueError:
         pace = 8.0
     pace = max(0.0, min(pace, 60.0))
 
-    total = 0
-    remaining = minutes
-    end = oldest
-    while remaining > 0:
-        size = min(5000, remaining)
-        params = {
-            "symbol": config.pair,
-            "interval": config.timeframe,
-            "outputsize": str(size),
-            "order": "ASC",
-            "timezone": "UTC",
-            "format": "JSON",
-        }
-        if end is not None:
-            params["end_date"] = end
-        try:
-            payload = provider._request("time_series", params)
-            values = payload.get("values") or []
-        except Exception as error:  # noqa: BLE001 - a backfill must stop cleanly
-            print(f"Stopped: {error}")
-            break
-        if not values:
-            break
-        rows = []
-        for raw in values:
-            try:
-                candle = Candle.from_mapping(raw)
-            except (ValueError, KeyError, TypeError):
-                continue
-            rows.append(dict(candle.to_dict(), pair=config.pair))
-        if not rows:
-            break
-        store.save_candles(rows)
-        total += len(rows)
-        remaining -= size
-        end = min(row["timestamp"] for row in rows)
-        print(f"  stored {total} candles (walking back to {end})")
-        if len(values) < size:
-            break
-        if remaining > 0 and pace > 0.0:
-            time.sleep(pace)
+    for symbol in config.active_pairs:
+        have = store.count_candles(symbol)
+        if target and have >= target:
+            print(
+                f"Already holding {have} bars for {symbol}, target is {target}. "
+                "Nothing to do, and no credits spent."
+            )
+            continue
+        if target:
+            print(f"Holding {have} bars for {symbol}; target is {target}.")
 
-    print(f"Done. {total} candles stored for {config.pair}.")
+        print(f"Fetching up to {minutes} further one-minute candles for {symbol}...")
+
+        # Walk backwards from the earliest bar we already hold. Starting from
+        # "now" every time would re-buy the same history on each scheduled run.
+        oldest = store.oldest_candle(symbol)
+        if oldest:
+            print(f"History already starts at {oldest}; extending further back.")
+        else:
+            print("No history yet; starting from now and walking back.")
+
+        total = 0
+        remaining = minutes
+        end = oldest
+        while remaining > 0:
+            size = min(5000, remaining)
+            params = {
+                "symbol": symbol,
+                "interval": config.timeframe,
+                "outputsize": str(size),
+                "order": "ASC",
+                "timezone": "UTC",
+                "format": "JSON",
+            }
+            if end is not None:
+                params["end_date"] = end
+            try:
+                payload = provider._request("time_series", params)
+                values = payload.get("values") or []
+            except Exception as error:  # noqa: BLE001 - a backfill must stop cleanly
+                print(f"Stopped on {symbol}: {error}")
+                break
+            if not values:
+                break
+            rows = []
+            for raw in values:
+                try:
+                    candle = Candle.from_mapping(raw)
+                except (ValueError, KeyError, TypeError):
+                    continue
+                rows.append(dict(candle.to_dict(), pair=symbol))
+            if not rows:
+                break
+            store.save_candles(rows)
+            total += len(rows)
+            remaining -= size
+            end = min(row["timestamp"] for row in rows)
+            print(f"  [{symbol}] stored {total} candles (walking back to {end})")
+            if len(values) < size:
+                break
+            if remaining > 0 and pace > 0.0:
+                time.sleep(pace)
+
+        print(f"Done. {total} candles stored for {symbol}.")
     return 0
 
 

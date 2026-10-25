@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from . import instruments
 from .domain import Candle
 from .keypool import KeyPool
 from .timeutil import parse_datetime
@@ -141,7 +142,8 @@ class TwelveDataProvider:
             return None
         if bid <= 0 or ask <= 0 or ask < bid:
             return None
-        return {"bid": bid, "ask": ask, "spread_pips": (ask - bid) / 0.0001, "source": "provider"}
+        pip = instruments.pip_for(symbol)
+        return {"bid": bid, "ask": ask, "spread_pips": (ask - bid) / pip, "source": "provider"}
 
 
 class SyntheticProvider:

@@ -7,6 +7,8 @@ the charter holds: synthetic data may run the pipeline but trains nothing.
 from __future__ import annotations
 
 import math
+import os
+from contextlib import contextmanager
 import random
 from datetime import datetime, timedelta, timezone
 
@@ -82,3 +84,24 @@ def pip(value: float) -> float:
 
 def nearly(a: float, b: float, tolerance: float = 1e-9) -> bool:
     return math.isclose(a, b, rel_tol=tolerance, abs_tol=tolerance)
+
+
+@contextmanager
+def preserved_environ():
+    """Undo any environment change a test makes, including indirect ones.
+
+    Needed because ``load_config`` calls ``_load_dotenv``, which writes the
+    file's keys straight into ``os.environ`` and never takes them out again.
+    A test that loads a config from a temporary .env therefore leaks those
+    values into every test that runs after it -- which surfaced as a config
+    test reading another module's SPREAD_PIPS and failing only when the whole
+    suite ran.
+
+    Wrap any test that calls ``load_config`` in this.
+    """
+    snapshot = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(snapshot)

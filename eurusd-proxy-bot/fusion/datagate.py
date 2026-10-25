@@ -48,12 +48,20 @@ class GateResult:
         }
 
 
-def modelled_spread_pips(stamp: datetime | None = None, base: float = 1.2) -> float:
-    """Modelled EUR/USD spread when the provider gives no quote.
+def modelled_spread_pips(
+    stamp: datetime | None = None,
+    base: float = 1.2,
+    *,
+    crypto: bool = False,
+) -> float:
+    """Modelled spread when the provider gives no quote.
 
-    Wider outside the London/New York overlap. This is a model, not a broker
-    quote, and it is always labelled as such.
+    FX widens outside the London/New York overlap because bank desks close.
+    Spot crypto trades round the clock on continuous order books, so no FX
+    desk-hour multiplier is invented for it.
     """
+    if crypto:
+        return round(base, 2)
     hour = (stamp.hour if stamp is not None else 12) % 24
     if 12 <= hour < 17:
         return round(base, 2)
@@ -81,6 +89,7 @@ def evaluate(
     min_candles: int = 60,
     max_gaps: int = 3,
     base_spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
+    crypto: bool = False,
 ) -> GateResult:
     """``base_spread_pips`` is the configured assumed spread.
 
@@ -107,7 +116,7 @@ def evaluate(
         spread = float(quote["spread_pips"])
         spread_source = "provider"
     else:
-        spread = modelled_spread_pips(last.timestamp, base=base_spread_pips)
+        spread = modelled_spread_pips(last.timestamp, base=base_spread_pips, crypto=crypto)
         spread_source = "modelled"
 
     gaps = count_gaps(candles)

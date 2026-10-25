@@ -59,6 +59,8 @@ def main() -> int:
     bot = FusionBot(config=config, store=store, telegram=telegram)
     bot.startup()
     report = bot.minute_cycle(at=stamp)
+    bot.settle_due(at=stamp)
+    bot.flush_outbox()
     bot.run_scheduled(at=stamp)
     print(report.to_dict())
 

@@ -126,5 +126,83 @@ class TestSupabaseFailure(unittest.TestCase):
             shutil.rmtree(directory, ignore_errors=True)
 
 
+class TestPostgrestPaginationAndCounts(unittest.TestCase):
+    """PostgREST caps each GET at 1,000 rows; large reads must page."""
+
+    def test_large_candle_reads_page_past_the_thousand_row_ceiling(self):
+        directory = Path(tempfile.mkdtemp())
+        dataset = [
+            {"timestamp": f"2026-01-{(i // 1440) + 1:02d}T{(i // 60) % 24:02d}:{i % 60:02d}:00Z", "pair": "EUR/USD", "close": 1.1}
+            for i in range(2_450)
+        ]
+        # Reverse order matches order=timestamp.desc on the server.
+        server_rows = list(reversed(dataset))
+        calls: list[str] = []
+
+        class PagedServer(SupabaseStore):
+            def _call(self, method, path, *, body=None, headers=None):
+                calls.append(path)
+                import urllib.parse
+
+                _, _, query = path.partition("?")
+                params = urllib.parse.parse_qs(query)
+                req_limit = int(params.get("limit", ["1000"])[0])
+                offset = int(params.get("offset", ["0"])[0])
+                # Enforce Supabase's server-side db-max-rows = 1000 cap.
+                capped = min(req_limit, 1000)
+                return server_rows[offset : offset + capped]
+
+        try:
+            store = Store(PagedServer("https://example.supabase.co", "key"), LocalStore(directory))
+            loaded = store.load_candles("EUR/USD", limit=2_300)
+            self.assertEqual(len(loaded), 2_300)
+            self.assertGreaterEqual(len(calls), 3)
+            # Chronologically ascending on return, newest 2,300 preserved.
+            self.assertEqual(loaded[-1]["timestamp"], dataset[-1]["timestamp"])
+            self.assertEqual(loaded[0]["timestamp"], dataset[-2_300]["timestamp"])
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+
+    def test_count_candles_reads_exact_content_range_header(self):
+        directory = Path(tempfile.mkdtemp())
+        seen_headers: list[dict] = []
+
+        class HeaderCountingServer(SupabaseStore):
+            def _call(self, method, path, *, body=None, headers=None):
+                seen_headers.append(dict(headers or {}))
+                self.last_response_headers = {"content-range": "0-0/101730"}
+                return [{"timestamp": "2026-01-01T00:00:00Z"}]
+
+        try:
+            store = Store(HeaderCountingServer("https://example.supabase.co", "key"), LocalStore(directory))
+            self.assertEqual(store.count_candles("EUR/USD"), 101_730)
+            self.assertEqual(seen_headers[0].get("Prefer"), "count=exact")
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
+class TestPerMarketStateIsolation(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.store = Store(None, LocalStore(self.directory))
+
+    def tearDown(self):
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def test_btc_and_eur_model_states_do_not_clobber_each_other(self):
+        self.store.save_model_state({"model": {"weights": [1.0]}}, pair="EUR/USD")
+        self.store.save_model_state({"model": {"weights": [9.0]}}, pair="BTC/USD")
+        self.assertEqual(self.store.load_model_state(pair="EUR/USD")["model"]["weights"], [1.0])
+        self.assertEqual(self.store.load_model_state(pair="BTC/USD")["model"]["weights"], [9.0])
+        # Default call remains EUR/USD ("champion").
+        self.assertEqual(self.store.load_model_state()["id"], "champion")
+
+    def test_btc_and_eur_council_weights_do_not_clobber_each_other(self):
+        self.store.save_council_weights({"weights": {"breakout": 0.12}}, pair="EUR/USD")
+        self.store.save_council_weights({"weights": {"breakout": 0.28}}, pair="BTC/USD")
+        self.assertEqual(self.store.load_council_weights(pair="EUR/USD")["weights"]["breakout"], 0.12)
+        self.assertEqual(self.store.load_council_weights(pair="BTC/USD")["weights"]["breakout"], 0.28)
+
+
 if __name__ == "__main__":
     unittest.main()

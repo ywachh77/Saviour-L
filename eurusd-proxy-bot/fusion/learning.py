@@ -17,7 +17,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from . import charter, stats
+from . import charter, instruments, stats
 from .backtest import BacktestReport, run_backtest
 from .calibration import (
     IsotonicCalibrator,
@@ -52,7 +52,9 @@ class Sample:
         return self.features, self.label
 
 
-def build_training_samples(candles: Sequence[Candle], horizon: int = 5) -> list[Sample]:
+def build_training_samples(
+    candles: Sequence[Candle], horizon: int = 5, instrument: instruments.Instrument | None = None
+) -> list[Sample]:
     """Label a candle series the way a live signal would actually be settled.
 
     A signal sealed after candle ``i`` closes enters at the OPEN of candle
@@ -60,7 +62,8 @@ def build_training_samples(candles: Sequence[Candle], horizon: int = 5) -> list[
     exactly that path, so training targets the same quantity the bot trades.
     """
     candles = list(candles)
-    feature_rows = compute_features(candles)
+    pip = (instrument or instruments.DEFAULT).pip
+    feature_rows = compute_features(candles, instrument=instrument)
     samples: list[Sample] = []
     for index, features in enumerate(feature_rows):
         if features is None:
@@ -71,7 +74,7 @@ def build_training_samples(candles: Sequence[Candle], horizon: int = 5) -> list[
             break
         entry_price = candles[entry_index].open
         exit_price = candles[exit_index].close
-        gross_pips = (exit_price - entry_price) / charter.PIP
+        gross_pips = (exit_price - entry_price) / pip
         samples.append(
             Sample(
                 timestamp=format_datetime(candles[index].timestamp),
@@ -408,7 +411,8 @@ def _break_even_win_rate(candles: Sequence[Candle], config) -> float:
     series = [value for value in atr(list(candles)) if value is not None]
     if not series:
         return 0.5
-    m1_atr_pips = (sum(series) / len(series)) * 10000.0
+    pip = instruments.pip_for(getattr(config, "pair", None))
+    m1_atr_pips = (sum(series) / len(series)) / pip
     if m1_atr_pips <= 0:
         return 0.5
     return break_even_win_rate(
@@ -440,12 +444,13 @@ def _representative_horizon(candles: Sequence[Candle], config) -> int:
     spread = float(getattr(config, "spread_pips", 0.0) or 0.0)
     reward = float(getattr(config, "reward_to_cost", 3.0) or 3.0)
     cap = int(getattr(config, "max_horizon_minutes", 120) or 120)
+    pip = instruments.pip_for(getattr(config, "pair", None))
 
     recent = [value for value in atr(list(candles)) if value is not None][-500:]
     horizons: list[int] = []
     for value in recent:
         resolved = resolve_horizon(
-            float(value) * 10000.0,
+            float(value) / pip,
             spread,
             base,
             adaptive=True,
@@ -468,7 +473,12 @@ def run_nightly(
     champion: OnlineLogisticModel | None,
 ) -> tuple[OnlineLogisticModel | None, BootstrapEnsemble, WalkForwardReport]:
     """Full nightly job: walk-forward, promote or keep, refit calibration."""
-    samples = build_training_samples(candles, horizon=_representative_horizon(candles, config))
+    instrument = instruments.for_symbol(getattr(config, "pair", None))
+    samples = build_training_samples(
+        candles,
+        horizon=_representative_horizon(candles, config),
+        instrument=instrument,
+    )
     report = walk_forward(
         samples,
         spread_pips=config.spread_pips,

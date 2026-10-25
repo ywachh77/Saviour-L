@@ -1,7 +1,7 @@
 """The pipeline's hard refusals: late, stale, uncalibrated, unstable."""
 
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from fusion import charter, engine as engine_module
 from fusion.config import Config
@@ -149,9 +149,15 @@ class TestNoLookAhead(unittest.TestCase):
     """
 
     def setUp(self):
-        self.entry_minute = floor_minute(now())
-        # Anchored to the current minute, or the freshness gate would refuse
-        # for the wrong reason and every test here would pass vacuously.
+        # Anchored to a fixed London-session minute, not to `now()`.
+        #
+        # These tests need the data gate to pass so the engine reaches
+        # compute_features. The gate models the spread by UTC hour, and outside
+        # the overlap it widens to 2.1x -- 1.2 * 2.1 = 2.52 pips, just over the
+        # 2.5 limit. Anchored to the wall clock, this class passed at 15:55 UTC
+        # and failed at 03:50 UTC with no code change in between, because the
+        # gate refused for a reason that had nothing to do with look-ahead.
+        self.entry_minute = datetime(2026, 1, 5, 12, 0, tzinfo=timezone.utc)
         self.candles = make_candles(
             220, seed=7, start=self.entry_minute - timedelta(minutes=219)
         )
@@ -173,9 +179,9 @@ class TestNoLookAhead(unittest.TestCase):
         seen: dict = {}
         real = compute_features
 
-        def spy(candles):
+        def spy(candles, *args, **kwargs):
             seen["candles"] = list(candles)
-            return real(candles)
+            return real(candles, *args, **kwargs)
 
         engine_module.compute_features = spy
         try:

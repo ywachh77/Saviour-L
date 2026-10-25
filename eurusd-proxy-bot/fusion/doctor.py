@@ -71,14 +71,14 @@ def check_provider(config, *, offline: bool = False) -> Check:
             "Twelve Data",
             FAIL,
             f"{len(config.twelve_data_keys)} slot(s) configured, but the test call failed: {error}",
-            "check the key, your plan's quota, and that EUR/USD is enabled on it",
+            f"check the key, your plan's quota, and that {config.pair} is enabled on it",
         )
     if not candles:
         return Check(
             "Twelve Data",
             FAIL,
             "the test call returned no candles",
-            "the key works but returned nothing for EUR/USD; check the symbol on your plan",
+            f"the key works but returned nothing for {config.pair}; check the symbol on your plan",
         )
     pool = provider.pool.summary()
     enabled = pool["enabled"]

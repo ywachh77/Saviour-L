@@ -106,6 +106,13 @@ class LocalStore:
             self._path(table).write_text("", encoding="utf-8")
 
 
+# PostgREST caps a single response at db-max-rows (1,000 on Supabase hosted
+# projects) regardless of how large ?limit= is. Without paging, asking for
+# 200,000 training candles silently returned 1,000 and count_candles() reported
+# 1,000 forever once a pair passed a thousand bars.
+POSTGREST_PAGE_SIZE = 1000
+
+
 class SupabaseStore:
     """Supabase PostgREST client over urllib."""
 
@@ -115,6 +122,7 @@ class SupabaseStore:
         self.timeout = timeout
         self.fallback = fallback
         self.errors: list[str] = []
+        self.last_response_headers: dict[str, str] = {}
 
     # ------------------------------------------------------------- plumbing
     def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -136,6 +144,12 @@ class SupabaseStore:
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                resp_headers = getattr(response, "headers", None)
+                self.last_response_headers = (
+                    {str(k).lower(): str(v) for k, v in resp_headers.items()}
+                    if resp_headers is not None
+                    else {}
+                )
                 raw = response.read().decode("utf-8").strip()
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as error:
@@ -171,19 +185,74 @@ class SupabaseStore:
         order: str | None = None,
         limit: int | None = None,
     ) -> list[dict]:
-        params: list[str] = ["select=*"]
+        base_params: list[str] = ["select=*"]
         for key, value in (filters or {}).items():
-            params.append(f"{key}={urllib.parse.quote(str(value))}")
+            base_params.append(f"{key}={urllib.parse.quote(str(value))}")
         if order:
-            params.append(f"order={urllib.parse.quote(order)}")
-        if limit:
-            params.append(f"limit={int(limit)}")
+            base_params.append(f"order={urllib.parse.quote(order)}")
+
+        # Small bounded reads fit inside one PostgREST page (db-max-rows=1000).
+        if limit is not None and 0 < int(limit) <= POSTGREST_PAGE_SIZE:
+            query = "&".join(base_params + [f"limit={int(limit)}"])
+            try:
+                result = self._call("GET", f"{table}?{query}")
+                return list(result or [])
+            except StoreError as error:
+                self.errors.append(str(error))
+                return []
+
+        # Large or unbounded reads must page with offset, otherwise Supabase
+        # truncates silently at 1,000 rows (verified live: nightly asked for
+        # 200,000 bars against a 101,730-row table and received 1,000).
+        collected: list[dict] = []
+        offset = 0
+        target = int(limit) if (limit is not None and int(limit) > 0) else None
         try:
-            result = self._call("GET", f"{table}?{'&'.join(params)}")
-            return list(result or [])
+            while True:
+                remaining = (target - len(collected)) if target is not None else POSTGREST_PAGE_SIZE
+                if remaining <= 0:
+                    break
+                page_size = min(POSTGREST_PAGE_SIZE, remaining)
+                query = "&".join(base_params + [f"limit={page_size}", f"offset={offset}"])
+                batch = list(self._call("GET", f"{table}?{query}") or [])
+                collected.extend(batch)
+                if len(batch) < page_size:
+                    break
+                offset += len(batch)
+            return collected
         except StoreError as error:
             self.errors.append(str(error))
-            return []
+            return collected
+
+    def count(self, table: str, *, filters: dict[str, str] | None = None) -> int | None:
+        """Exact server-side row count via PostgREST ``Prefer: count=exact``.
+
+        Returns None on transport error or when the mock/server omits
+        ``Content-Range``, letting the caller fall back to a paged read.
+        """
+        params: list[str] = ["select=*", "limit=1"]
+        for key, value in (filters or {}).items():
+            params.append(f"{key}={urllib.parse.quote(str(value))}")
+        try:
+            self.last_response_headers = {}
+            rows = self._call(
+                "GET",
+                f"{table}?{'&'.join(params)}",
+                headers={"Prefer": "count=exact"},
+            )
+        except StoreError as error:
+            self.errors.append(str(error))
+            return None
+        content_range = self.last_response_headers.get("content-range", "")
+        if "/" in content_range:
+            total = content_range.rsplit("/", 1)[-1].strip()
+            if total.isdigit():
+                return int(total)
+        # Mocked _call implementations in tests do not populate HTTP headers;
+        # returning None lets Store.count_candles fall back to select().
+        if rows is None:
+            return None
+        return None
 
     def probe(self, table: str) -> str | None:
         """Reachability check for one table: None when it answers, else the error.
@@ -273,6 +342,10 @@ class Store:
 
     def count_candles(self, pair: str) -> int:
         """How many bars we hold. Used to stop backfilling once there is enough."""
+        if self.supabase is not None:
+            exact = self.supabase.count("candles_m1", filters={"pair": f"eq.{pair}"})
+            if exact is not None:
+                return exact
         return len(self._read("candles_m1", **{"pair": f"eq.{pair}"}))
 
     def load_candles(self, pair: str, limit: int = 400) -> list[dict]:
@@ -320,18 +393,41 @@ class Store:
         return self._read("settlements", limit=limit, order="settled_at.desc")
 
     # ------------------------------------------------------------ model state
-    def save_model_state(self, payload: dict) -> None:
+    @staticmethod
+    def model_state_id(pair: str | None = None) -> str:
+        clean = (pair or "").strip().upper()
+        if not clean or clean == "EUR/USD":
+            return "champion"
+        return f"champion:{clean}"
+
+    @staticmethod
+    def council_weights_id(pair: str | None = None) -> str:
+        clean = (pair or "").strip().upper()
+        if not clean or clean == "EUR/USD":
+            return "council"
+        return f"council:{clean}"
+
+    def save_model_state(self, payload: dict, *, pair: str | None = None) -> None:
         row = dict(payload)
-        row["id"] = row.get("id", "champion")
+        row["id"] = row.get("id") or self.model_state_id(pair)
         row["updated_at"] = format_datetime(_utcnow())
         if self.supabase is not None:
             self.supabase.upsert("model_state", [row], on_conflict="id")
-        else:
-            self.local.replace("model_state", [row])
+            return
+        existing = [item for item in self.local.read("model_state") if item.get("id") != row["id"]]
+        existing.append(row)
+        self.local.replace("model_state", existing)
 
-    def load_model_state(self) -> dict | None:
-        rows = self._read("model_state", limit=1)
-        return rows[-1] if rows else None
+    def load_model_state(self, *, pair: str | None = None) -> dict | None:
+        target = self.model_state_id(pair)
+        rows = self._read("model_state", limit=1, **{"id": f"eq.{target}"})
+        if rows:
+            return rows[-1]
+        if target == "champion":
+            # Legacy local files written before an explicit id was filtered.
+            fallback = [item for item in self._read("model_state") if item.get("id") in (None, "champion")]
+            return fallback[-1] if fallback else None
+        return None
 
     def save_model_version(self, payload: dict) -> None:
         self._write("model_versions", [payload], on_conflict="version_id")
@@ -340,17 +436,25 @@ class Store:
         return self._read("model_versions", limit=limit)
 
     # --------------------------------------------------------- council weights
-    def save_council_weights(self, payload: dict) -> None:
+    def save_council_weights(self, payload: dict, *, pair: str | None = None) -> None:
         row = dict(payload)
-        row["id"] = row.get("id", "council")
+        row["id"] = row.get("id") or self.council_weights_id(pair)
         if self.supabase is not None:
             self.supabase.upsert("council_weights", [row], on_conflict="id")
-        else:
-            self.local.replace("council_weights", [row])
+            return
+        existing = [item for item in self.local.read("council_weights") if item.get("id") != row["id"]]
+        existing.append(row)
+        self.local.replace("council_weights", existing)
 
-    def load_council_weights(self) -> dict | None:
-        rows = self._read("council_weights", limit=1)
-        return rows[-1] if rows else None
+    def load_council_weights(self, *, pair: str | None = None) -> dict | None:
+        target = self.council_weights_id(pair)
+        rows = self._read("council_weights", limit=1, **{"id": f"eq.{target}"})
+        if rows:
+            return rows[-1]
+        if target == "council":
+            fallback = [item for item in self._read("council_weights") if item.get("id") in (None, "council")]
+            return fallback[-1] if fallback else None
+        return None
 
     # --------------------------------------------------------- learning events
     def log_event(self, event: dict) -> None:

@@ -33,5 +33,8 @@ jobs:
       - name: Run the suite
         run: python -m unittest discover -s tests -t .
 
+      - name: Automated look-ahead and recursive warmup audit
+        run: python scripts/lookahead_check.py
+
       - name: Offline smoke run
         run: python scripts/smoke.py 420

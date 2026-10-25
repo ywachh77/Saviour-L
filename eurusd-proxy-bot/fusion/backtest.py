@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Sequence
 
-from . import charter, costs, datagate
+from . import charter, costs, datagate, instruments
 from .config import Config
 from .council import CouncilWeights, spoken_votes
 from .domain import Candle
@@ -194,7 +194,12 @@ def run_backtest(
         )
         return report
 
-    feature_rows = compute_features(candles)
+    # The pip is the one unit that is not dimensionless, so the replay has to
+    # know which market it is holding. Everything else -- the cost guard, the
+    # reward-to-cost test, the break-even rate -- is a ratio and transfers
+    # unchanged.
+    instrument = instruments.for_symbol(getattr(config, "pair", None))
+    feature_rows = compute_features(candles, instrument=instrument)
     atr_values = atr(candles, 14)
     usable = [
         index
@@ -266,7 +271,7 @@ def run_backtest(
             # is not asking.
             bar_horizon = horizon
             if getattr(config, "adaptive_horizon", False):
-                atr_pips = abs(float(features.get("atr", 0.0))) / charter.PIP
+                atr_pips = abs(float(features.get("atr", 0.0))) / instrument.pip
                 resolved = costs.resolve_horizon(
                     atr_pips,
                     spread,
@@ -294,7 +299,7 @@ def run_backtest(
             entry = candles[index + 1].open
             exit_price = candles[index + bar_horizon].close
             move = exit_price - entry
-            gross_pips = (move if result.signal.side == "BUY" else -move) / charter.PIP
+            gross_pips = (move if result.signal.side == "BUY" else -move) / instrument.pip
             net_pips = gross_pips - spread
 
             fold_signals += 1
@@ -328,7 +333,9 @@ def run_backtest(
                 mistakes.observe(
                     MistakeMemory.fingerprint(
                         result.regime or "UNKNOWN",
-                        session_of(candles[index].timestamp) if config.session_filter else None,
+                        session_of(candles[index].timestamp, instrument)
+                        if config.session_filter
+                        else None,
                         result.signal.side,
                     ),
                     gross_pips > 0,
@@ -366,7 +373,7 @@ def run_backtest(
     # Break-even hit rate, computed from the volatility actually present and the
     # hold length actually used. This is the number the achieved win rate has to
     # beat, and it is usually far higher than intuition expects.
-    atr_pips = [value / charter.PIP for value in atr_values if value is not None]
+    atr_pips = [value / instrument.pip for value in atr_values if value is not None]
     if atr_pips and report.chosen_horizons:
         mean_atr = sum(atr_pips) / len(atr_pips)
         mean_hold = report.mean_horizon

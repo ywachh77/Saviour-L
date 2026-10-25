@@ -13,15 +13,17 @@ Order matters and is fixed:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
 
-from . import charter, costs, datagate
+from . import charter, costs, datagate, instruments, news
 from .calibration import IsotonicCalibrator
 from .council import CouncilResult, CouncilWeights, run_council
 from .domain import Candle, ModelRead, Signal, closed_before
 from .features import compute_features
+from . import mtf
 from .model import MODE_ADVISORY, MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
 from .mistakes import MistakeMemory
 from .regime import RegimeState, detect_regime
@@ -38,6 +40,30 @@ AGREE_MARGIN_RAW = 0.02
 RAW = "RAW"
 CALIBRATED = "CALIBRATED"
 FLAT = "FLAT"
+
+
+def _mtf_tilt(features: dict | None, minutes: int) -> float | None:
+    """The higher-timeframe tilt as -1, 0 or +1, or None when it is unknown.
+
+    Read from the numeric row (``mtf_bias_5`` / ``mtf_bias_15``) rather than
+    from a rich object: the row is persisted and re-read by Signal.from_dict,
+    which floats every value, so anything non-numeric poisons the round-trip.
+
+    Returns None when the tilt was never computed -- an absent filter must
+    never be mistaken for a filter that agrees.
+    """
+    if not isinstance(features, dict):
+        return None
+    primary = "mtf_bias_15" if minutes >= 15 else "mtf_bias_5"
+    fallback = "mtf_bias_5" if minutes >= 15 else "mtf_bias_15"
+    for key in (primary, fallback):
+        if key in features:
+            try:
+                value = float(features[key])
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+    return None
 
 
 def build_read(
@@ -196,6 +222,15 @@ class FusionEngine:
 
         regime = regime_state or RegimeState("UNKNOWN", 0.0, 0.0, 0.0, 0.0, "Regime not supplied.")
 
+        if getattr(config, "news_filter", False):
+            blackout = news.check_blackout(
+                add_minutes(candle.timestamp, 1),
+                pair=getattr(config, "pair", "EUR/USD"),
+                extra_windows=getattr(config, "news_blackout_windows", ""),
+            )
+            if blackout.blocked:
+                return Verdict("NO SIGNAL", blackout.reason, regime.name)
+
         read = build_read(model, ensemble, features, max_uncertainty=config.max_uncertainty)
         if read is not None and read.abstain_reason:
             return Verdict("NO SIGNAL", read.abstain_reason, regime.name, read=read)
@@ -203,7 +238,11 @@ class FusionEngine:
         # The session is read from the bar being decided, not from the wall
         # clock, so a replay of history classifies each bar by the hour it
         # actually happened in.
-        session = session_of(candle.timestamp) if config.session_filter else None
+        session = (
+            session_of(candle.timestamp, instruments.for_symbol(self.config.pair))
+            if config.session_filter
+            else None
+        )
         council = run_council(
             candle,
             previous_close,
@@ -219,6 +258,24 @@ class FusionEngine:
         )
         if not council.actionable:
             return Verdict("NO SIGNAL", council.reason, regime.name, read=read, council=council)
+
+        # Higher-timeframe agreement. A one-minute chart is mostly noise, and
+        # the commonest way a scalp fails is by being a pullback inside a larger
+        # move going the other way. The tilt was computed alongside the
+        # features, so this costs nothing extra.
+        if config.mtf_filter:
+            tilt = _mtf_tilt(features, config.mtf_minutes)
+            wanted = mtf.UP if council.side == "BUY" else mtf.DOWN
+            if tilt is not None and tilt != mtf.FLAT and tilt != wanted:
+                leaning = "up" if tilt == mtf.UP else "down"
+                return Verdict(
+                    "NO SIGNAL",
+                    f"Higher-timeframe filter: {config.mtf_minutes}-minute bias is {leaning}"
+                    f" and the trade is {council.side}.",
+                    regime.name,
+                    read=read,
+                    council=council,
+                )
 
         mode = model.mode if model is not None else MODE_VETO
         allowed, model_reason = model_verdict(council.side, read, mode=mode)
@@ -251,6 +308,7 @@ class FusionEngine:
         # high, low and close into the features is look-ahead, and the
         # walk-forward backtest never had it. See domain.closed_before.
         candles = closed_before(list(candles), stamp)
+        instrument = instruments.for_symbol(getattr(config, "pair", None))
 
         gate = datagate.evaluate(
             candles,
@@ -259,11 +317,12 @@ class FusionEngine:
             max_spread_pips=config.max_spread_pips,
             quote=quote,
             base_spread_pips=config.spread_pips,
+            crypto=instrument.crypto,
         )
         if not gate.usable:
             return EngineResult(charter.SEAL_ABSTAIN, None, f"Data gate: {gate.reason}", gate=gate)
 
-        feature_rows = compute_features(candles)
+        feature_rows = compute_features(candles, instrument=instrument)
         features = feature_rows[-1] if feature_rows else None
 
         latest = candles[-1]
@@ -369,7 +428,12 @@ class FusionEngine:
         # the right response is to abstain rather than to take the trade anyway.
         atr_pips = 0.0
         if features:
-            atr_pips = abs(float(features.get("atr", 0.0))) / charter.PIP
+            # The feature row already carries atr_pips, computed with this
+            # instrument's own pip size. Dividing by charter.PIP here would
+            # silently reinterpret a bitcoin ATR as an FX one.
+            atr_pips = abs(float(features.get("atr", 0.0))) / instruments.pip_for(
+                getattr(self.config, "pair", None)
+            )
         horizon = costs.resolve_horizon(
             atr_pips,
             spread,

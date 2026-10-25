@@ -56,6 +56,8 @@ import math
 from dataclasses import dataclass
 from typing import Sequence
 
+from . import instruments
+
 # Fraction of ``ATR_1m * sqrt(h)`` that a position can realistically capture.
 # See the module docstring: measured 0.39-0.47, theoretical 0.50, set at 0.38 so
 # the projection never runs above reality at any horizon.
@@ -211,11 +213,14 @@ def evaluate(
     )
 
 
-def median_atr_pips(candles: Sequence) -> float:
+def median_atr_pips(candles: Sequence, symbol: str | None = None) -> float:
     """Median M1 ATR in pips over a candle series, for a robust scale read.
 
     Median rather than mean so one news spike does not convince the gate that
     the market is permanently volatile.
+
+    ``symbol`` picks the pip size; it defaults to EUR/USD so existing callers
+    are unchanged.
     """
     from .indicators import atr
 
@@ -223,9 +228,9 @@ def median_atr_pips(candles: Sequence) -> float:
     if not values:
         return 0.0
     values.sort()
-    from .charter import PIP
+    pip = instruments.for_symbol(symbol).pip
 
-    ordered = [value / PIP for value in values]
+    ordered = [value / pip for value in values]
     middle = len(ordered) // 2
     if len(ordered) % 2:
         return ordered[middle]
