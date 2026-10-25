@@ -35,6 +35,10 @@ jobs:
         working-directory: ${{ steps.locate.outputs.dir }}
         run: python -m unittest discover -s tests -t .
 
+      - name: Automated look-ahead and recursive warmup audit
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: python scripts/lookahead_check.py
+
       - name: Offline smoke run
         working-directory: ${{ steps.locate.outputs.dir }}
         run: python scripts/smoke.py 420

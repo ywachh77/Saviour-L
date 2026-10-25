@@ -45,6 +45,7 @@ class Bias:
     reference: float  # the EMA the close is compared against
     bars: int
     reason: str
+    slope_bps: float = 0.0  # 1-bar closed HTF EMA slope in basis points of price
 
     @property
     def known(self) -> bool:
@@ -105,13 +106,16 @@ def bias(
     minutes: int = DEFAULT_MINUTES,
     ema_period: int = DEFAULT_EMA_PERIOD,
     flat_band: float = 0.0,
+    min_gap_bps: float = 0.0,
+    require_slope: bool = False,
 ) -> Bias:
     """Which way the ``minutes``-minute timeframe is leaning.
 
     The tilt is the sign of (close - EMA) on the resampled series. ``flat_band``
-    keeps a market that is sitting exactly on its average from counting as a
-    trend: inside the band the answer is "flat", which blocks rather than
-    permits.
+    and ``min_gap_bps`` keep a market that is hugging a flat average from
+    counting as a trend: inside the dead-zone the answer is "flat", which
+    blocks rather than permits. When ``require_slope`` is True, a BUY tilt also
+    requires a rising closed HTF EMA and a SELL tilt requires a falling one.
     """
     bars = resample(candles, minutes)
     needed = ema_period + 1
@@ -123,16 +127,24 @@ def bias(
             0.0,
             len(bars),
             f"only {len(bars)} closed {minutes}m bars, {needed} needed to place the average",
+            0.0,
         )
 
     closes = [bar.close for bar in bars]
     averages = ema(closes, ema_period)
     reference = averages[-1]
+    prev_ref = averages[-2] if len(averages) >= 2 else None
     last = closes[-1]
     if reference is None:
-        return Bias(minutes, FLAT, last, 0.0, len(bars), "the higher-timeframe average is undefined")
+        return Bias(minutes, FLAT, last, 0.0, len(bars), "the higher-timeframe average is undefined", 0.0)
 
+    slope_bps = (
+        ((float(reference) - float(prev_ref)) / last * 10000.0)
+        if (prev_ref is not None and abs(last) > 1e-15)
+        else 0.0
+    )
     gap = last - reference
+    gap_bps = (gap / last * 10000.0) if abs(last) > 1e-15 else 0.0
     if abs(gap) <= flat_band:
         return Bias(
             minutes,
@@ -141,7 +153,29 @@ def bias(
             float(reference),
             len(bars),
             f"close sits on its {minutes}m average (gap {gap:+.5f} inside the {flat_band:+.5f} band)",
+            slope_bps,
         )
+    if min_gap_bps > 0.0 and abs(gap_bps) < min_gap_bps:
+        return Bias(
+            minutes,
+            FLAT,
+            last,
+            float(reference),
+            len(bars),
+            f"close hugs its {minutes}m average ({gap_bps:+.2f} bps inside {min_gap_bps:.2f} bps dead-zone)",
+            slope_bps,
+        )
+    if require_slope and prev_ref is not None:
+        if (gap > 0 and slope_bps <= 0.0) or (gap < 0 and slope_bps >= 0.0):
+            return Bias(
+                minutes,
+                FLAT,
+                last,
+                float(reference),
+                len(bars),
+                f"{minutes}m EMA slope ({slope_bps:+.2f} bps) opposes price gap ({gap_bps:+.2f} bps)",
+                slope_bps,
+            )
     direction = UP if gap > 0 else DOWN
     return Bias(
         minutes,
@@ -150,6 +184,7 @@ def bias(
         float(reference),
         len(bars),
         f"close {last:.5f} vs {ema_period}-bar average {reference:.5f} on {minutes}m",
+        slope_bps,
     )
 
 
@@ -158,6 +193,8 @@ def bias_series(
     minutes: int = DEFAULT_MINUTES,
     ema_period: int = DEFAULT_EMA_PERIOD,
     flat_band: float = 0.0,
+    min_gap_bps: float = 0.0,
+    require_slope: bool = False,
 ) -> list[Bias]:
     """The higher-timeframe tilt as it stood at each one-minute bar.
 
@@ -191,17 +228,25 @@ def bias_series(
                     0.0,
                     max(0, position + 1),
                     f"no {minutes}m average yet ({max(0, position + 1)} closed bars, {ema_period} needed)",
+                    0.0,
                 )
             )
             continue
         reference = averages[position]
         if reference is None:
             series.append(
-                Bias(minutes, FLAT, candle.close, 0.0, position + 1, "the higher-timeframe average is undefined")
+                Bias(minutes, FLAT, candle.close, 0.0, position + 1, "the higher-timeframe average is undefined", 0.0)
             )
             continue
+        prev_ref = averages[position - 1] if position >= 1 else None
         last = closes[position]
+        slope_bps = (
+            ((float(reference) - float(prev_ref)) / last * 10000.0)
+            if (prev_ref is not None and abs(last) > 1e-15)
+            else 0.0
+        )
         gap = last - reference
+        gap_bps = (gap / last * 10000.0) if abs(last) > 1e-15 else 0.0
         if abs(gap) <= flat_band:
             series.append(
                 Bias(
@@ -211,9 +256,37 @@ def bias_series(
                     float(reference),
                     position + 1,
                     f"close sits on its {minutes}m average (gap {gap:+.5f} inside the {flat_band:+.5f} band)",
+                    slope_bps,
                 )
             )
             continue
+        if min_gap_bps > 0.0 and abs(gap_bps) < min_gap_bps:
+            series.append(
+                Bias(
+                    minutes,
+                    FLAT,
+                    last,
+                    float(reference),
+                    position + 1,
+                    f"close hugs its {minutes}m average ({gap_bps:+.2f} bps inside {min_gap_bps:.2f} bps dead-zone)",
+                    slope_bps,
+                )
+            )
+            continue
+        if require_slope and prev_ref is not None:
+            if (gap > 0 and slope_bps <= 0.0) or (gap < 0 and slope_bps >= 0.0):
+                series.append(
+                    Bias(
+                        minutes,
+                        FLAT,
+                        last,
+                        float(reference),
+                        position + 1,
+                        f"{minutes}m EMA slope ({slope_bps:+.2f} bps) opposes price gap ({gap_bps:+.2f} bps)",
+                        slope_bps,
+                    )
+                )
+                continue
         series.append(
             Bias(
                 minutes,
@@ -222,6 +295,7 @@ def bias_series(
                 float(reference),
                 position + 1,
                 f"close {last:.5f} vs {ema_period}-bar average {reference:.5f} on {minutes}m",
+                slope_bps,
             )
         )
     return series

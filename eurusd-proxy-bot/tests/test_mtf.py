@@ -215,9 +215,34 @@ class TestFeaturesCarryTheTilt(unittest.TestCase):
         """
         from fusion.features import FEATURE_NAMES
 
-        for name in ("mtf_bias_5", "mtf_gap_5", "mtf_bias_15", "mtf_gap_15"):
+        for name in (
+            "mtf_bias_5",
+            "mtf_gap_5",
+            "mtf_slope_5",
+            "mtf_ready_5",
+            "mtf_bias_15",
+            "mtf_gap_15",
+            "mtf_slope_15",
+            "mtf_ready_15",
+            "mtf_bias_60",
+            "mtf_gap_60",
+            "mtf_slope_60",
+            "mtf_ready_60",
+        ):
             self.assertNotIn(name, FEATURE_NAMES)
         self.assertEqual(4, FEATURE_VERSION)
+
+    def test_clear_trend_dead_zone_and_slope_filter(self):
+        gentle = make_candles(200, seed=11, drift=0.00001, volatility=0.000005)
+        # Huge dead-zone forces FLAT rather than letting tiny EMA hug count as trend
+        blocked = bias(gentle, minutes=5, min_gap_bps=50.0)
+        self.assertEqual(blocked.direction, FLAT)
+        self.assertIn("dead-zone", blocked.reason)
+
+        strong = make_candles(200, seed=11, drift=0.00030, volatility=0.00002)
+        clear = bias(strong, minutes=5, min_gap_bps=1.5, require_slope=True)
+        self.assertEqual(clear.direction, UP)
+        self.assertGreater(clear.slope_bps, 0.0)
 
 
 class TestTheGateIsOffByDefault(unittest.TestCase):

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
 
-from . import charter, costs, datagate, instruments, news
+from . import charter, costs, datagate, instruments, news, protections
 from .calibration import IsotonicCalibrator
 from .council import CouncilResult, CouncilWeights, run_council
 from .domain import Candle, ModelRead, Signal, closed_before
@@ -64,6 +64,29 @@ def _mtf_tilt(features: dict | None, minutes: int) -> float | None:
                 return None
             return value if math.isfinite(value) else None
     return None
+
+
+def _mtf_gap_bps(features: dict | None, minutes: int) -> tuple[float | None, bool]:
+    """Return (gap_bps, ready) for the selected higher-timeframe EMA."""
+    if not isinstance(features, dict):
+        return None, False
+    suffix = "60" if minutes >= 60 else ("15" if minutes >= 15 else "5")
+    gap_key = f"mtf_gap_{suffix}"
+    ready_key = f"mtf_ready_{suffix}"
+    bias_key = f"mtf_bias_{suffix}"
+    if gap_key not in features:
+        return None, False
+    try:
+        gap = float(features[gap_key])
+    except (TypeError, ValueError):
+        return None, False
+    if not math.isfinite(gap):
+        return None, False
+    if ready_key in features:
+        ready = float(features.get(ready_key) or 0.0) > 0.5
+    else:
+        ready = abs(float(features.get(bias_key) or 0.0)) > 0.5
+    return gap, ready
 
 
 def build_read(
@@ -276,6 +299,37 @@ class FusionEngine:
                     read=read,
                     council=council,
                 )
+            min_gap_bps = float(getattr(config, "mtf_min_gap_bps", 0.0) or 0.0)
+            if min_gap_bps > 0.0:
+                gap_bps, mtf_ready = _mtf_gap_bps(features, config.mtf_minutes)
+                if mtf_ready and gap_bps is not None:
+                    signed_gap = gap_bps if council.side == "BUY" else -gap_bps
+                    if signed_gap < min_gap_bps:
+                        return Verdict(
+                            "NO SIGNAL",
+                            f"Higher-timeframe dead-zone: {config.mtf_minutes}-minute EMA gap "
+                            f"({gap_bps:+.2f} bps) is below the {min_gap_bps:.2f} bps clear-trend threshold for {council.side}.",
+                            regime.name,
+                            read=read,
+                            council=council,
+                        )
+
+        if getattr(config, "mtf_macro_filter", False):
+            gap_60, ready_60 = _mtf_gap_bps(features, 60)
+            if ready_60 and gap_60 is not None:
+                macro_min = max(0.0, float(getattr(config, "mtf_macro_min_gap_bps", 1.5) or 0.0))
+                slope_60 = float(features.get("mtf_slope_60", 0.0) or 0.0) if isinstance(features, dict) else 0.0
+                signed_gap_60 = gap_60 if council.side == "BUY" else -gap_60
+                signed_slope_60 = slope_60 if council.side == "BUY" else -slope_60
+                if signed_gap_60 < macro_min or signed_slope_60 <= 0.0:
+                    return Verdict(
+                        "NO SIGNAL",
+                        f"Macro 60m HTF filter: gap {gap_60:+.2f} bps / slope {slope_60:+.2f} bps "
+                        f"does not confirm {council.side} (min gap {macro_min:.2f} bps).",
+                        regime.name,
+                        read=read,
+                        council=council,
+                    )
 
         mode = model.mode if model is not None else MODE_VETO
         allowed, model_reason = model_verdict(council.side, read, mode=mode)
@@ -362,7 +416,8 @@ class FusionEngine:
         Used by the backtest, which precomputes those once for the whole series
         instead of per bar. The decision and seal code is identical to live.
         """
-        candles = list(candles)
+        if not isinstance(candles, (list, tuple)):
+            candles = list(candles)
         latest = candles[-1]
         previous_close = candles[-2].close if len(candles) > 1 else latest.close
         verdict = self.decide(
@@ -455,6 +510,21 @@ class FusionEngine:
                 council=verdict.council,
                 model_reason=verdict.model_reason,
             )
+
+        if getattr(self.config, "fx_rollover_guard", False):
+            inst = instruments.for_symbol(getattr(self.config, "pair", None))
+            rollover = protections.check_fx_rollover(entry_time, horizon, crypto=inst.crypto)
+            if rollover.blocked:
+                return EngineResult(
+                    charter.SEAL_ABSTAIN,
+                    None,
+                    rollover.reason,
+                    gate=gate,
+                    regime=verdict.regime,
+                    read=verdict.read,
+                    council=verdict.council,
+                    model_reason=verdict.model_reason,
+                )
 
         read = verdict.read
         signal = Signal.create(

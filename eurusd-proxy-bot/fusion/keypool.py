@@ -267,10 +267,24 @@ class KeyPool:
         pool = cls(keys, **kwargs)
         if not payload:
             return pool
-        saved = {int(row["index"]): row for row in payload.get("slots", [])}
+        explicit_minute = "minute_limit" in kwargs
+        explicit_day = "day_limit" in kwargs
+        saved = {int(row["index"]): row for row in payload.get("slots", []) if "index" in row}
         for slot in pool.slots:
             row = saved.get(slot.index)
-            if row:
-                slot.__dict__.update(KeySlot.from_dict(row).__dict__)
-        pool.cursor = int(payload.get("cursor", 0))
+            if not row:
+                continue
+            # If the secret in this slot was replaced with a different key, do
+            # not carry over the old key's counters or disabled state.
+            if row.get("label") and row.get("label") != slot.label:
+                continue
+            restored = KeySlot.from_dict(row)
+            restored.label = slot.label
+            if explicit_minute:
+                restored.minute_limit = slot.minute_limit
+            if explicit_day:
+                restored.day_limit = slot.day_limit
+            slot.__dict__.update(restored.__dict__)
+        if pool.slots:
+            pool.cursor = int(payload.get("cursor", 0)) % len(pool.slots)
         return pool

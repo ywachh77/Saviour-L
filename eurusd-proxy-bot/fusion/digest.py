@@ -123,9 +123,15 @@ def build_status(
     system: dict | None = None,
 ) -> str:
     age = heartbeat.heartbeat_age_seconds(heartbeat_row)
+    active_pairs = tuple(getattr(config, "active_pairs", None) or (config.pair,))
+    pair_label = (
+        f"pairs {', '.join(active_pairs)}"
+        if len(active_pairs) > 1
+        else f"pair {active_pairs[0]}"
+    )
     lines = [
         "FUSION BOT status",
-        f"  pair {config.pair} · horizon {config.horizon_minutes}m · runner {runner}",
+        f"  {pair_label} · horizon {config.horizon_minutes}m · runner {runner}",
         f"  signals: {'PAUSED' if paused else 'LIVE'}",
         f"  heartbeat: {'missing' if age is None else f'{age:.0f}s ago'}",
         f"  model: {model_mode} · calibration {calibration_state} ({calibration_samples} outcomes)",
@@ -140,7 +146,10 @@ def build_status(
     if key_pool:
         rows = key_pool.get("slots") or []
         enabled = sum(1 for row in rows if row.get("enabled"))
-        lines.append(f"  key pool: {enabled}/{len(rows)} slots enabled")
+        day_used = sum(int(row.get("day_used", 0)) for row in rows)
+        day_limit = sum(int(row.get("day_limit", 0)) for row in rows)
+        quota_suffix = f" ({day_used}/{day_limit} credits today)" if day_limit > 0 else ""
+        lines.append(f"  key pool: {enabled}/{len(rows)} slots enabled{quota_suffix}")
     if system and system.get("signals"):
         lines.append(
             f"  system replay: {system['signals']} gated signals, net {system.get('net_pips', 0):+.1f} pips"
@@ -171,7 +180,7 @@ def build_status(
     elif system:
         lines.append(f"  system replay: {system.get('note', 'not run yet')[:120]}")
     if last_cycle:
-        lines.append(f"  last cycle: {last_cycle.get('seal_state', 'n/a')} — {last_cycle.get('reason', '')[:160]}")
+        lines.append(f"  last cycle: {last_cycle.get('seal_state', 'n/a')} — {last_cycle.get('reason', '')[:240]}")
     if store_errors:
         lines.append(f"  store errors: {len(store_errors)} (latest: {store_errors[-1][:120]})")
     return "\n".join(lines)

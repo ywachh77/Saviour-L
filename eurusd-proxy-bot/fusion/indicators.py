@@ -262,3 +262,56 @@ def vwap(candles: Sequence[Candle], period: int = 30) -> list[float | None]:
         else:
             result[index] = sum(price * weight for price, weight in zip(window, weights)) / total
     return result
+
+
+def kaufman_er(values: Sequence[float], period: int = 10) -> list[float | None]:
+    """Perry Kaufman's Efficiency Ratio (1995): directional displacement over path noise.
+
+    Returns values in [0.0, 1.0]: 1.0 is a straight-line trend with zero
+    retracement; 0.0 is pure whipsaw churn ending back where it started.
+    Computed in O(N) via cumulative absolute step sums with zero look-ahead.
+    """
+    items = list(values)
+    size = len(items)
+    result: list[float | None] = [None] * size
+    if size <= period or period <= 0:
+        return result
+    prefix = [0.0] * (size + 1)
+    for index in range(1, size):
+        prefix[index + 1] = prefix[index] + abs(items[index] - items[index - 1])
+    for index in range(period, size):
+        path = prefix[index + 1] - prefix[index - period + 1]
+        net = abs(items[index] - items[index - period])
+        result[index] = 0.0 if path <= 1e-15 else max(0.0, min(1.0, net / path))
+    return result
+
+
+def choppiness_index(candles: Sequence[Candle], period: int = 14) -> list[float | None]:
+    """E.W. Dreiss Choppiness Index (1993) on [0.0, 100.0].
+
+    Values above 61.8 indicate range-bound consolidation chop; values below
+    38.2 indicate sustained directional expansion. Returns 50.0 when a flat
+    envelope has zero high-low span rather than dividing by zero.
+    """
+    items = list(candles)
+    size = len(items)
+    result: list[float | None] = [None] * size
+    if size < period or period <= 1:
+        return result
+    trs = true_ranges(items)
+    prefix_tr = [0.0] * (size + 1)
+    for index in range(size):
+        prefix_tr[index + 1] = prefix_tr[index] + trs[index]
+    denom = math.log10(float(period))
+    for index in range(period - 1, size):
+        start = index - period + 1
+        window = items[start : index + 1]
+        span = max(c.high for c in window) - min(c.low for c in window)
+        sum_tr = prefix_tr[index + 1] - prefix_tr[start]
+        if span <= 1e-15 or sum_tr <= 1e-15:
+            result[index] = 50.0
+        else:
+            raw = 100.0 * math.log10(max(1.0, sum_tr / span)) / denom
+            result[index] = max(0.0, min(100.0, raw))
+    return result
+

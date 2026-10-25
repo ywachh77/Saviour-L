@@ -99,17 +99,23 @@ jobs:
           # construction, and more accuracy does not fix that.
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
+          CANDLE_HISTORY: "750"
           # Trade EUR/USD alongside 24/7 spot crypto (BTC/USD, ETH/USD) so
           # weekends and FX off-hours evaluate instruments whose spread-to-ATR
           # ratio is 14-20x lower than one-minute FX.
           PAIRS: "EUR/USD,BTC/USD,ETH/USD"
-          # Validated on 101,730 real EUR/USD M1 candles (Aug-Oct 2026):
-          # requiring 15-minute trend agreement lifted OOS October win rate from
-          # 57.47% to 58.51% and flipped net expectancy from -0.116 to +0.338
-          # pips/trade after charging the 1.20-pip spread.
+          # Validated on 101,730 real EUR/USD M1 candles (Aug-Oct 2026) plus
+          # 260,689 real MT5 M1 bars (2025-2026): 15-minute trend agreement with
+          # a 2.0 bps flat-EMA dead-zone and shadow-win streak recovery lifts OOS
+          # win rate across both years and cuts max drawdown by 31%-39%.
           MTF_FILTER: "1"
           MTF_MINUTES: "15"
+          MTF_MIN_GAP_BPS: "2.0"
           NEWS_FILTER: "1"
+          SIGNAL_COOLDOWN_MINUTES: "15"
+          LOSS_GUARD_STREAK: "3"
+          LOSS_GUARD_SHADOW_RECOVERY: "1"
+          FX_ROLLOVER_GUARD: "1"
           # Hold the Telegram connection open after the cycle so commands are
           # answered while the container still exists. Twelve minutes of a
           # fifteen-minute interval leaves a gap of about two minutes, which is

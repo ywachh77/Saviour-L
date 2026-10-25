@@ -1,34 +1,13 @@
 name: fusion-cycle
 
-# The runner. Wakes on a cron, does one cycle, disappears.
-#
-# CADENCE IS A COST SETTING, NOT A PERFORMANCE ONE.
-#
-# A private repo on the free plan gets 2,000 Actions minutes a month. Every
-# wake-up costs roughly one to two billed minutes (checkout + interpreter +
-# the cycle itself), so:
-#
-#     */5    ~8,640 runs/mo   ~13,000 min   far over the free tier
-#     */15   ~2,880 runs/mo   ~4,300 min    over
-#     */30   ~1,440 runs/mo   ~2,200 min    at the limit  <-- default
-#     0 * *  ~  720 runs/mo   ~1,100 min    comfortable
-#
-# The default is */30. If GitHub emails you about quota, change the cron below
-# to "0 * * * *" (hourly) and the problem goes away. Nothing else needs editing.
-#
-# Cadence also caps how often a signal can be emitted: the bot evaluates the
-# minute it wakes into and never backdates, so */30 means at most 48 evaluated
-# minutes a day. That is a research cadence, not a latency-critical one, which
-# is what this bot is for.
-#
-# Want true minute-by-minute coverage? Make the repo public (Actions minutes
-# are then free and unlimited), buy more minutes, or run scripts/run_bot.py on
-# any always-on host. There is no fourth option that stays inside the free
-# private tier.
+# Standalone workflow mirror (becomes active when eurusd-proxy-bot/ is exported
+# as its own repository via scripts/publish_repo.sh).
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/15 * * * *"
+    - cron: "55 23 * * *"
+    - cron: "5 0 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -38,9 +17,13 @@ concurrency:
 jobs:
   cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Locate the bot directory
         id: locate
@@ -64,6 +47,18 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+          ADAPTIVE_HORIZON: "1"
+          MAX_HORIZON_MINUTES: "120"
+          CANDLE_HISTORY: "750"
+          PAIRS: "EUR/USD,BTC/USD,ETH/USD"
+          MTF_FILTER: "1"
+          MTF_MINUTES: "15"
+          MTF_MIN_GAP_BPS: "2.0"
+          NEWS_FILTER: "1"
+          SIGNAL_COOLDOWN_MINUTES: "15"
+          LOSS_GUARD_STREAK: "3"
+          LOSS_GUARD_SHADOW_RECOVERY: "1"
+          FX_ROLLOVER_GUARD: "1"
+          LISTEN_SECONDS: "720"
         working-directory: ${{ steps.locate.outputs.dir }}
-        run: |
-          python3 scripts/actions_cycle.py
+        run: python3 scripts/actions_cycle.py

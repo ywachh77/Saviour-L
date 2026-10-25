@@ -7,15 +7,14 @@ name: fusion-nightly
 # fires.
 #
 # Separate from fusion-cycle for two reasons. It needs a much longer timeout --
-# walk-forward over months of bars is minutes of work, not seconds -- and it
-# should not be in the path that produces signals. The cycle job also calls the
-# nightly when one of its runs lands in the window, but job slots mean whichever
-# gets there first wins and the other stands down, so running both is safe.
+# walk-forward over months of bars across EUR/USD, BTC/USD and ETH/USD is
+# minutes of work, not seconds -- and it should not be in the path that
+# produces signals. The cycle job also calls the nightly when one of its runs
+# lands in the window, but job slots mean whichever gets there first wins and
+# the other stands down, so running both is safe.
 #
-# This is the job that decides whether the model earns advisory authority. It is
-# expected to refuse: promotion requires a confidence interval that clears zero,
-# and at a realistic M1 ATR the spread demands a hit rate most configurations do
-# not reach. "No edge" is a correct answer here, not a failure.
+# Every market/strategy environment flag MUST match fusion-cycle.yml so the
+# walk-forward replay judges the exact system that runs in production.
 
 on:
   schedule:
@@ -29,7 +28,7 @@ concurrency:
 jobs:
   nightly:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: eurusd-proxy-bot
@@ -53,4 +52,16 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+          ADAPTIVE_HORIZON: "1"
+          MAX_HORIZON_MINUTES: "120"
+          CANDLE_HISTORY: "750"
+          PAIRS: "EUR/USD,BTC/USD,ETH/USD"
+          MTF_FILTER: "1"
+          MTF_MINUTES: "15"
+          MTF_MIN_GAP_BPS: "2.0"
+          NEWS_FILTER: "1"
+          SIGNAL_COOLDOWN_MINUTES: "15"
+          LOSS_GUARD_STREAK: "3"
+          LOSS_GUARD_SHADOW_RECOVERY: "1"
+          FX_ROLLOVER_GUARD: "1"
         run: python3 scripts/nightly.py

@@ -22,17 +22,24 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Sequence
 
-from . import charter, instruments, digest, heartbeat, learning, settle, stats
+from . import charter, instruments, digest, heartbeat, learning, protections, settle, stats
 from .config import Config
 from .council import CouncilWeights, Vote
 from .domain import Candle, Signal
 from .engine import FusionEngine
+from .keypool import KeyPool
 from .model import MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
 from .mistakes import MistakeMemory
 from .provider import TwelveDataProvider
 from .session import session_of
 from .store import Store, build_store
-from .telegram import HELP_TEXT, TelegramClient
+from .telegram import (
+    HELP_TEXT,
+    TelegramClient,
+    TelegramFormatConfig,
+    render_result_message,
+    render_signal_message,
+)
 from .timeutil import minute_bucket, now, parse_datetime, seconds_until_next_minute, floor_minute
 
 # How far past the minute boundary the pipeline is allowed to seal before the
@@ -43,86 +50,18 @@ MAX_STORED_CANDLES = 600
 SAVE_STATE_EVERY = 10
 
 
-def format_signal(signal: Signal) -> str:
-    probability = "n/a" if signal.probability_up is None else f"{signal.probability_up:.3f}"
-    raw = "n/a" if signal.probability_raw is None else f"{signal.probability_raw:.3f}"
-    state = {
-        "RAW": "raw (not enough outcomes to calibrate yet)",
-        "CALIBRATED": "calibrated",
-        "FLAT": "flat — abstained, never sent",
-    }[signal.calibration_state]
-    lines = [
-        f"{signal.pair} {signal.side}",
-        f"Entry: open of the {signal.entry_time.strftime('%H:%M')}Z candle",
-        f"Expires: {signal.expiry_time.strftime('%H:%M')}Z ({signal.horizon_minutes} min)",
-        f"Regime: {signal.regime}",
-        f"Model: {probability} — {state} (raw {raw})",
-        f"Why: {signal.reason}",
-        f"Cost: {signal.spread_pips:.2f} pip spread charged on settlement.",
-        "Paper research signal. No broker order is placed.",
-    ]
-    return "\n".join(lines)
+def format_signal(signal: Signal, fmt: TelegramFormatConfig | None = None) -> str:
+    return render_signal_message(signal, fmt, brief=False)
 
 
-def format_brief_signal(signal: Signal) -> str:
-    """Pair, direction, entry, expiry. Nothing else.
-
-    The full message carries the model read and the reasoning, and both still
-    go to the database where they can be audited. The phone gets the four
-    things a trade actually needs, because a wall of text at 2am is how a
-    number gets misread.
-    """
-    return "\n".join(
-        [
-            f"{signal.pair} {signal.side}",
-            f"Entry  open of {signal.entry_time.strftime('%H:%M')}Z candle",
-            f"Expiry {signal.expiry_time.strftime('%H:%M')}Z  ({signal.horizon_minutes} min)",
-            f"#{signal.signal_id[:8]}",
-            "",
-            "Paper — research only, no broker order.",
-        ]
-    )
+def format_brief_signal(signal: Signal, fmt: TelegramFormatConfig | None = None) -> str:
+    """Pair, direction, entry, expiry (unless custom format overrides /signals)."""
+    return render_signal_message(signal, fmt, brief=True)
 
 
-def format_result(signal: Signal, settlement) -> str:
-    """What the prediction actually did, sent the moment it is known.
-
-    Net, not gross: the spread is charged on every trade, so a result that
-    ignores it is a different number from the one that would have hit an
-    account. UNRESOLVED is reported as UNRESOLVED rather than as a zero.
-    """
-    header = f"RESULT {signal.pair} {signal.side}  #{signal.signal_id[:8]}"
-    # A price is shown with the precision its own market uses. Five decimals
-    # is right for EUR/USD and absurd for bitcoin, where it invites the reader
-    # to believe a fill was accurate to a hundred-thousandth of a dollar.
-    precision = instruments.for_symbol(signal.pair).precision
-    if settlement.outcome == charter.UNRESOLVED:
-        return "\n".join(
-            [
-                header,
-                "UNRESOLVED — the price data never arrived.",
-                "No result is claimed for this trade.",
-            ]
-        )
-    if settlement.outcome == charter.TIED:
-        return "\n".join(
-            [
-                header,
-                f"Entry {settlement.entry_price:,.{precision}f} -> Exit {settlement.exit_price:,.{precision}f}",
-                "TIED — no movement, no result either way.",
-            ]
-        )
-    net = settlement.net_pips or 0.0
-    gross = settlement.gross_pips or 0.0
-    verdict = "WIN" if settlement.outcome == charter.WIN else "LOSS"
-    return "\n".join(
-        [
-            header,
-            f"Entry {settlement.entry_price:,.{precision}f} -> Exit {settlement.exit_price:,.{precision}f}",
-            f"Move {gross:+.1f} pips | cost {settlement.spread_pips:.1f} | net {net:+.1f}",
-            verdict,
-        ]
-    )
+def format_result(signal: Signal, settlement, fmt: TelegramFormatConfig | None = None) -> str:
+    """What the prediction actually did, sent the moment it is known."""
+    return render_result_message(signal, settlement, fmt)
 
 
 @dataclass
@@ -166,6 +105,8 @@ class FusionBot:
     nightly_report: dict | None = None
     calibration_points: list[tuple[float, int]] = field(default_factory=list)
     mistakes: MistakeMemory = field(default_factory=MistakeMemory)
+    telegram_format: TelegramFormatConfig = field(default_factory=TelegramFormatConfig)
+    shadow_recovery: dict[str, Any] = field(default_factory=lambda: {"pending": None, "cleared_at": None})
     peer_bots: dict[str, "FusionBot"] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ setup
@@ -176,6 +117,13 @@ class FusionBot:
             self.provider = TwelveDataProvider(self.config.twelve_data_keys)
         if self.telegram is None and self.config.telegram_ready:
             self.telegram = TelegramClient(self.config.telegram_token, self.config.telegram_owner_chat_id)
+        self.telegram_format = TelegramFormatConfig(
+            signal_style=getattr(self.config, "telegram_signal_style", "standard"),
+            signal_template=getattr(self.config, "telegram_signal_template", ""),
+            result_style=getattr(self.config, "telegram_result_style", "standard"),
+            result_template=getattr(self.config, "telegram_result_template", ""),
+            apply_to_signals_cmd=bool(getattr(self.config, "telegram_apply_to_signals_cmd", False)),
+        )
         self.engine = FusionEngine(self.config)
         for symbol in self.config.active_pairs[1:]:
             self.peer_bots[symbol] = FusionBot(
@@ -189,14 +137,47 @@ class FusionBot:
     def from_config(cls, config: Config, **kwargs) -> "FusionBot":
         return cls(config=config, **kwargs)
 
-    def startup(self) -> None:
+    def startup(self, *, _as_peer: bool = False) -> None:
         """Load persisted state. Safe to call twice."""
         self._load_state()
+        if not _as_peer:
+            self._hydrate_key_pool()
         self._load_candles()
         self.running = True
         for peer in self.peer_bots.values():
-            peer.startup()
+            peer.startup(_as_peer=True)
             peer.paused = self.paused
+            peer.telegram_format = self.telegram_format
+
+    def set_telegram_format(self, fmt: TelegramFormatConfig) -> None:
+        """Update and persist the Telegram message format across all active markets."""
+        self.telegram_format = fmt
+        for peer in self.peer_bots.values():
+            peer.telegram_format = fmt
+        self._save_state(force=True)
+
+    def _hydrate_key_pool(self) -> None:
+        if not isinstance(self.provider, TwelveDataProvider) or not self.provider.configured:
+            return
+        saved = self.store.load_key_pool()
+        if not saved:
+            return
+        first = self.provider.pool.slots[0]
+        self.provider.pool = KeyPool.from_state(
+            self.provider.keys,
+            saved,
+            minute_limit=first.minute_limit,
+            day_limit=first.day_limit,
+            clock=self.provider.pool._clock,
+        )
+
+    def flush_key_pool(self) -> None:
+        if (
+            self.provider is not None
+            and hasattr(self.provider, "pool")
+            and getattr(self.provider.pool, "configured", False)
+        ):
+            self.store.save_key_pool(self.provider.pool.to_dict())
 
     def _load_state(self) -> None:
         row = self.store.load_model_state(pair=self.config.pair) or {}
@@ -204,6 +185,7 @@ class FusionBot:
         self.ensemble = BootstrapEnsemble.from_dict(row.get("ensemble"))
         self.weights = CouncilWeights.from_dict(self.store.load_council_weights(pair=self.config.pair))
         runtime = row.get("runtime")
+        own_runtime = runtime if isinstance(runtime, dict) else {}
         if runtime is None and self.config.pair != "EUR/USD":
             primary = self.store.load_model_state(pair="EUR/USD") or {}
             runtime = primary.get("runtime")
@@ -213,6 +195,17 @@ class FusionBot:
         if self.telegram is not None and isinstance(offset, int) and offset > 0:
             self.telegram.offset = offset
         self.stale_feed_minutes = int(runtime.get("stale_feed_minutes") or 0)
+        saved_fmt = runtime.get("telegram_format")
+        if isinstance(saved_fmt, dict):
+            self.telegram_format = TelegramFormatConfig.from_dict(saved_fmt)
+        saved_shadow = own_runtime.get("shadow_recovery")
+        if isinstance(saved_shadow, dict):
+            self.shadow_recovery = {
+                "pending": saved_shadow.get("pending") if isinstance(saved_shadow.get("pending"), dict) else None,
+                "cleared_at": saved_shadow.get("cleared_at") if saved_shadow.get("cleared_at") else None,
+            }
+        else:
+            self.shadow_recovery = {"pending": None, "cleared_at": None}
         self.mistakes = MistakeMemory.from_dict(row.get("mistakes"))
         points = row.get("calibration_points") or []
         self.calibration_points = [
@@ -504,8 +497,18 @@ class FusionBot:
         if not self.peer_bots:
             if self.provider is not None and getattr(self.provider, "configured", False):
                 self.ingest(at=stamp)
+                self.flush_key_pool()
             if not self.candles:
                 return "No price data available. The provider may be unreachable; try again shortly."
+
+            guard = self._check_runtime_protections(stamp)
+            if guard.blocked:
+                return (
+                    "No setup right now.\n"
+                    f"{guard.reason}\n\n"
+                    "The bot only reports what its gates actually agree on. "
+                    "Asking again will not change the answer until the market does."
+                )
 
             result = self.engine.evaluate(
                 self.candles,
@@ -531,7 +534,7 @@ class FusionBot:
             )
             self.deliver(signal, brief=True)
             self.settle_due(at=stamp)
-            return format_brief_signal(signal)
+            return format_brief_signal(signal, self.telegram_format)
 
         # Multi-market evaluation across every configured instrument.
         emitted: list[str] = []
@@ -544,6 +547,10 @@ class FusionBot:
                 refusals.append(f"{member.config.pair}: no price data available.")
                 continue
             any_candles = True
+            guard = member._check_runtime_protections(stamp)
+            if guard.blocked:
+                refusals.append(f"{member.config.pair}: {guard.reason}")
+                continue
             result = member.engine.evaluate(
                 member.candles,
                 model=member.model,
@@ -562,8 +569,9 @@ class FusionBot:
                      bucket=minute_bucket(stamp))
             )
             member.deliver(signal, brief=True)
-            emitted.append(format_brief_signal(signal))
+            emitted.append(format_brief_signal(signal, self.telegram_format))
 
+        self.flush_key_pool()
         self.settle_due(at=stamp)
         if emitted:
             return "\n\n".join(emitted)
@@ -633,7 +641,7 @@ class FusionBot:
             return stamp
         return opened + timedelta(minutes=1, seconds=1)
 
-    def minute_cycle(self, at: datetime | None = None) -> CycleReport:
+    def minute_cycle(self, at: datetime | None = None, *, _as_peer: bool = False) -> CycleReport:
         stamp = self._sealable_stamp(at or now())
         bucket = minute_bucket(stamp)
         job_bucket = bucket if self.config.pair == "EUR/USD" else f"{self.config.pair}|{bucket}"
@@ -645,22 +653,28 @@ class FusionBot:
 
         self.ingest(at=stamp)
         report = self.evaluate_minute(bucket=bucket, at=stamp)
-        for peer in self.peer_bots.values():
-            peer_report = peer.minute_cycle(at=stamp)
-            if report.seal_state != charter.SEAL_SIGNAL and peer_report.seal_state == charter.SEAL_SIGNAL:
-                report = peer_report
+        if self.peer_bots:
+            per_pair: list[tuple[str, CycleReport]] = [(self.config.pair, report)]
+            for symbol, peer in self.peer_bots.items():
+                peer_report = peer.minute_cycle(at=stamp, _as_peer=True)
+                per_pair.append((symbol, peer_report))
+            report = _summarise_market_reports(bucket, per_pair)
+
         self.last_cycle = report
-        if not self.peer_bots and self.config.pair != "EUR/USD":
-            # Peer bots already run under the primary cycle's heartbeat; emit a
-            # standalone heartbeat only when this non-EUR/USD bot is top-level.
-            pass
+        hb_extra = report.to_dict()
+        if _as_peer or (not self.peer_bots and self.config.pair != "EUR/USD"):
+            hb_extra["bucket"] = job_bucket
+            if not str(hb_extra.get("reason", "")).startswith(f"{self.config.pair}:"):
+                hb_extra["reason"] = f"{self.config.pair}: {hb_extra.get('reason', '')}"
         self.store.heartbeat(
             heartbeat.build_heartbeat(
                 runner=self.config.runner,
                 phase="minute",
-                extra=report.to_dict(),
+                extra=hb_extra,
             )
         )
+        if not _as_peer:
+            self.flush_key_pool()
         return report
 
     def ingest(self, at: datetime | None = None) -> int:
@@ -700,10 +714,125 @@ class FusionBot:
             self.store.save_candles(rows)
         return added
 
+    def _check_runtime_protections(self, at: datetime) -> protections.ProtectionVerdict:
+        """Evaluate CooldownPeriod and StoplossGuard against persisted ledger rows."""
+        cd_mins = int(getattr(self.config, "signal_cooldown_minutes", 0) or 0)
+        if cd_mins > 0:
+            verdict = protections.check_cooldown_period(
+                at,
+                self.store.load_signals(limit=120),
+                pair=self.config.pair,
+                cooldown_minutes=cd_mins,
+            )
+            if verdict.blocked:
+                return verdict
+
+        streak_cap = int(getattr(self.config, "loss_guard_streak", 0) or 0)
+        if streak_cap > 0:
+            verdict = protections.check_stoploss_guard(
+                at,
+                self.store.load_settlements(limit=200),
+                pair=self.config.pair,
+                max_loss_streak=streak_cap,
+                lookback_minutes=int(getattr(self.config, "loss_guard_lookback_minutes", 180) or 180),
+                cooldown_minutes=int(getattr(self.config, "loss_guard_cooldown_minutes", 60) or 60),
+                require_shadow_win=bool(getattr(self.config, "loss_guard_shadow_recovery", False)),
+                shadow_cleared_at=self.shadow_recovery.get("cleared_at"),
+            )
+            if verdict.blocked:
+                return verdict
+
+        return protections.CLEAR
+
+    def _resolve_shadow_recovery(self, at: datetime | None = None) -> bool:
+        """Settle an in-flight StoplossGuard shadow candidate without touching the live ledger."""
+        pending = self.shadow_recovery.get("pending")
+        if not isinstance(pending, dict):
+            return False
+        stamp = at or now()
+        try:
+            sig = Signal.from_dict(pending)
+        except (KeyError, ValueError, TypeError):
+            self.shadow_recovery["pending"] = None
+            self._save_state(force=True)
+            return False
+
+        expiry = parse_datetime(sig.expiry_time)
+        if expiry > stamp:
+            return False
+        prices_ready = self._has_candle(sig.entry_time) and self._has_candle(_exit_stamp(sig))
+        if not prices_ready and (stamp - expiry) < timedelta(minutes=charter.UNRESOLVE_AFTER_MINUTES):
+            return False
+
+        settlement = settle.settle(sig, self.candles)
+        self.shadow_recovery["pending"] = None
+        net_val = float(settlement.net_pips or 0.0)
+        won = settlement.outcome == charter.WIN and net_val > 0.0
+        if won:
+            cleared_stamp = settlement.settled_at or stamp
+            self.shadow_recovery["cleared_at"] = (
+                cleared_stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+                if hasattr(cleared_stamp, "strftime")
+                else str(cleared_stamp)
+            )
+            self.store.log_event(
+                {
+                    "kind": "shadow_recovery_win",
+                    "pair": self.config.pair,
+                    "signal_id": sig.signal_id,
+                    "net_pips": round(net_val, 3),
+                }
+            )
+        else:
+            self.store.log_event(
+                {
+                    "kind": "shadow_recovery_miss",
+                    "pair": self.config.pair,
+                    "signal_id": sig.signal_id,
+                    "outcome": settlement.outcome,
+                    "net_pips": round(net_val, 3),
+                }
+            )
+        self._save_state(force=True)
+        return won
+
     def evaluate_minute(self, *, bucket: str, at: datetime | None = None) -> CycleReport:
         stamp = at or now()
         if not self.candles:
             return CycleReport(bucket, charter.SEAL_ABSTAIN, "No candles available yet.")
+
+        self._resolve_shadow_recovery(stamp)
+        guard = self._check_runtime_protections(stamp)
+        if guard.blocked:
+            if (
+                bool(getattr(self.config, "loss_guard_shadow_recovery", False))
+                and guard.guard in ("stoploss_guard", "stoploss_shadow_recovery")
+                and self.shadow_recovery.get("pending") is None
+                and not getattr(self.provider, "synthetic", False)
+            ):
+                shadow_res = self.engine.evaluate(
+                    self.candles,
+                    model=self.model,
+                    ensemble=self.ensemble,
+                    weights=self.weights,
+                    source="LIVE",
+                    at=stamp,
+                    mistakes=self.mistakes,
+                )
+                if shadow_res.actionable and shadow_res.signal is not None:
+                    self.shadow_recovery["pending"] = shadow_res.signal.to_dict()
+                    self.store.log_event(
+                        {
+                            "kind": "shadow_recovery_open",
+                            "pair": self.config.pair,
+                            "signal_id": shadow_res.signal.signal_id,
+                            "side": shadow_res.signal.side,
+                            "horizon_minutes": shadow_res.signal.horizon_minutes,
+                        }
+                    )
+                    self._save_state(force=True)
+            self.abstentions += 1
+            return CycleReport(bucket, charter.SEAL_ABSTAIN, guard.reason)
 
         result = self.engine.evaluate(
             self.candles,
@@ -775,12 +904,16 @@ class FusionBot:
         self.store.outbox_append(
             {
                 "message_key": key,
-                "text": format_signal(signal),
+                "text": format_signal(signal, self.telegram_format),
                 "kind": "signal",
                 "state": charter.DELIVERY_PENDING,
             }
         )
-        outgoing = format_brief_signal(signal) if brief else format_signal(signal)
+        outgoing = (
+            format_brief_signal(signal, self.telegram_format)
+            if brief
+            else format_signal(signal, self.telegram_format)
+        )
         if self.telegram is None or not self.telegram.configured:
             self.store.outbox_update(key, {"state": charter.DELIVERY_FAILED, "last_error": "Telegram not configured"})
             self.store.update_signal(signal.signal_id, {"delivery_state": charter.DELIVERY_FAILED})
@@ -815,7 +948,7 @@ class FusionBot:
         retry rather than assumed delivered.
         """
         key = f"result|{signal.signal_id}"
-        text = format_result(signal, settlement)
+        text = format_result(signal, settlement, self.telegram_format)
         if self.telegram is None or not self.telegram.configured:
             return
         self.store.outbox_append(
@@ -883,6 +1016,7 @@ class FusionBot:
     # ------------------------------------------------------------ settlement
     def settle_due(self, at: datetime | None = None) -> int:
         stamp = at or now()
+        self._resolve_shadow_recovery(stamp)
         count = 0
         for row in self.store.pending_signals(self.config.pair):
             try:
@@ -1197,6 +1331,8 @@ class FusionBot:
                 "paused": self.paused,
                 "telegram_offset": self.telegram.offset if self.telegram else None,
                 "stale_feed_minutes": self.stale_feed_minutes,
+                "telegram_format": self.telegram_format.to_dict(),
+                "shadow_recovery": dict(self.shadow_recovery),
             },
             "calibration_points": [[point[0], point[1]] for point in self.calibration_points[-2000:]],
             "mistakes": self.mistakes.to_dict(),
@@ -1250,6 +1386,52 @@ def _settlement_from_row(row: dict):
     from .domain import Settlement
 
     return Settlement.from_dict(row)
+
+
+def _summarise_market_reports(bucket: str, per_pair: Sequence[tuple[str, CycleReport]]) -> CycleReport:
+    """Build a single top-level CycleReport across all evaluated markets.
+
+    Without this, an off-hours FX data-gate abstention overwrote the summary
+    heartbeat last, hiding active 24/7 crypto evaluations from /status and
+    store.latest_heartbeat().
+    """
+    emitted = [(sym, rep) for sym, rep in per_pair if rep.seal_state == charter.SEAL_SIGNAL]
+    if emitted:
+        first_sym, first_rep = emitted[0]
+        summary_reason = " | ".join(f"{sym}: {rep.reason}" for sym, rep in emitted)
+        return CycleReport(
+            bucket=bucket,
+            seal_state=charter.SEAL_SIGNAL,
+            reason=summary_reason,
+            regime=first_rep.regime,
+            signal_id=first_rep.signal_id,
+        )
+
+    late = [rep for _, rep in per_pair if rep.seal_state == charter.SEAL_DISCARDED_LATE]
+    seal_state = (
+        charter.SEAL_DISCARDED_LATE
+        if late
+        else charter.SEAL_ABSTAIN
+        if any(rep.seal_state == charter.SEAL_ABSTAIN for _, rep in per_pair)
+        else per_pair[0][1].seal_state
+    )
+    active_regime = next(
+        (rep.regime for _, rep in per_pair if rep.regime and rep.regime != "UNKNOWN"),
+        "UNKNOWN",
+    )
+    parts: list[str] = []
+    for sym, rep in per_pair:
+        short = str(rep.reason or "").split(";")[0].strip()
+        if rep.regime and rep.regime != "UNKNOWN":
+            parts.append(f"{sym} ({rep.regime}): {short}")
+        else:
+            parts.append(f"{sym}: {short}")
+    return CycleReport(
+        bucket=bucket,
+        seal_state=seal_state,
+        reason=" | ".join(parts),
+        regime=active_regime,
+    )
 
 
 def votes_to_dicts(votes: Sequence[Vote]) -> list[dict]:

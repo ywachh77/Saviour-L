@@ -124,28 +124,35 @@ def check_feature_causality(
 def check_mtf_causality(
     candles: Sequence[Candle] | None = None,
     *,
-    minutes_list: Sequence[int] = (5, 15),
+    minutes_list: Sequence[int] = (5, 15, 60),
 ) -> AuditFinding:
     """Higher-timeframe bias must never read from a still-forming bucket."""
-    base = list(candles) if candles is not None else synthetic_series(240, seed=29)
-    # Pick mid-bucket indices where a 5m or 15m bar is actively forming.
-    pivots = (76, 91, 137, 182)
+    base = list(candles) if candles is not None else synthetic_series(720, seed=29)
+    # Pick mid-bucket indices where 5m, 15m and 60m bars are actively forming.
+    candidate_pivots = (76, 91, 137, 182, 623, 677)
+    pivots = tuple(p for p in candidate_pivots if p < len(base) - 2)
     for minutes in minutes_list:
         ref = mtf.bias_series(base, minutes=minutes)
         for pivot in pivots:
             for mult in (4.0, 0.2):
                 after = mtf.bias_series(_shocked_tail(base, pivot, mult), minutes=minutes)
-                if (ref[pivot].direction, ref[pivot].close, ref[pivot].reference) != (
+                if (
+                    ref[pivot].direction,
+                    ref[pivot].close,
+                    ref[pivot].reference,
+                    ref[pivot].slope_bps,
+                ) != (
                     after[pivot].direction,
                     after[pivot].close,
                     after[pivot].reference,
+                    after[pivot].slope_bps,
                 ):
                     return AuditFinding(
                         "mtf",
                         False,
                         f"{minutes}m bias at index {pivot} moved when future bars changed",
                     )
-    return AuditFinding("mtf", True, "5m and 15m resamplers ignore forming buckets and future bars")
+    return AuditFinding("mtf", True, "5m, 15m and 60m resamplers ignore forming buckets and future bars")
 
 
 def check_strategies_causality(candles: Sequence[Candle] | None = None) -> AuditFinding:

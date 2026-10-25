@@ -135,6 +135,28 @@ class TestStatus(unittest.TestCase):
         self.assertIn("Wilson", text)
         self.assertIn("heartbeat: missing", text)
 
+    def test_status_lists_all_active_pairs_and_daily_quota(self):
+        from fusion.config import Config
+
+        cfg = Config(pairs=("EUR/USD", "BTC/USD", "ETH/USD"))
+        text = digest.build_status(
+            config=cfg,
+            paused=False,
+            runner="github-actions",
+            heartbeat_row=None,
+            stats=stats(),
+            unresolved=0,
+            model_mode="VETO",
+            calibration_state="RAW",
+            calibration_samples=0,
+            key_pool={"slots": [{"enabled": True, "day_used": 6, "day_limit": 800}]},
+            last_cycle={"seal_state": "ABSTAIN", "reason": "EUR/USD: off-hours | BTC/USD (TREND): 3/6 | ETH/USD (TREND): 4/6"},
+            store_errors=[],
+        )
+        self.assertIn("pairs EUR/USD, BTC/USD, ETH/USD", text)
+        self.assertIn("6/800 credits today", text)
+        self.assertIn("ETH/USD (TREND)", text)
+
 
 class TestAlerts(unittest.TestCase):
     def test_every_human_action_kind_has_a_readable_message(self):

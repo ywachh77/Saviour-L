@@ -22,7 +22,9 @@ from .indicators import (
     atr,
     autocorrelation,
     cci,
+    choppiness_index,
     ema,
+    kaufman_er,
     mean,
     median,
     pstdev,
@@ -50,6 +52,7 @@ FEATURE_VERSION = 4
 # five-minute bar. See fusion/mtf.py for why a forming bucket is never used.
 MTF_FAST_MINUTES = 5
 MTF_SLOW_MINUTES = 15
+MTF_MACRO_MINUTES = 60
 MTF_EMA_PERIOD = 10
 
 FEATURE_NAMES = (
@@ -174,11 +177,14 @@ def compute_features(
     stoch_k_values, stoch_d_values = stochastic(candles, STOCH_PERIOD, STOCH_SMOOTH)
     cci_values = cci(candles, CCI_PERIOD)
     vwap_values = vwap(candles, VWAP_PERIOD)
+    ker_10_values = kaufman_er(closes, 10)
+    chop_14_values = choppiness_index(candles, 14)
     # Resampled once for the whole series rather than per bar. See
     # mtf.bias_series -- doing it per bar is quadratic and a 250k-bar backfill
     # would take hours instead of seconds.
     mtf_fast = mtf.bias_series(candles, minutes=MTF_FAST_MINUTES, ema_period=MTF_EMA_PERIOD)
     mtf_slow = mtf.bias_series(candles, minutes=MTF_SLOW_MINUTES, ema_period=MTF_EMA_PERIOD)
+    mtf_macro = mtf.bias_series(candles, minutes=MTF_MACRO_MINUTES, ema_period=MTF_EMA_PERIOD)
 
     returns: list[float] = [0.0]
     for index in range(1, len(closes)):
@@ -291,8 +297,16 @@ def compute_features(
             # higher-timeframe context
             "mtf_bias_5": float(mtf_fast[index].direction),
             "mtf_gap_5": _mtf_gap(mtf_fast[index], candle.close),
+            "mtf_slope_5": float(mtf_fast[index].slope_bps) if mtf_fast[index].reference > 0.0 else 0.0,
+            "mtf_ready_5": 1.0 if mtf_fast[index].reference > 0.0 else 0.0,
             "mtf_bias_15": float(mtf_slow[index].direction),
             "mtf_gap_15": _mtf_gap(mtf_slow[index], candle.close),
+            "mtf_slope_15": float(mtf_slow[index].slope_bps) if mtf_slow[index].reference > 0.0 else 0.0,
+            "mtf_ready_15": 1.0 if mtf_slow[index].reference > 0.0 else 0.0,
+            "mtf_bias_60": float(mtf_macro[index].direction),
+            "mtf_gap_60": _mtf_gap(mtf_macro[index], candle.close),
+            "mtf_slope_60": float(mtf_macro[index].slope_bps) if mtf_macro[index].reference > 0.0 else 0.0,
+            "mtf_ready_60": 1.0 if mtf_macro[index].reference > 0.0 else 0.0,
             # strategy-facing values
             "ema_fast": ema_fast[index],
             "ema_slow": ema_slow[index],
@@ -324,6 +338,8 @@ def compute_features(
             "prior_high_5": micro_prior_high,
             "prior_low_5": micro_prior_low,
             "atr_pips": atr_values[index] / pip,
+            "ker_10": float(ker_10_values[index]) if ker_10_values[index] is not None else 0.0,
+            "chop_14": float(chop_14_values[index]) if chop_14_values[index] is not None else 50.0,
         }
         # Every value in this row must be a plain number. The row is persisted
         # with the signal and re-read by Signal.from_dict, which coerces each

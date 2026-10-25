@@ -48,6 +48,7 @@ from .stats import EdgeVerdict, MultiPathSummary, edge_verdict, summarise_paths
 MIN_TRAIN_PER_FOLD = 150
 MIN_BARS_FOR_BACKTEST = 600
 MIN_SIGNALS_FOR_A_VIEW = 200
+MAX_FOLD_TRAIN_SAMPLES = 12_000
 
 
 @dataclass
@@ -136,10 +137,15 @@ class BacktestReport:
         }
 
 
-def _purged_splits(indices: Sequence[int], folds: int, horizon: int) -> list[tuple[list[int], list[int]]]:
-    """Expanding-window folds with a purge of `horizon` bars before each test.
+def _purged_splits(
+    indices: Sequence[int],
+    folds: int,
+    horizon: int,
+    bar_horizons: Sequence[int | None] | None = None,
+) -> list[tuple[list[int], list[int]]]:
+    """Expanding-window folds with a purge before each test window.
 
-    A sample at bar j is labelled by the close of bar j+horizon, so training on
+    A sample at bar j is labelled by the close of bar j + h_j, so training on
     any j whose label lands inside the test window is leakage. Those are dropped.
     """
     total = len(indices)
@@ -153,7 +159,11 @@ def _purged_splits(indices: Sequence[int], folds: int, horizon: int) -> list[tup
         train_end = bounds[fold]
         test_start, test_end = bounds[fold], bounds[fold + 1]
         first_test_bar = indices[test_start]
-        train = [j for j in indices[:train_end] if j + horizon < first_test_bar]
+        train = [
+            j
+            for j in indices[:train_end]
+            if j + (bar_horizons[j] if (bar_horizons and bar_horizons[j]) else horizon) < first_test_bar
+        ]
         test = indices[test_start:test_end]
         if len(train) >= MIN_TRAIN_PER_FOLD and test:
             splits.append((train, test))
@@ -165,6 +175,8 @@ def _label(candles: Sequence[Candle], index: int, horizon: int) -> int | None:
     exit_index = index + horizon
     if exit_index >= len(candles):
         return None
+    if (candles[exit_index].timestamp - candles[entry_index].timestamp) > timedelta(minutes=horizon + 5):
+        return None  # weekend or feed outage gap: never settle across missing hours
     move = candles[exit_index].close - candles[entry_index].open
     if math.isclose(move, 0.0, abs_tol=1e-12):
         return None  # a tie carries no direction; dropped, not guessed
@@ -201,6 +213,20 @@ def run_backtest(
     instrument = instruments.for_symbol(getattr(config, "pair", None))
     feature_rows = compute_features(candles, instrument=instrument)
     atr_values = atr(candles, 14)
+    adaptive = bool(getattr(config, "adaptive_horizon", False))
+    bar_horizons: list[int | None] = [horizon] * len(candles)
+    if adaptive:
+        r2c = float(getattr(config, "reward_to_cost", 3.0))
+        max_h = int(getattr(config, "max_horizon_minutes", 120))
+        for idx, feat in enumerate(feature_rows):
+            if feat is None:
+                bar_horizons[idx] = None
+            else:
+                atr_p = abs(float(feat.get("atr", 0.0))) / instrument.pip
+                bar_horizons[idx] = costs.resolve_horizon(
+                    atr_p, spread, horizon, adaptive=True, reward_to_cost=r2c, max_horizon=max_h
+                )
+
     usable = [
         index
         for index in range(len(candles))
@@ -210,7 +236,7 @@ def run_backtest(
         report.note = "Not enough bars with complete indicators to build folds."
         return report
 
-    splits = _purged_splits(usable, folds, horizon)
+    splits = _purged_splits(usable, folds, horizon, bar_horizons if adaptive else None)
     if not splits:
         report.note = "Not enough data to build purged walk-forward folds."
         return report
@@ -218,15 +244,25 @@ def run_backtest(
     engine = FusionEngine(config)
     weights = weights or CouncilWeights()
     model_points: list[tuple[float, int]] = []
+    cooldown_mins = max(0, int(getattr(config, "signal_cooldown_minutes", 0) or 0))
+    loss_streak_cap = max(0, int(getattr(config, "loss_guard_streak", 0) or 0))
+    loss_lookback_m = max(1, int(getattr(config, "loss_guard_lookback_minutes", 180) or 180))
+    loss_cd_m = max(1, int(getattr(config, "loss_guard_cooldown_minutes", 60) or 60))
+    shadow_rec = bool(getattr(config, "loss_guard_shadow_recovery", False))
 
     for fold_index, (train_idx, test_idx) in enumerate(splits, start=1):
         pairs: list[tuple[dict, int]] = []
         for index in train_idx:
-            label = _label(candles, index, horizon)
+            train_h = bar_horizons[index] if adaptive else horizon
+            if train_h is None:
+                continue
+            label = _label(candles, index, train_h)
             if label is not None:
                 pairs.append((feature_rows[index], label))
         if len(pairs) < MIN_TRAIN_PER_FOLD:
             continue
+        if len(pairs) > MAX_FOLD_TRAIN_SAMPLES:
+            pairs = pairs[-MAX_FOLD_TRAIN_SAMPLES:]
         try:
             model = OnlineLogisticModel().fit(pairs, epochs=90, validation_fraction=0.0)
         except ValueError:
@@ -234,10 +270,21 @@ def run_backtest(
 
         fold_signals = fold_wins = fold_losses = 0
         fold_net = 0.0
+        next_allowed_ts = candles[0].timestamp - timedelta(minutes=1)
+        loss_pause_until_ts = candles[0].timestamp - timedelta(minutes=1)
+        settled_outcomes: list[tuple] = []
+        shadow_trade: tuple[datetime, bool] | None = None
+        shadow_cleared_ts: datetime | None = None
 
         for index in test_idx:
             features = feature_rows[index]
             candle = candles[index]
+            entry_stamp = candle.timestamp + timedelta(minutes=1)
+            if shadow_trade is not None and shadow_trade[0] <= entry_stamp:
+                sh_ts, sh_win = shadow_trade
+                shadow_trade = None
+                if sh_win:
+                    shadow_cleared_ts = sh_ts
             recent = [value for value in atr_values[max(0, index - 29) : index + 1] if value is not None]
             regime = classify(
                 atr_value=float(features["atr"]),
@@ -255,36 +302,23 @@ def run_backtest(
                 "Replay: the feed is assumed to have been healthy at the time.",
             )
             result = engine.evaluate_prepared(
-                candles[: index + 1],
+                candles[max(0, index - 1) : index + 1],
                 features=features,
                 gate=gate,
                 regime_state=regime,
                 model=model,
                 weights=weights,
                 source="BACKTEST",
-                at=candle.timestamp + timedelta(minutes=1),
+                at=entry_stamp,
             )
 
             # With adaptive horizon the hold length is chosen per bar, so the
             # label and the exit must both follow that bar's horizon. Using one
             # fixed horizon here would train the model on a question the trade
             # is not asking.
-            bar_horizon = horizon
-            if getattr(config, "adaptive_horizon", False):
-                atr_pips = abs(float(features.get("atr", 0.0))) / instrument.pip
-                resolved = costs.resolve_horizon(
-                    atr_pips,
-                    spread,
-                    horizon,
-                    adaptive=True,
-                    reward_to_cost=getattr(config, "reward_to_cost", 3.0),
-                    max_horizon=getattr(config, "max_horizon_minutes", 120),
-                )
-                if resolved is None or index + resolved >= len(candles):
-                    # Cannot pay for itself, or the hold would run off the end
-                    # of history: skip rather than settle a partial trade.
-                    continue
-                bar_horizon = resolved
+            bar_horizon = bar_horizons[index] if adaptive else horizon
+            if bar_horizon is None or index + bar_horizon >= len(candles):
+                continue
 
             label = _label(candles, index, bar_horizon)
             if label is not None:
@@ -293,7 +327,53 @@ def run_backtest(
                 except ValueError:
                     pass
 
-            if not result.actionable:
+            if not result.actionable or result.signal is None:
+                continue
+            if (candles[index + bar_horizon].timestamp - candles[index + 1].timestamp) > timedelta(
+                minutes=bar_horizon + 5
+            ):
+                continue
+
+            awaiting_shadow = False
+            if loss_streak_cap > 0 and settled_outcomes:
+                realised = [(ts, bad) for ts, bad in settled_outcomes if ts <= entry_stamp]
+                lookback_span = max(loss_lookback_m, 720) if shadow_rec else loss_lookback_m
+                cutoff = entry_stamp - timedelta(minutes=lookback_span)
+                realised_recent = [(ts, bad) for ts, bad in realised if ts >= cutoff]
+                streak = 0
+                last_bad_ts = None
+                for ts, bad in reversed(realised_recent):
+                    if bad:
+                        streak += 1
+                        if last_bad_ts is None:
+                            last_bad_ts = ts
+                    else:
+                        break
+                if (
+                    streak >= loss_streak_cap
+                    and last_bad_ts is not None
+                    and len(realised_recent) >= loss_streak_cap
+                    and (last_bad_ts - realised_recent[-loss_streak_cap][0]) <= timedelta(minutes=loss_lookback_m)
+                ):
+                    unlock_ts = last_bad_ts + timedelta(minutes=loss_cd_m)
+                    if unlock_ts > loss_pause_until_ts:
+                        loss_pause_until_ts = unlock_ts
+                    if (
+                        shadow_rec
+                        and (shadow_cleared_ts is None or shadow_cleared_ts < last_bad_ts)
+                        and entry_stamp < (last_bad_ts + timedelta(minutes=720))
+                    ):
+                        awaiting_shadow = True
+
+            if entry_stamp < loss_pause_until_ts or awaiting_shadow:
+                if shadow_rec and shadow_trade is None:
+                    sh_move = candles[index + bar_horizon].close - candles[index + 1].open
+                    sh_gross = (sh_move if result.signal.side == "BUY" else -sh_move) / instrument.pip
+                    sh_net = sh_gross - spread
+                    shadow_trade = (candles[index + bar_horizon].timestamp, sh_net > 0.0)
+                continue
+
+            if entry_stamp < next_allowed_ts:
                 continue
 
             entry = candles[index + 1].open
@@ -301,6 +381,12 @@ def run_backtest(
             move = exit_price - entry
             gross_pips = (move if result.signal.side == "BUY" else -move) / instrument.pip
             net_pips = gross_pips - spread
+
+            if cooldown_mins > 0:
+                next_allowed_ts = entry_stamp + timedelta(minutes=cooldown_mins)
+            if loss_streak_cap > 0 and not math.isclose(gross_pips, 0.0, abs_tol=1e-12):
+                settled_at = candles[index + bar_horizon].timestamp
+                settled_outcomes.append((settled_at, net_pips < 0.0))
 
             fold_signals += 1
             fold_net += net_pips
