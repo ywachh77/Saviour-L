@@ -87,11 +87,14 @@ class TestWorkflowParity(unittest.TestCase):
         "PAIRS",
         "ADAPTIVE_HORIZON",
         "MAX_HORIZON_MINUTES",
+        "CANDLE_HISTORY",
         "MTF_FILTER",
         "MTF_MINUTES",
+        "MTF_MIN_GAP_BPS",
         "NEWS_FILTER",
         "SIGNAL_COOLDOWN_MINUTES",
         "LOSS_GUARD_STREAK",
+        "LOSS_GUARD_SHADOW_RECOVERY",
         "FX_ROLLOVER_GUARD",
     )
 

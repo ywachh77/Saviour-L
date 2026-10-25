@@ -250,15 +250,21 @@ class TestOperatorDashboardAPI(unittest.TestCase):
             "/api/config",
             {
                 "pairs": ["EUR/USD", "BTC/USD", "ETH/USD"],
+                "mtf_min_gap_bps": 2.0,
+                "mtf_macro_filter": True,
                 "signal_cooldown_minutes": 30,
                 "loss_guard_streak": 3,
+                "loss_guard_shadow_recovery": True,
                 "fx_rollover_guard": True,
             },
         )
         self.assertEqual(code, 200)
         rc = cfg_res["strategies"]["runtime_config"]
+        self.assertAlmostEqual(rc["mtf_min_gap_bps"], 2.0, places=3)
+        self.assertTrue(rc["mtf_macro_filter"])
         self.assertEqual(rc["signal_cooldown_minutes"], 30)
         self.assertEqual(rc["loss_guard_streak"], 3)
+        self.assertTrue(rc["loss_guard_shadow_recovery"])
         self.assertTrue(rc["fx_rollover_guard"])
 
 

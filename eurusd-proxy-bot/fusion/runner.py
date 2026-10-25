@@ -106,6 +106,7 @@ class FusionBot:
     calibration_points: list[tuple[float, int]] = field(default_factory=list)
     mistakes: MistakeMemory = field(default_factory=MistakeMemory)
     telegram_format: TelegramFormatConfig = field(default_factory=TelegramFormatConfig)
+    shadow_recovery: dict[str, Any] = field(default_factory=lambda: {"pending": None, "cleared_at": None})
     peer_bots: dict[str, "FusionBot"] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ setup
@@ -184,6 +185,7 @@ class FusionBot:
         self.ensemble = BootstrapEnsemble.from_dict(row.get("ensemble"))
         self.weights = CouncilWeights.from_dict(self.store.load_council_weights(pair=self.config.pair))
         runtime = row.get("runtime")
+        own_runtime = runtime if isinstance(runtime, dict) else {}
         if runtime is None and self.config.pair != "EUR/USD":
             primary = self.store.load_model_state(pair="EUR/USD") or {}
             runtime = primary.get("runtime")
@@ -196,6 +198,14 @@ class FusionBot:
         saved_fmt = runtime.get("telegram_format")
         if isinstance(saved_fmt, dict):
             self.telegram_format = TelegramFormatConfig.from_dict(saved_fmt)
+        saved_shadow = own_runtime.get("shadow_recovery")
+        if isinstance(saved_shadow, dict):
+            self.shadow_recovery = {
+                "pending": saved_shadow.get("pending") if isinstance(saved_shadow.get("pending"), dict) else None,
+                "cleared_at": saved_shadow.get("cleared_at") if saved_shadow.get("cleared_at") else None,
+            }
+        else:
+            self.shadow_recovery = {"pending": None, "cleared_at": None}
         self.mistakes = MistakeMemory.from_dict(row.get("mistakes"))
         points = row.get("calibration_points") or []
         self.calibration_points = [
@@ -726,19 +736,101 @@ class FusionBot:
                 max_loss_streak=streak_cap,
                 lookback_minutes=int(getattr(self.config, "loss_guard_lookback_minutes", 180) or 180),
                 cooldown_minutes=int(getattr(self.config, "loss_guard_cooldown_minutes", 60) or 60),
+                require_shadow_win=bool(getattr(self.config, "loss_guard_shadow_recovery", False)),
+                shadow_cleared_at=self.shadow_recovery.get("cleared_at"),
             )
             if verdict.blocked:
                 return verdict
 
         return protections.CLEAR
 
+    def _resolve_shadow_recovery(self, at: datetime | None = None) -> bool:
+        """Settle an in-flight StoplossGuard shadow candidate without touching the live ledger."""
+        pending = self.shadow_recovery.get("pending")
+        if not isinstance(pending, dict):
+            return False
+        stamp = at or now()
+        try:
+            sig = Signal.from_dict(pending)
+        except (KeyError, ValueError, TypeError):
+            self.shadow_recovery["pending"] = None
+            self._save_state(force=True)
+            return False
+
+        expiry = parse_datetime(sig.expiry_time)
+        if expiry > stamp:
+            return False
+        prices_ready = self._has_candle(sig.entry_time) and self._has_candle(_exit_stamp(sig))
+        if not prices_ready and (stamp - expiry) < timedelta(minutes=charter.UNRESOLVE_AFTER_MINUTES):
+            return False
+
+        settlement = settle.settle(sig, self.candles)
+        self.shadow_recovery["pending"] = None
+        net_val = float(settlement.net_pips or 0.0)
+        won = settlement.outcome == charter.WIN and net_val > 0.0
+        if won:
+            cleared_stamp = settlement.settled_at or stamp
+            self.shadow_recovery["cleared_at"] = (
+                cleared_stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+                if hasattr(cleared_stamp, "strftime")
+                else str(cleared_stamp)
+            )
+            self.store.log_event(
+                {
+                    "kind": "shadow_recovery_win",
+                    "pair": self.config.pair,
+                    "signal_id": sig.signal_id,
+                    "net_pips": round(net_val, 3),
+                }
+            )
+        else:
+            self.store.log_event(
+                {
+                    "kind": "shadow_recovery_miss",
+                    "pair": self.config.pair,
+                    "signal_id": sig.signal_id,
+                    "outcome": settlement.outcome,
+                    "net_pips": round(net_val, 3),
+                }
+            )
+        self._save_state(force=True)
+        return won
+
     def evaluate_minute(self, *, bucket: str, at: datetime | None = None) -> CycleReport:
         stamp = at or now()
         if not self.candles:
             return CycleReport(bucket, charter.SEAL_ABSTAIN, "No candles available yet.")
 
+        self._resolve_shadow_recovery(stamp)
         guard = self._check_runtime_protections(stamp)
         if guard.blocked:
+            if (
+                bool(getattr(self.config, "loss_guard_shadow_recovery", False))
+                and guard.guard in ("stoploss_guard", "stoploss_shadow_recovery")
+                and self.shadow_recovery.get("pending") is None
+                and not getattr(self.provider, "synthetic", False)
+            ):
+                shadow_res = self.engine.evaluate(
+                    self.candles,
+                    model=self.model,
+                    ensemble=self.ensemble,
+                    weights=self.weights,
+                    source="LIVE",
+                    at=stamp,
+                    mistakes=self.mistakes,
+                )
+                if shadow_res.actionable and shadow_res.signal is not None:
+                    self.shadow_recovery["pending"] = shadow_res.signal.to_dict()
+                    self.store.log_event(
+                        {
+                            "kind": "shadow_recovery_open",
+                            "pair": self.config.pair,
+                            "signal_id": shadow_res.signal.signal_id,
+                            "side": shadow_res.signal.side,
+                            "horizon_minutes": shadow_res.signal.horizon_minutes,
+                        }
+                    )
+                    self._save_state(force=True)
             self.abstentions += 1
             return CycleReport(bucket, charter.SEAL_ABSTAIN, guard.reason)
 
@@ -924,6 +1016,7 @@ class FusionBot:
     # ------------------------------------------------------------ settlement
     def settle_due(self, at: datetime | None = None) -> int:
         stamp = at or now()
+        self._resolve_shadow_recovery(stamp)
         count = 0
         for row in self.store.pending_signals(self.config.pair):
             try:
@@ -1239,6 +1332,7 @@ class FusionBot:
                 "telegram_offset": self.telegram.offset if self.telegram else None,
                 "stale_feed_minutes": self.stale_feed_minutes,
                 "telegram_format": self.telegram_format.to_dict(),
+                "shadow_recovery": dict(self.shadow_recovery),
             },
             "calibration_points": [[point[0], point[1]] for point in self.calibration_points[-2000:]],
             "mistakes": self.mistakes.to_dict(),

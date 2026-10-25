@@ -68,7 +68,7 @@ from fusion.timeutil import floor_minute, format_datetime, minute_bucket, now as
 from scripts.set_keys import normalise_keys  # noqa: E402
 
 MAX_JSON_BODY = 32_768
-TESTS_PASSING_BASELINE = 665
+TESTS_PASSING_BASELINE = 669
 
 SIM_DEFAULTS: dict[str, tuple[float, float, int]] = {
     "EUR/USD": (1.08520, 0.00024, 101),
@@ -188,11 +188,23 @@ class OperatorRuntime:
         if not envfile.get_value(env_lines, "MTF_FILTER"):
             cfg.mtf_filter = True
             cfg.mtf_minutes = 15
+        if not envfile.get_value(env_lines, "MTF_MIN_GAP_BPS"):
+            cfg.mtf_min_gap_bps = 2.0
+        if not envfile.get_value(env_lines, "CANDLE_HISTORY"):
+            cfg.candle_history = 750
         if not envfile.get_value(env_lines, "NEWS_FILTER"):
             cfg.news_filter = True
         if not envfile.get_value(env_lines, "ADAPTIVE_HORIZON"):
             cfg.adaptive_horizon = True
             cfg.max_horizon_minutes = 120
+        if not envfile.get_value(env_lines, "SIGNAL_COOLDOWN_MINUTES"):
+            cfg.signal_cooldown_minutes = 15
+        if not envfile.get_value(env_lines, "LOSS_GUARD_STREAK"):
+            cfg.loss_guard_streak = 3
+        if not envfile.get_value(env_lines, "LOSS_GUARD_SHADOW_RECOVERY"):
+            cfg.loss_guard_shadow_recovery = True
+        if not envfile.get_value(env_lines, "FX_ROLLOVER_GUARD"):
+            cfg.fx_rollover_guard = True
 
         if self._override_state_dir is not None:
             cfg.local_state_dir = str(self._override_state_dir)
@@ -284,7 +296,7 @@ class OperatorRuntime:
             if not member.candles or target_stamp is not None:
                 member.candles = _build_scaled_paper_series(
                     member.config.pair,
-                    count=max(260, member.config.candle_history),
+                    count=max(680, member.config.candle_history),
                     end_minute=anchor,
                     seed_offset=self._sim_step,
                 )
@@ -299,7 +311,13 @@ class OperatorRuntime:
         feat_series = feat_mod.compute_features(candles, instrument=inst) if len(candles) >= 60 else []
         latest_feat = feat_series[-1] if feat_series else None
         reg = regime_mod.detect_regime(candles, latest_feat).name if latest_feat else "UNKNOWN"
-        bias_15 = _mtf_label(mtf.bias(candles, 15).direction) if len(candles) >= 60 else "FLAT"
+        bias_15 = _mtf_label(mtf.bias(candles, 15, min_gap_bps=member.config.mtf_min_gap_bps).direction) if len(candles) >= 60 else "FLAT"
+        bias_60 = (
+            _mtf_label(mtf.bias(candles, 60, min_gap_bps=member.config.mtf_macro_min_gap_bps, require_slope=True).direction)
+            if len(candles) >= 660
+            else "WARMUP"
+        )
+        gap_15_bps = round(float(latest_feat.get("mtf_gap_15", 0.0)), 2) if latest_feat else 0.0
         sess = session_mod.session_of(candles[-1].timestamp if candles else utcnow(), inst)
         horizon = costs.resolve_horizon(
             atr_pips,
@@ -325,6 +343,9 @@ class OperatorRuntime:
             "chop_14": round(float(latest_feat.get("chop_14", 50.0)), 1) if latest_feat else 50.0,
             "regime": reg,
             "mtf_15m": bias_15,
+            "mtf_15m_gap_bps": gap_15_bps,
+            "mtf_60m": bias_60,
+            "shadow_recovery_pending": bool(member.shadow_recovery.get("pending")),
             "session": sess,
             "resolved_horizon_m": horizon,
             "break_even_wr": None if not math.isfinite(be) else round(be * 100.0, 1),
@@ -379,6 +400,8 @@ class OperatorRuntime:
                 "runtime_config": {
                     "mtf_filter": self.config.mtf_filter,
                     "mtf_minutes": self.config.mtf_minutes,
+                    "mtf_min_gap_bps": self.config.mtf_min_gap_bps,
+                    "mtf_macro_filter": self.config.mtf_macro_filter,
                     "news_filter": self.config.news_filter,
                     "adaptive_horizon": self.config.adaptive_horizon,
                     "max_horizon_minutes": self.config.max_horizon_minutes,
@@ -387,6 +410,7 @@ class OperatorRuntime:
                     "min_confluence_checks": self.config.min_confluence_checks,
                     "signal_cooldown_minutes": self.config.signal_cooldown_minutes,
                     "loss_guard_streak": self.config.loss_guard_streak,
+                    "loss_guard_shadow_recovery": self.config.loss_guard_shadow_recovery,
                     "fx_rollover_guard": self.config.fx_rollover_guard,
                 },
                 "markets": [self._market_snapshot(m) for m in self._all_members()],
@@ -924,6 +948,8 @@ class OperatorRuntime:
                     "pairs": list(self.config.active_pairs),
                     "mtf_filter": self.config.mtf_filter,
                     "mtf_minutes": self.config.mtf_minutes,
+                    "mtf_min_gap_bps": self.config.mtf_min_gap_bps,
+                    "mtf_macro_filter": self.config.mtf_macro_filter,
                     "news_filter": self.config.news_filter,
                     "adaptive_horizon": self.config.adaptive_horizon,
                     "max_horizon_minutes": self.config.max_horizon_minutes,
@@ -931,6 +957,7 @@ class OperatorRuntime:
                     "min_confluence_checks": self.config.min_confluence_checks,
                     "signal_cooldown_minutes": self.config.signal_cooldown_minutes,
                     "loss_guard_streak": self.config.loss_guard_streak,
+                    "loss_guard_shadow_recovery": self.config.loss_guard_shadow_recovery,
                     "fx_rollover_guard": self.config.fx_rollover_guard,
                 },
                 "members": rows,
@@ -963,6 +990,13 @@ class OperatorRuntime:
                         "oos_wr": 53.39,
                         "oos_net": -0.440,
                     },
+                    {
+                        "variant": "MTF 2.0 bps Dead-Zone + Shadow-Win Hold (260k 2025-26)",
+                        "train_wr": 48.67,
+                        "train_net": 0.480,
+                        "oos_wr": 52.04,
+                        "oos_net": 0.480,
+                    },
                 ],
             }
 
@@ -990,6 +1024,13 @@ class OperatorRuntime:
                 if val not in (5, 15):
                     raise ValueError("mtf_minutes must be 5 or 15.")
                 self.config.mtf_minutes = val
+            if "mtf_min_gap_bps" in payload:
+                gap_val = float(payload["mtf_min_gap_bps"])
+                if not 0.0 <= gap_val <= 25.0:
+                    raise ValueError("mtf_min_gap_bps must be between 0.0 and 25.0.")
+                self.config.mtf_min_gap_bps = gap_val
+            if "mtf_macro_filter" in payload:
+                self.config.mtf_macro_filter = bool(payload["mtf_macro_filter"])
             if "news_filter" in payload:
                 self.config.news_filter = bool(payload["news_filter"])
             if "adaptive_horizon" in payload:
@@ -998,6 +1039,8 @@ class OperatorRuntime:
                 self.config.session_filter = bool(payload["session_filter"])
             if "fx_rollover_guard" in payload:
                 self.config.fx_rollover_guard = bool(payload["fx_rollover_guard"])
+            if "loss_guard_shadow_recovery" in payload:
+                self.config.loss_guard_shadow_recovery = bool(payload["loss_guard_shadow_recovery"])
             if "signal_cooldown_minutes" in payload:
                 cd = int(payload["signal_cooldown_minutes"])
                 if not 0 <= cd <= 240:

@@ -49,12 +49,15 @@ jobs:
           TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
+          CANDLE_HISTORY: "750"
           PAIRS: "EUR/USD,BTC/USD,ETH/USD"
           MTF_FILTER: "1"
           MTF_MINUTES: "15"
+          MTF_MIN_GAP_BPS: "2.0"
           NEWS_FILTER: "1"
           SIGNAL_COOLDOWN_MINUTES: "15"
           LOSS_GUARD_STREAK: "3"
+          LOSS_GUARD_SHADOW_RECOVERY: "1"
           FX_ROLLOVER_GUARD: "1"
           LISTEN_SECONDS: "720"
         working-directory: ${{ steps.locate.outputs.dir }}

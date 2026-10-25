@@ -251,6 +251,8 @@
       var be = m.break_even_wr == null ? ">100%" : (m.break_even_wr + "%");
       var kerTxt = m.ker_10 != null ? Number(m.ker_10).toFixed(2) : "0.35";
       var chopTxt = m.chop_14 != null ? Number(m.chop_14).toFixed(1) : "48.0";
+      var gapTxt = m.mtf_15m_gap_bps != null ? ((m.mtf_15m_gap_bps >= 0 ? "+" : "") + Number(m.mtf_15m_gap_bps).toFixed(1) + "bp") : "--";
+      var m60Txt = m.mtf_60m || "WARMUP";
       return (
         '<div class="mkt-card">' +
           '<div class="mkt-head">' +
@@ -258,7 +260,7 @@
             '<span class="mono mkt-price">' + fmtPrice(m.latest_price, m.precision) + '</span>' +
           '</div>' +
           '<div class="kv-list">' +
-            '<div class="kv"><dt>Regime / 15m MTF</dt><dd class="mono">' + esc(m.regime) + " / " + esc(m.mtf_15m) + '</dd></div>' +
+            '<div class="kv"><dt>Regime / 15m / 60m</dt><dd class="mono">' + esc(m.regime) + " / " + esc(m.mtf_15m) + " (" + esc(gapTxt) + ") / " + esc(m60Txt) + '</dd></div>' +
             '<div class="kv"><dt>M1 ATR / Spread</dt><dd class="mono">' + esc(m.atr_pips) + "p / " + esc(m.spread_pips) + 'p</dd></div>' +
             '<div class="kv"><dt>KER(10) / CHOP(14)</dt><dd class="mono">' + esc(kerTxt) + " / " + esc(chopTxt) + '</dd></div>' +
             '<div class="kv"><dt>Hold / Break-Even</dt><dd class="mono">' + esc(m.resolved_horizon_m || "--") + "m / " + esc(be) + '</dd></div>' +
@@ -773,7 +775,7 @@
 
   /* Page 03 : Health & Causality Audit ----------------------------------- */
   function renderHealth(h) {
-    document.getElementById("hl-tests").textContent = String(h.tests_passing || 665);
+    document.getElementById("hl-tests").textContent = String(h.tests_passing || 669);
     var la = h.lookahead || {};
     var checks = la.checks || [];
     var passCount = checks.filter(function (c) { return c.ok; }).length;
@@ -837,6 +839,13 @@
     });
     document.getElementById("cfg-mtf").checked = Boolean(rc.mtf_filter);
     document.getElementById("cfg-mtf-min").value = String(rc.mtf_minutes || 15);
+    var gapEl = document.getElementById("cfg-mtf-gap");
+    if (gapEl && rc.mtf_min_gap_bps !== undefined) {
+      var gv = Number(rc.mtf_min_gap_bps);
+      gapEl.value = gv === 0 ? "0" : gv.toFixed(1);
+    }
+    var macroEl = document.getElementById("cfg-mtf-macro");
+    if (macroEl && rc.mtf_macro_filter !== undefined) macroEl.checked = Boolean(rc.mtf_macro_filter);
     document.getElementById("cfg-news").checked = Boolean(rc.news_filter);
     document.getElementById("cfg-adaptive").checked = Boolean(rc.adaptive_horizon);
     document.getElementById("cfg-session").checked = Boolean(rc.session_filter);
@@ -846,6 +855,8 @@
     if (cdEl && rc.signal_cooldown_minutes !== undefined) cdEl.value = String(rc.signal_cooldown_minutes);
     var lsEl = document.getElementById("cfg-loss-streak");
     if (lsEl && rc.loss_guard_streak !== undefined) lsEl.value = String(rc.loss_guard_streak);
+    var shEl = document.getElementById("cfg-shadow-recovery");
+    if (shEl && rc.loss_guard_shadow_recovery !== undefined) shEl.checked = Boolean(rc.loss_guard_shadow_recovery);
 
     var tbody = document.getElementById("strat-members-tbody");
     if (tbody && data.members) {
@@ -883,12 +894,15 @@
         pairs: pairs,
         mtf_filter: document.getElementById("cfg-mtf").checked,
         mtf_minutes: parseInt(document.getElementById("cfg-mtf-min").value, 10) || 15,
+        mtf_min_gap_bps: parseFloat((document.getElementById("cfg-mtf-gap") || {}).value || "0") || 0,
+        mtf_macro_filter: Boolean((document.getElementById("cfg-mtf-macro") || {}).checked),
         news_filter: document.getElementById("cfg-news").checked,
         adaptive_horizon: document.getElementById("cfg-adaptive").checked,
         session_filter: document.getElementById("cfg-session").checked,
         fx_rollover_guard: Boolean((document.getElementById("cfg-rollover") || {}).checked),
         signal_cooldown_minutes: parseInt((document.getElementById("cfg-cooldown") || {}).value || "0", 10) || 0,
-        loss_guard_streak: parseInt((document.getElementById("cfg-loss-streak") || {}).value || "0", 10) || 0
+        loss_guard_streak: parseInt((document.getElementById("cfg-loss-streak") || {}).value || "0", 10) || 0,
+        loss_guard_shadow_recovery: Boolean((document.getElementById("cfg-shadow-recovery") || {}).checked)
       })
         .then(function (res) {
           renderStrategies(res.strategies);

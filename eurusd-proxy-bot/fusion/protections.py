@@ -134,14 +134,29 @@ def check_stoploss_guard(
     max_loss_streak: int = 0,
     lookback_minutes: int = 180,
     cooldown_minutes: int = 60,
+    require_shadow_win: bool = False,
+    shadow_cleared_at: datetime | str | None = None,
+    shadow_hold_max_minutes: int = 720,
 ) -> ProtectionVerdict:
-    """Pause entries after ``max_loss_streak`` consecutive net losses inside ``lookback_minutes``."""
+    """Pause entries after ``max_loss_streak`` consecutive net losses inside ``lookback_minutes``.
+
+    When ``require_shadow_win`` is True (Nyao-style streak recovery), once the
+    mandatory ``cooldown_minutes`` elapses the guard remains held (up to
+    ``shadow_hold_max_minutes``) until either a silent cost-charged shadow
+    candidate settles in net profit (``shadow_cleared_at >= last_loss_ts``) or
+    an already-open real settlement resolves in net profit.
+    """
     limit = int(max_loss_streak or 0)
     if limit <= 0 or int(cooldown_minutes or 0) <= 0:
         return CLEAR
 
     now_stamp = parse_datetime(at)
-    floor_ts = now_stamp - timedelta(minutes=max(1, int(lookback_minutes)))
+    horizon_window = (
+        max(int(lookback_minutes), int(shadow_hold_max_minutes))
+        if require_shadow_win
+        else int(lookback_minutes)
+    )
+    floor_ts = now_stamp - timedelta(minutes=max(1, horizon_window))
 
     decided: list[tuple[datetime, bool]] = []
     for row in recent_settlements:
@@ -182,16 +197,43 @@ def check_stoploss_guard(
     if streak < limit or last_loss_ts is None:
         return CLEAR
 
-    unlock = last_loss_ts + timedelta(minutes=int(cooldown_minutes))
-    if now_stamp >= unlock:
+    # Ensure the triggering consecutive losses formed inside lookback_minutes.
+    cluster_start_ts = decided[-limit][0]
+    if (last_loss_ts - cluster_start_ts) > timedelta(minutes=max(1, int(lookback_minutes))):
         return CLEAR
 
-    remaining = max(1, int(round((unlock - now_stamp).total_seconds() / 60.0)))
+    unlock = last_loss_ts + timedelta(minutes=int(cooldown_minutes))
     target = f" on {pair}" if pair else ""
+    if now_stamp < unlock:
+        remaining = max(1, int(round((unlock - now_stamp).total_seconds() / 60.0)))
+        return ProtectionVerdict(
+            True,
+            "stoploss_guard",
+            f"StoplossGuard active{target}: {streak} consecutive cost-charged losses in the last "
+            f"{int(lookback_minutes)}m; cooling down for {remaining}m.",
+            until=unlock.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+
+    if not require_shadow_win:
+        return CLEAR
+
+    cleared_ts: datetime | None = None
+    if shadow_cleared_at:
+        try:
+            cleared_ts = parse_datetime(shadow_cleared_at)
+        except (TypeError, ValueError):
+            cleared_ts = None
+    if cleared_ts is not None and cleared_ts >= last_loss_ts:
+        return CLEAR
+
+    max_hold_until = last_loss_ts + timedelta(minutes=max(int(cooldown_minutes), int(shadow_hold_max_minutes)))
+    if now_stamp >= max_hold_until:
+        return CLEAR
+
     return ProtectionVerdict(
         True,
-        "stoploss_guard",
-        f"StoplossGuard active{target}: {streak} consecutive cost-charged losses in the last "
-        f"{int(lookback_minutes)}m; cooling down for {remaining}m.",
-        until=unlock.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "stoploss_shadow_recovery",
+        f"StoplossGuard shadow recovery{target}: {streak} consecutive losses; awaiting 1 cost-charged "
+        "shadow win before resuming live signals.",
+        until=max_hold_until.strftime("%Y-%m-%dT%H:%M:%SZ"),
     )

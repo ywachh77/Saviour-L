@@ -52,6 +52,7 @@ FEATURE_VERSION = 4
 # five-minute bar. See fusion/mtf.py for why a forming bucket is never used.
 MTF_FAST_MINUTES = 5
 MTF_SLOW_MINUTES = 15
+MTF_MACRO_MINUTES = 60
 MTF_EMA_PERIOD = 10
 
 FEATURE_NAMES = (
@@ -183,6 +184,7 @@ def compute_features(
     # would take hours instead of seconds.
     mtf_fast = mtf.bias_series(candles, minutes=MTF_FAST_MINUTES, ema_period=MTF_EMA_PERIOD)
     mtf_slow = mtf.bias_series(candles, minutes=MTF_SLOW_MINUTES, ema_period=MTF_EMA_PERIOD)
+    mtf_macro = mtf.bias_series(candles, minutes=MTF_MACRO_MINUTES, ema_period=MTF_EMA_PERIOD)
 
     returns: list[float] = [0.0]
     for index in range(1, len(closes)):
@@ -295,8 +297,16 @@ def compute_features(
             # higher-timeframe context
             "mtf_bias_5": float(mtf_fast[index].direction),
             "mtf_gap_5": _mtf_gap(mtf_fast[index], candle.close),
+            "mtf_slope_5": float(mtf_fast[index].slope_bps) if mtf_fast[index].reference > 0.0 else 0.0,
+            "mtf_ready_5": 1.0 if mtf_fast[index].reference > 0.0 else 0.0,
             "mtf_bias_15": float(mtf_slow[index].direction),
             "mtf_gap_15": _mtf_gap(mtf_slow[index], candle.close),
+            "mtf_slope_15": float(mtf_slow[index].slope_bps) if mtf_slow[index].reference > 0.0 else 0.0,
+            "mtf_ready_15": 1.0 if mtf_slow[index].reference > 0.0 else 0.0,
+            "mtf_bias_60": float(mtf_macro[index].direction),
+            "mtf_gap_60": _mtf_gap(mtf_macro[index], candle.close),
+            "mtf_slope_60": float(mtf_macro[index].slope_bps) if mtf_macro[index].reference > 0.0 else 0.0,
+            "mtf_ready_60": 1.0 if mtf_macro[index].reference > 0.0 else 0.0,
             # strategy-facing values
             "ema_fast": ema_fast[index],
             "ema_slow": ema_slow[index],

@@ -383,7 +383,7 @@
       <div class="grid-3">
         <div class="stat-card">
           <span class="stat-label mono">UNIT SUITE</span>
-          <strong class="stat-val mono" id="hl-tests">665</strong>
+          <strong class="stat-val mono" id="hl-tests">669</strong>
           <span class="stat-sub">Passing verification checks</span>
         </div>
         <div class="stat-card">
@@ -461,6 +461,13 @@
                 <option value="15" selected>15m Structure</option>
                 <option value="5">5m Structure</option>
               </select>
+              <select id="cfg-mtf-gap" class="input input-sm mono" aria-label="MTF Clear-Trend Dead-Zone">
+                <option value="0">Dead-Zone: 0.0 bps</option>
+                <option value="1.5">Dead-Zone: 1.5 bps</option>
+                <option value="2.0" selected>Dead-Zone: 2.0 bps (-39% MDD)</option>
+                <option value="3.0">Dead-Zone: 3.0 bps</option>
+              </select>
+              <label class="check-field"><input type="checkbox" id="cfg-mtf-macro"><span>60m Macro Slope Gate</span></label>
             </div>
           </div>
 
@@ -489,6 +496,7 @@
                 <option value="3" selected>3 Losses -&gt; 60m Pause</option>
                 <option value="4">4 Losses -&gt; 60m Pause</option>
               </select>
+              <label class="check-field"><input type="checkbox" id="cfg-shadow-recovery" checked><span>Shadow-Win Streak Recovery</span></label>
             </div>
           </div>
         </div>
@@ -540,6 +548,13 @@
                 <td class="mono">-0.910 pips</td>
                 <td class="mono">53.39%</td>
                 <td class="mono">+0.47p lift / -73% MDD</td>
+              </tr>
+              <tr>
+                <td><strong>MTF 2.0 bps Clear-Trend Dead-Zone + Shadow-Win Hold (260k 2025–26)</strong></td>
+                <td class="mono">48.67%</td>
+                <td class="mono">-30.6% MDD</td>
+                <td class="mono">52.04%</td>
+                <td class="mono pos">+0.48p gross / -38.6% MDD</td>
               </tr>
             </tbody>
           </table>

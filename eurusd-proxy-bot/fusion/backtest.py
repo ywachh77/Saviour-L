@@ -248,6 +248,7 @@ def run_backtest(
     loss_streak_cap = max(0, int(getattr(config, "loss_guard_streak", 0) or 0))
     loss_lookback_m = max(1, int(getattr(config, "loss_guard_lookback_minutes", 180) or 180))
     loss_cd_m = max(1, int(getattr(config, "loss_guard_cooldown_minutes", 60) or 60))
+    shadow_rec = bool(getattr(config, "loss_guard_shadow_recovery", False))
 
     for fold_index, (train_idx, test_idx) in enumerate(splits, start=1):
         pairs: list[tuple[dict, int]] = []
@@ -272,11 +273,18 @@ def run_backtest(
         next_allowed_ts = candles[0].timestamp - timedelta(minutes=1)
         loss_pause_until_ts = candles[0].timestamp - timedelta(minutes=1)
         settled_outcomes: list[tuple] = []
+        shadow_trade: tuple[datetime, bool] | None = None
+        shadow_cleared_ts: datetime | None = None
 
         for index in test_idx:
             features = feature_rows[index]
             candle = candles[index]
             entry_stamp = candle.timestamp + timedelta(minutes=1)
+            if shadow_trade is not None and shadow_trade[0] <= entry_stamp:
+                sh_ts, sh_win = shadow_trade
+                shadow_trade = None
+                if sh_win:
+                    shadow_cleared_ts = sh_ts
             recent = [value for value in atr_values[max(0, index - 29) : index + 1] if value is not None]
             regime = classify(
                 atr_value=float(features["atr"]),
@@ -319,11 +327,18 @@ def run_backtest(
                 except ValueError:
                     pass
 
-            if not result.actionable:
+            if not result.actionable or result.signal is None:
                 continue
+            if (candles[index + bar_horizon].timestamp - candles[index + 1].timestamp) > timedelta(
+                minutes=bar_horizon + 5
+            ):
+                continue
+
+            awaiting_shadow = False
             if loss_streak_cap > 0 and settled_outcomes:
                 realised = [(ts, bad) for ts, bad in settled_outcomes if ts <= entry_stamp]
-                cutoff = entry_stamp - timedelta(minutes=loss_lookback_m)
+                lookback_span = max(loss_lookback_m, 720) if shadow_rec else loss_lookback_m
+                cutoff = entry_stamp - timedelta(minutes=lookback_span)
                 realised_recent = [(ts, bad) for ts, bad in realised if ts >= cutoff]
                 streak = 0
                 last_bad_ts = None
@@ -334,16 +349,31 @@ def run_backtest(
                             last_bad_ts = ts
                     else:
                         break
-                if streak >= loss_streak_cap and last_bad_ts is not None:
+                if (
+                    streak >= loss_streak_cap
+                    and last_bad_ts is not None
+                    and len(realised_recent) >= loss_streak_cap
+                    and (last_bad_ts - realised_recent[-loss_streak_cap][0]) <= timedelta(minutes=loss_lookback_m)
+                ):
                     unlock_ts = last_bad_ts + timedelta(minutes=loss_cd_m)
                     if unlock_ts > loss_pause_until_ts:
                         loss_pause_until_ts = unlock_ts
+                    if (
+                        shadow_rec
+                        and (shadow_cleared_ts is None or shadow_cleared_ts < last_bad_ts)
+                        and entry_stamp < (last_bad_ts + timedelta(minutes=720))
+                    ):
+                        awaiting_shadow = True
 
-            if entry_stamp < next_allowed_ts or entry_stamp < loss_pause_until_ts:
+            if entry_stamp < loss_pause_until_ts or awaiting_shadow:
+                if shadow_rec and shadow_trade is None:
+                    sh_move = candles[index + bar_horizon].close - candles[index + 1].open
+                    sh_gross = (sh_move if result.signal.side == "BUY" else -sh_move) / instrument.pip
+                    sh_net = sh_gross - spread
+                    shadow_trade = (candles[index + bar_horizon].timestamp, sh_net > 0.0)
                 continue
-            if (candles[index + bar_horizon].timestamp - candles[index + 1].timestamp) > timedelta(
-                minutes=bar_horizon + 5
-            ):
+
+            if entry_stamp < next_allowed_ts:
                 continue
 
             entry = candles[index + 1].open
