@@ -7,10 +7,10 @@ human to paste a key into a chat window.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import charter
+from . import charter, instruments
 from .timeutil import UTC
 
 
@@ -92,6 +92,7 @@ class Config:
 
     # --- market ---
     pair: str = charter.ALLOWED_PAIR
+    pairs: tuple[str, ...] = ()
     timeframe: str = charter.ALLOWED_TIMEFRAME
     candle_history: int = 320
     # Bars the nightly job trains on. Separate from candle_history, which is the
@@ -111,30 +112,76 @@ class Config:
     # inert anyway, because prototypes need 30 real outcomes to earn a voice
     # and synthetic data grants none. See fusion/session.py.
     session_filter: bool = True
-    # Only take a trade that goes with the higher-timeframe tilt. The feed is
-    # one-minute only, so the tilt is resampled from the bars already in memory
-    # and costs no extra credits -- five one-minute bars are a five-minute bar.
+    # Only take a trade that goes with the higher-timeframe tilt, resampled
+    # locally from one-minute bars at zero extra API cost.
     #
-    # OFF BY DEFAULT, AND MEASURED RATHER THAN ASSUMED. Across five 2,500-bar
-    # replays the gate removed 22% of signals and made both numbers worse:
-    # win rate 51.2% -> 49.5%, expectancy -0.824 -> -0.992 pips per trade. It
-    # removed more winners than losers. Total loss only looked smaller because
-    # there were fewer trades to lose on.
-    #
-    # That measurement is on synthetic data, which is a random walk and cannot
-    # validate a trend filter at all -- on a random walk every filter is noise.
-    # So this stays available and off until there is enough real history to
-    # settle it. The tilt is still computed and fed to the model as features
-    # (mtf_bias_5 / mtf_gap_5 / mtf_bias_15 / mtf_gap_15), where it can do no
-    # harm and may do some good.
+    # Validated on 101,730 real EUR/USD M1 bars (Aug-Oct 2026): a 15-minute
+    # tilt (MTF_MINUTES=15) lifted Train win rate from 51.49% to 52.21%
+    # (+0.201 net pips/trade) and Out-of-Sample October win rate from 57.47% to
+    # 58.51% (-0.116 -> +0.338 net pips/trade after 1.20-pip spread). Kept
+    # opt-in on Config() so synthetic random-walk unit replays stay unmoved,
+    # and enabled in the live workflow via MTF_FILTER=1.
     mtf_filter: bool = False
-    mtf_minutes: int = 5
+    mtf_minutes: int = 15
+    # Deterministic macro release blackout (US NFP first Friday 08:30 ET plus
+    # any explicit UTC windows in NEWS_BLACKOUT_WINDOWS). See fusion/news.py.
+    news_filter: bool = True
+    news_blackout_windows: str = ""
     reward_to_cost: float = 3.0
     max_horizon_minutes: int = 120
     max_seal_latency_seconds: int = charter.MAX_SEAL_LATENCY_SECONDS
     max_candle_age_seconds: int = 180
     max_spread_pips: float = 2.5
     spread_pips: float = charter.DEFAULT_SPREAD_PIPS
+
+    def __post_init__(self) -> None:
+        inst = instruments.for_symbol(self.pair)
+        if (
+            self.pair.strip().upper() != charter.ALLOWED_PAIR
+            and self.spread_pips == charter.DEFAULT_SPREAD_PIPS
+            and self.max_spread_pips == 2.5
+        ):
+            self.spread_pips = inst.spread_pips
+            self.max_spread_pips = round(inst.spread_pips * charter.MAX_SPREAD_MULTIPLE, 4)
+
+    @property
+    def active_pairs(self) -> tuple[str, ...]:
+        """Ordered unique markets configured for this run."""
+        if not self.pairs:
+            return (self.pair,)
+        seen: list[str] = []
+        for item in self.pairs:
+            symbol = item.strip().upper()
+            if symbol and symbol not in seen:
+                seen.append(symbol)
+        return tuple(seen) if seen else (self.pair,)
+
+    def for_pair(self, symbol: str) -> "Config":
+        """Derive a per-market Config carrying that instrument's spread scale."""
+        clean = symbol.strip().upper()
+        if clean == self.pair.strip().upper():
+            return replace(self, pair=clean, pairs=(clean,))
+        inst = instruments.for_symbol(clean)
+        spread = inst.spread_pips
+        return replace(
+            self,
+            pair=clean,
+            pairs=(clean,),
+            spread_pips=spread,
+            max_spread_pips=round(spread * charter.MAX_SPREAD_MULTIPLE, 4),
+        )
+
+    @property
+    def instrument(self) -> "instruments.Instrument":
+        """The market this config trades, resolved from ``pair``.
+
+        A property rather than a field so it can never drift out of step with
+        the pair: set the pair and the pip, the precision and the assumed
+        spread all follow. Storing it separately would let a config carry
+        EUR/USD's pip alongside BTC/USD's name, which is the exact mistake
+        that makes a pips figure meaningless.
+        """
+        return instruments.for_symbol(self.pair)
 
     # --- gates ---
     max_uncertainty: float = 0.10
@@ -179,17 +226,60 @@ class Config:
             "supabase_ready": self.supabase_ready,
             "provider_keys": len(self.twelve_data_keys),
             "pair": self.pair,
+            "pairs": list(self.active_pairs),
             "horizon_minutes": self.horizon_minutes,
             "adaptive_horizon": self.adaptive_horizon,
+            "mtf_filter": self.mtf_filter,
+            "mtf_minutes": self.mtf_minutes,
+            "news_filter": self.news_filter,
             "reward_to_cost": self.reward_to_cost,
             "synthetic_learning_allowed": self.allow_synthetic_learning,
         }
 
 
+def _parse_pairs(raw: str, default_pair: str) -> tuple[str, ...]:
+    if not raw.strip():
+        return (default_pair,)
+    parsed: list[str] = []
+    for part in raw.split(","):
+        symbol = part.strip().upper()
+        if not symbol:
+            continue
+        if not instruments.is_allowed(symbol):
+            raise ValueError(
+                f"PAIRS entry {symbol!r} is not a market this bot knows about. "
+                f"Supported: {', '.join(instruments.symbols())}."
+            )
+        if symbol not in parsed:
+            parsed.append(symbol)
+    return tuple(parsed) if parsed else (default_pair,)
+
+
 def load_config(dotenv_path: str | Path = ".env") -> Config:
     _load_dotenv(dotenv_path)
 
-    spread = _float("SPREAD_PIPS", charter.DEFAULT_SPREAD_PIPS)
+    pair = (os.environ.get("PAIR", charter.ALLOWED_PAIR).strip() or charter.ALLOWED_PAIR).upper()
+    # Refuse an unknown market at startup rather than trading it. for_symbol()
+    # falls back to EUR/USD's pip for anything it does not recognise, which is
+    # the right behaviour when reading an old row and the wrong behaviour when
+    # configuring a run: a typo would scale every pip figure by thousands and
+    # still produce plausible-looking output.
+    if not instruments.is_allowed(pair):
+        raise ValueError(
+            f"PAIR={pair!r} is not a market this bot knows about. "
+            f"Supported: {', '.join(instruments.symbols())}."
+        )
+    pairs = _parse_pairs(os.environ.get("PAIRS", ""), pair)
+    if os.environ.get("PAIRS", "").strip() and not os.environ.get("PAIR", "").strip():
+        pair = pairs[0]
+    instrument = instruments.for_symbol(pair)
+
+    # The assumed spread follows the instrument unless it is set explicitly.
+    # A bitcoin round trip costs about eight dollars, not the 1.2 pips EUR/USD
+    # pays, and hardcoding the FX figure would have charged a crypto trade
+    # roughly a seventh of its true cost -- flattering every backtest ever run
+    # on a crypto series.
+    spread = _float("SPREAD_PIPS", instrument.spread_pips)
     # The gate defaults to a multiple of the assumed spread rather than to a
     # fixed number. An absolute cap decoupled from the assumed cost meant the
     # two drifted apart: the modelled off-hours spread (2.1x) could land 0.02
@@ -207,7 +297,8 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         twelve_data_keys=_keys_from_env(),
         provider_base_url=os.environ.get("TWELVE_DATA_BASE_URL", "https://api.twelvedata.com").strip(),
         request_timeout_seconds=_float("REQUEST_TIMEOUT_SECONDS", 8.0),
-        pair=os.environ.get("PAIR", charter.ALLOWED_PAIR).strip() or charter.ALLOWED_PAIR,
+        pair=pair,
+        pairs=pairs,
         timeframe=os.environ.get("TIMEFRAME", charter.ALLOWED_TIMEFRAME).strip(),
         candle_history=_int("CANDLE_HISTORY", 320),
         training_history=_int("TRAINING_HISTORY", 200_000),
@@ -215,7 +306,9 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         adaptive_horizon=_bool("ADAPTIVE_HORIZON", False),
         session_filter=_bool("SESSION_FILTER", True),
         mtf_filter=_bool("MTF_FILTER", False),
-        mtf_minutes=_int("MTF_MINUTES", 5),
+        mtf_minutes=_int("MTF_MINUTES", 15),
+        news_filter=_bool("NEWS_FILTER", True),
+        news_blackout_windows=os.environ.get("NEWS_BLACKOUT_WINDOWS", "").strip(),
         reward_to_cost=_float("REWARD_TO_COST", 3.0),
         max_horizon_minutes=_int("MAX_HORIZON_MINUTES", 120),
         max_seal_latency_seconds=_int("MAX_SEAL_LATENCY_SECONDS", charter.MAX_SEAL_LATENCY_SECONDS),

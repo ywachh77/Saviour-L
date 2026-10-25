@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
 
-from . import charter, costs, datagate
+from . import charter, costs, datagate, instruments, news
 from .calibration import IsotonicCalibrator
 from .council import CouncilResult, CouncilWeights, run_council
 from .domain import Candle, ModelRead, Signal, closed_before
@@ -222,6 +222,15 @@ class FusionEngine:
 
         regime = regime_state or RegimeState("UNKNOWN", 0.0, 0.0, 0.0, 0.0, "Regime not supplied.")
 
+        if getattr(config, "news_filter", False):
+            blackout = news.check_blackout(
+                add_minutes(candle.timestamp, 1),
+                pair=getattr(config, "pair", "EUR/USD"),
+                extra_windows=getattr(config, "news_blackout_windows", ""),
+            )
+            if blackout.blocked:
+                return Verdict("NO SIGNAL", blackout.reason, regime.name)
+
         read = build_read(model, ensemble, features, max_uncertainty=config.max_uncertainty)
         if read is not None and read.abstain_reason:
             return Verdict("NO SIGNAL", read.abstain_reason, regime.name, read=read)
@@ -229,7 +238,11 @@ class FusionEngine:
         # The session is read from the bar being decided, not from the wall
         # clock, so a replay of history classifies each bar by the hour it
         # actually happened in.
-        session = session_of(candle.timestamp) if config.session_filter else None
+        session = (
+            session_of(candle.timestamp, instruments.for_symbol(self.config.pair))
+            if config.session_filter
+            else None
+        )
         council = run_council(
             candle,
             previous_close,
@@ -295,6 +308,7 @@ class FusionEngine:
         # high, low and close into the features is look-ahead, and the
         # walk-forward backtest never had it. See domain.closed_before.
         candles = closed_before(list(candles), stamp)
+        instrument = instruments.for_symbol(getattr(config, "pair", None))
 
         gate = datagate.evaluate(
             candles,
@@ -303,11 +317,12 @@ class FusionEngine:
             max_spread_pips=config.max_spread_pips,
             quote=quote,
             base_spread_pips=config.spread_pips,
+            crypto=instrument.crypto,
         )
         if not gate.usable:
             return EngineResult(charter.SEAL_ABSTAIN, None, f"Data gate: {gate.reason}", gate=gate)
 
-        feature_rows = compute_features(candles)
+        feature_rows = compute_features(candles, instrument=instrument)
         features = feature_rows[-1] if feature_rows else None
 
         latest = candles[-1]
@@ -413,7 +428,12 @@ class FusionEngine:
         # the right response is to abstain rather than to take the trade anyway.
         atr_pips = 0.0
         if features:
-            atr_pips = abs(float(features.get("atr", 0.0))) / charter.PIP
+            # The feature row already carries atr_pips, computed with this
+            # instrument's own pip size. Dividing by charter.PIP here would
+            # silently reinterpret a bitcoin ATR as an FX one.
+            atr_pips = abs(float(features.get("atr", 0.0))) / instruments.pip_for(
+                getattr(self.config, "pair", None)
+            )
         horizon = costs.resolve_horizon(
             atr_pips,
             spread,

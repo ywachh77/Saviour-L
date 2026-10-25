@@ -51,6 +51,16 @@ OVERLAP = "OVERLAP"
 NEW_YORK = "NEW_YORK"
 OFF_HOURS = "OFF_HOURS"
 
+# Crypto does not have sessions. It trades through the night, through
+# Christmas, through every one of the FX calendars. Rather than pretend
+# bitcoin has a London open, a crypto instrument gets its own pseudo-session
+# that simply means "the market is open", and every strategy is allowed to
+# speak in it. The FX windows are not applied to crypto at all, because
+# applying them would invent a rhythm that is not there: ASIA/LONDON/OVERLAP
+# exist because particular desks open and close, and no such thing happens
+# on a 24/7 venue.
+ROUND_THE_CLOCK = "ROUND_THE_CLOCK"
+
 ALL_SESSIONS = (ASIA, LONDON, OVERLAP, NEW_YORK, OFF_HOURS)
 
 # (start_hour_inclusive, end_hour_exclusive, name) in UTC. Contiguous and
@@ -97,6 +107,7 @@ ALLOWED: dict[str, frozenset[str]] = {
             "breakout",
             "scalp_impulse",
             "scalp_micro_breakout",
+            "scalp_expansion",
             "scalp_vwap_reversion",
             "scalp_stoch_cross",
         }
@@ -110,6 +121,7 @@ ALLOWED: dict[str, frozenset[str]] = {
             "breakout",
             "scalp_impulse",
             "scalp_micro_breakout",
+            "scalp_expansion",
             "scalp_vwap_reversion",
             "scalp_stoch_cross",
         }
@@ -123,6 +135,7 @@ ALLOWED: dict[str, frozenset[str]] = {
             "breakout",
             "range_reversal",
             "scalp_impulse",
+            "scalp_expansion",
             "scalp_reversion",
             "scalp_pivot_fade",
             "scalp_vwap_reversion",
@@ -143,11 +156,27 @@ ALLOWED: dict[str, frozenset[str]] = {
     ),
 }
 
+# Crypto gets everything: with no session structure to select on, muting a
+# strategy by time of day would be silencing it for no reason.
+ALLOWED[ROUND_THE_CLOCK] = frozenset()
+
 _EVERYTHING = frozenset().union(*ALLOWED.values())
 
+# Defined after _EVERYTHING so the crypto pseudo-session can allow every
+# strategy that exists, including any added later.
+ALLOWED[ROUND_THE_CLOCK] = _EVERYTHING
 
-def session_of(stamp: datetime) -> str:
-    """The FX session a UTC timestamp falls in."""
+
+def session_of(stamp: datetime, instrument: "instruments.Instrument | None" = None) -> str:
+    """The session a UTC timestamp falls in.
+
+    Crypto instruments get ROUND_THE_CLOCK regardless of the hour; the FX
+    windows simply do not describe a 24/7 market. Passing ``instrument`` is
+    what makes that distinction, and it defaults to None (FX) so every
+    existing caller keeps its current behaviour.
+    """
+    if instrument is not None and instrument.crypto:
+        return ROUND_THE_CLOCK
     hour = int(getattr(stamp, "hour", 0))
     for start, end, name in _WINDOWS:
         if start <= hour < end:
@@ -178,6 +207,7 @@ def describe(session: str) -> str:
         OVERLAP: "London/New York overlap — peak volume",
         NEW_YORK: "New York afternoon — mixed",
         OFF_HOURS: "Off-hours — thinnest book",
+        ROUND_THE_CLOCK: "Round the clock — no session calendar applies",
     }.get(session, session)
 
 
@@ -186,4 +216,4 @@ def window_of(session: str) -> tuple[int, int]:
     for start, end, name in _WINDOWS:
         if name == session:
             return start, end
-    return 0, 24
+    return 0, 24  # ROUND_THE_CLOCK spans all 24 hours

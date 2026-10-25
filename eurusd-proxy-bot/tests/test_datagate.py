@@ -8,7 +8,7 @@ from pathlib import Path
 from fusion import charter, datagate
 from fusion.datagate import DEGRADED, OK, count_gaps, evaluate, modelled_spread_pips
 
-from .helpers import make_candles
+from .helpers import make_candles, preserved_environ
 
 
 class TestModelledSpread(unittest.TestCase):
@@ -43,7 +43,10 @@ class TestModelledSpread(unittest.TestCase):
     def test_the_cap_follows_the_assumed_spread(self):
         from fusion.config import load_config
 
-        with tempfile.TemporaryDirectory() as directory:
+        # Wrapped because load_config copies the .env into os.environ and does
+        # not take it out again; without this the 2.0 leaks into every later
+        # test that reads a spread.
+        with preserved_environ(), tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".env"
             path.write_text("SPREAD_PIPS=2.0\n", encoding="utf-8")
             config = load_config(path)

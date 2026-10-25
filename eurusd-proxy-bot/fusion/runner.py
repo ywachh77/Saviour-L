@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Sequence
 
-from . import charter, digest, heartbeat, learning, settle, stats
+from . import charter, instruments, digest, heartbeat, learning, settle, stats
 from .config import Config
 from .council import CouncilWeights, Vote
 from .domain import Candle, Signal
@@ -92,6 +92,10 @@ def format_result(signal: Signal, settlement) -> str:
     account. UNRESOLVED is reported as UNRESOLVED rather than as a zero.
     """
     header = f"RESULT {signal.pair} {signal.side}  #{signal.signal_id[:8]}"
+    # A price is shown with the precision its own market uses. Five decimals
+    # is right for EUR/USD and absurd for bitcoin, where it invites the reader
+    # to believe a fill was accurate to a hundred-thousandth of a dollar.
+    precision = instruments.for_symbol(signal.pair).precision
     if settlement.outcome == charter.UNRESOLVED:
         return "\n".join(
             [
@@ -104,7 +108,7 @@ def format_result(signal: Signal, settlement) -> str:
         return "\n".join(
             [
                 header,
-                f"Entry {settlement.entry_price:.5f} -> Exit {settlement.exit_price:.5f}",
+                f"Entry {settlement.entry_price:,.{precision}f} -> Exit {settlement.exit_price:,.{precision}f}",
                 "TIED — no movement, no result either way.",
             ]
         )
@@ -114,7 +118,7 @@ def format_result(signal: Signal, settlement) -> str:
     return "\n".join(
         [
             header,
-            f"Entry {settlement.entry_price:.5f} -> Exit {settlement.exit_price:.5f}",
+            f"Entry {settlement.entry_price:,.{precision}f} -> Exit {settlement.exit_price:,.{precision}f}",
             f"Move {gross:+.1f} pips | cost {settlement.spread_pips:.1f} | net {net:+.1f}",
             verdict,
         ]
@@ -162,6 +166,7 @@ class FusionBot:
     nightly_report: dict | None = None
     calibration_points: list[tuple[float, int]] = field(default_factory=list)
     mistakes: MistakeMemory = field(default_factory=MistakeMemory)
+    peer_bots: dict[str, "FusionBot"] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ setup
     def __post_init__(self) -> None:
@@ -172,6 +177,13 @@ class FusionBot:
         if self.telegram is None and self.config.telegram_ready:
             self.telegram = TelegramClient(self.config.telegram_token, self.config.telegram_owner_chat_id)
         self.engine = FusionEngine(self.config)
+        for symbol in self.config.active_pairs[1:]:
+            self.peer_bots[symbol] = FusionBot(
+                config=self.config.for_pair(symbol),
+                store=self.store,
+                provider=self.provider,
+                telegram=self.telegram,
+            )
 
     @classmethod
     def from_config(cls, config: Config, **kwargs) -> "FusionBot":
@@ -182,13 +194,20 @@ class FusionBot:
         self._load_state()
         self._load_candles()
         self.running = True
+        for peer in self.peer_bots.values():
+            peer.startup()
+            peer.paused = self.paused
 
     def _load_state(self) -> None:
-        row = self.store.load_model_state() or {}
+        row = self.store.load_model_state(pair=self.config.pair) or {}
         self.model = OnlineLogisticModel.from_dict(row.get("model"))
         self.ensemble = BootstrapEnsemble.from_dict(row.get("ensemble"))
-        self.weights = CouncilWeights.from_dict(self.store.load_council_weights())
-        runtime = row.get("runtime") or {}
+        self.weights = CouncilWeights.from_dict(self.store.load_council_weights(pair=self.config.pair))
+        runtime = row.get("runtime")
+        if runtime is None and self.config.pair != "EUR/USD":
+            primary = self.store.load_model_state(pair="EUR/USD") or {}
+            runtime = primary.get("runtime")
+        runtime = runtime or {}
         self.paused = bool(runtime.get("paused", False))
         offset = runtime.get("telegram_offset")
         if self.telegram is not None and isinstance(offset, int) and offset > 0:
@@ -396,21 +415,27 @@ class FusionBot:
             # re-answers every command from the last 24 hours, every cycle.
             self._save_state(force=True)
 
+    def _set_paused(self, value: bool) -> None:
+        self.paused = value
+        for peer in self.peer_bots.values():
+            peer.paused = value
+
     def handle_command(self, command: str) -> str:
         if command == "/start":
-            self.paused = False
+            self._set_paused(False)
             self._save_state(force=True)
-            text = "FUSION BOT is live for EUR/USD M1 research signals.\n\n" + HELP_TEXT
+            markets = ", ".join(self.config.active_pairs)
+            text = f"FUSION BOT is live for {markets} M1 research signals.\n\n" + HELP_TEXT
         elif command == "/help":
             text = HELP_TEXT
         elif command == "/status":
             text = self.status_text()
         elif command == "/pause":
-            self.paused = True
+            self._set_paused(True)
             self._save_state(force=True)
             text = "Signals paused. Settlement and learning continue."
         elif command == "/resume":
-            self.paused = False
+            self._set_paused(False)
             self._save_state(force=True)
             text = "Signals resumed."
         elif command == "/signals":
@@ -475,36 +500,81 @@ class FusionBot:
         if at is None:
             next_minute = floor_minute(stamp) + timedelta(minutes=1)
             stamp = next_minute + timedelta(seconds=1)
-        if self.provider is not None and getattr(self.provider, "configured", False):
-            self.ingest(at=stamp)
-        if not self.candles:
-            return "No price data available. The provider may be unreachable; try again shortly."
 
-        result = self.engine.evaluate(
-            self.candles,
-            model=self.model,
-            ensemble=self.ensemble,
-            weights=self.weights,
-            source="LIVE",
-            at=stamp,
-            mistakes=self.mistakes,
-        )
-        if not result.actionable or result.signal is None:
-            return (
-                "No setup right now.\n"
-                f"{result.reason}\n\n"
-                "The bot only reports what its gates actually agree on. "
-                "Asking again will not change the answer until the market does."
+        if not self.peer_bots:
+            if self.provider is not None and getattr(self.provider, "configured", False):
+                self.ingest(at=stamp)
+            if not self.candles:
+                return "No price data available. The provider may be unreachable; try again shortly."
+
+            result = self.engine.evaluate(
+                self.candles,
+                model=self.model,
+                ensemble=self.ensemble,
+                weights=self.weights,
+                source="LIVE",
+                at=stamp,
+                mistakes=self.mistakes,
             )
+            if not result.actionable or result.signal is None:
+                return (
+                    "No setup right now.\n"
+                    f"{result.reason}\n\n"
+                    "The bot only reports what its gates actually agree on. "
+                    "Asking again will not change the answer until the market does."
+                )
 
-        signal = result.signal
-        self.store.save_signal(
-            dict(signal.to_dict(), seal_state=charter.SEAL_SIGNAL, settled=False,
-                 bucket=minute_bucket(stamp))
-        )
-        self.deliver(signal, brief=True)
+            signal = result.signal
+            self.store.save_signal(
+                dict(signal.to_dict(), seal_state=charter.SEAL_SIGNAL, settled=False,
+                     bucket=minute_bucket(stamp))
+            )
+            self.deliver(signal, brief=True)
+            self.settle_due(at=stamp)
+            return format_brief_signal(signal)
+
+        # Multi-market evaluation across every configured instrument.
+        emitted: list[str] = []
+        refusals: list[str] = []
+        any_candles = False
+        for member in (self, *self.peer_bots.values()):
+            if member.provider is not None and getattr(member.provider, "configured", False):
+                member.ingest(at=stamp)
+            if not member.candles:
+                refusals.append(f"{member.config.pair}: no price data available.")
+                continue
+            any_candles = True
+            result = member.engine.evaluate(
+                member.candles,
+                model=member.model,
+                ensemble=member.ensemble,
+                weights=member.weights,
+                source="LIVE",
+                at=stamp,
+                mistakes=member.mistakes,
+            )
+            if not result.actionable or result.signal is None:
+                refusals.append(f"{member.config.pair}: {result.reason}")
+                continue
+            signal = result.signal
+            member.store.save_signal(
+                dict(signal.to_dict(), seal_state=charter.SEAL_SIGNAL, settled=False,
+                     bucket=minute_bucket(stamp))
+            )
+            member.deliver(signal, brief=True)
+            emitted.append(format_brief_signal(signal))
+
         self.settle_due(at=stamp)
-        return format_brief_signal(signal)
+        if emitted:
+            return "\n\n".join(emitted)
+        if not any_candles:
+            return "No price data available. The provider may be unreachable; try again shortly."
+        return (
+            "No setup right now.\n"
+            + "\n".join(refusals)
+            + "\n\nThe bot only reports what its gates actually agree on. "
+            "Asking again will not change the answer until the market does."
+        )
 
     def _latest_system_report(self) -> dict | None:
         versions = self.store.load_model_versions(limit=1)
@@ -566,15 +636,24 @@ class FusionBot:
     def minute_cycle(self, at: datetime | None = None) -> CycleReport:
         stamp = self._sealable_stamp(at or now())
         bucket = minute_bucket(stamp)
+        job_bucket = bucket if self.config.pair == "EUR/USD" else f"{self.config.pair}|{bucket}"
         self.cycles += 1
 
-        if not self.store.claim_job("minute", bucket, runner=self.config.runner):
+        if not self.store.claim_job("minute", job_bucket, runner=self.config.runner):
             # Another runner already owns this minute. Nothing to do, no harm done.
             return CycleReport(bucket, "SKIPPED", "Another runner already claimed this minute.")
 
         self.ingest(at=stamp)
         report = self.evaluate_minute(bucket=bucket, at=stamp)
+        for peer in self.peer_bots.values():
+            peer_report = peer.minute_cycle(at=stamp)
+            if report.seal_state != charter.SEAL_SIGNAL and peer_report.seal_state == charter.SEAL_SIGNAL:
+                report = peer_report
         self.last_cycle = report
+        if not self.peer_bots and self.config.pair != "EUR/USD":
+            # Peer bots already run under the primary cycle's heartbeat; emit a
+            # standalone heartbeat only when this non-EUR/USD bot is top-level.
+            pass
         self.store.heartbeat(
             heartbeat.build_heartbeat(
                 runner=self.config.runner,
@@ -633,7 +712,16 @@ class FusionBot:
             weights=self.weights,
             source="LIVE" if not getattr(self.provider, "synthetic", False) else "SYNTHETIC",
             at=stamp,
+            mistakes=self.mistakes,
         )
+
+        if result.gate is not None and result.gate.quality == "GAPPY":
+            self._alert_once(
+                "data_gaps",
+                f"{self.config.pair}: {result.gate.gaps} gaps in recent M1 series.",
+                key=f"data_gaps|{self.config.pair}|{bucket[:10]}",
+                notify=False,
+            )
 
         if result.gate is not None and result.gate.quality == "STALE":
             self.stale_feed_minutes += 1
@@ -827,6 +915,8 @@ class FusionBot:
                 # Grace expired. settle() records UNRESOLVED rather than a number.
             self._settle_one(signal)
             count += 1
+        for peer in self.peer_bots.values():
+            count += peer.settle_due(at=stamp)
         return count
 
     def _settle_one(self, signal: Signal) -> None:
@@ -866,7 +956,9 @@ class FusionBot:
             settlement.outcome,
             MistakeMemory.fingerprint(
                 signal.regime,
-                session_of(signal.entry_time) if self.config.session_filter else None,
+                session_of(signal.entry_time, instruments.for_symbol(self.config.pair))
+                if self.config.session_filter
+                else None,
                 signal.side,
             ),
         )
@@ -993,7 +1085,8 @@ class FusionBot:
     def nightly_job(self, at: datetime | None = None) -> dict:
         stamp = at or now()
         bucket = stamp.strftime("%Y-%m-%d")
-        if not self.store.claim_job("nightly", bucket, runner=self.config.runner):
+        job_bucket = bucket if self.config.pair == "EUR/USD" else f"{self.config.pair}:{bucket}"
+        if not self.store.claim_job("nightly", job_bucket, runner=self.config.runner):
             return {"skipped": True, "reason": "Nightly already ran for this date."}
 
         settlements = self.store.load_settlements(limit=4000)
@@ -1010,14 +1103,16 @@ class FusionBot:
         self.nightly_report = report.to_dict()
         self.store.save_model_version(
             {
-                "version_id": bucket,
+                "version_id": job_bucket,
                 "report": report.to_dict(),
                 "created_at": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
         )
         self._save_state(force=True)
         if report.rolled_back:
-            self._alert_once(digest.ALERT_ROLLBACK, report.reason, key=f"rollback|{bucket}")
+            self._alert_once(digest.ALERT_ROLLBACK, report.reason, key=f"rollback|{job_bucket}")
+        for peer in self.peer_bots.values():
+            peer.nightly_job(at=stamp)
         return report.to_dict()
 
     def digest_job(self, at: datetime | None = None) -> str:
@@ -1106,8 +1201,8 @@ class FusionBot:
             "calibration_points": [[point[0], point[1]] for point in self.calibration_points[-2000:]],
             "mistakes": self.mistakes.to_dict(),
         }
-        self.store.save_model_state(payload)
-        self.store.save_council_weights(self.weights.to_dict())
+        self.store.save_model_state(payload, pair=self.config.pair)
+        self.store.save_council_weights(self.weights.to_dict(), pair=self.config.pair)
         self.settled_since_save = 0
         if self.provider is not None and hasattr(self.provider, "pool"):
             self.store.save_key_pool(self.provider.pool.to_dict())

@@ -179,9 +179,9 @@ class TestNoLookAhead(unittest.TestCase):
         seen: dict = {}
         real = compute_features
 
-        def spy(candles):
+        def spy(candles, *args, **kwargs):
             seen["candles"] = list(candles)
-            return real(candles)
+            return real(candles, *args, **kwargs)
 
         engine_module.compute_features = spy
         try:

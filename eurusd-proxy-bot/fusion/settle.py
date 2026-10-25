@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from . import charter
+from . import charter, instruments
 from .domain import Candle, Settlement, Signal
 from .timeutil import add_minutes, format_datetime, now, parse_datetime
 
@@ -34,6 +34,7 @@ def find_candle(candles: Sequence[Candle], stamp: datetime) -> Candle | None:
 def settle(signal: Signal, candles: Sequence[Candle], spread_pips: float | None = None) -> Settlement:
     """Settle one signal against completed candles."""
     candles = list(candles)
+    instrument = instruments.for_symbol(signal.pair)
     cost = float(signal.spread_pips if spread_pips is None else spread_pips)
     settled_at = now()
 
@@ -58,7 +59,7 @@ def settle(signal: Signal, candles: Sequence[Candle], spread_pips: float | None 
     entry_price = entry_candle.open
     exit_price = exit_candle.close
     direction = 1.0 if signal.side == "BUY" else -1.0
-    gross = direction * (exit_price - entry_price) / charter.PIP
+    gross = direction * (exit_price - entry_price) / instrument.pip
 
     if abs(gross) < 1e-9:
         outcome = charter.TIED
@@ -71,7 +72,7 @@ def settle(signal: Signal, candles: Sequence[Candle], spread_pips: float | None 
         entry_price=entry_price,
         exit_price=exit_price,
         gross_pips=round(gross, 4),
-        move_pips=round((exit_price - entry_price) / charter.PIP, 4),
+        move_pips=round((exit_price - entry_price) / instrument.pip, 4),
         net_pips=round(charter.net_pips(gross, cost), 4),
         spread_pips=cost,
         settled_at=settled_at,

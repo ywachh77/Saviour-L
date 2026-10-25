@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from typing import Sequence
 
-from . import charter
+from . import charter, instruments
 from .domain import Candle
 from . import mtf
 from .indicators import (
@@ -152,9 +152,19 @@ def _mtf_gap(item: "mtf.Bias", price: float) -> float:
     return _safe_ratio(item.close - item.reference, price) * 10000.0
 
 
-def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]:
-    """Compute indicators from current and past candles only (no future data)."""
+def compute_features(
+    candles: Sequence[Candle], instrument: instruments.Instrument | None = None
+) -> list[dict[str, float] | None]:
+    """Compute indicators from current and past candles only (no future data).
+
+    ``instrument`` fixes the size of a pip, which is the one unit that is not
+    dimensionless. It defaults to EUR/USD so every existing caller keeps its
+    current meaning; a caller that knows it is holding bitcoin bars must say
+    so, because an ATR of 58 dollars is 58 pips on BTC/USD and 580,000 "pips"
+    if it is divided by the FX pip by mistake.
+    """
     candles = list(candles)
+    pip = (instrument or instruments.DEFAULT).pip
     closes = [candle.close for candle in candles]
     ema_fast = ema(closes, 5)
     ema_slow = ema(closes, 20)
@@ -313,7 +323,7 @@ def compute_features(candles: Sequence[Candle]) -> list[dict[str, float] | None]
             "vwap": vwap_values[index],
             "prior_high_5": micro_prior_high,
             "prior_low_5": micro_prior_low,
-            "atr_pips": atr_values[index] / charter.PIP,
+            "atr_pips": atr_values[index] / pip,
         }
         # Every value in this row must be a plain number. The row is persisted
         # with the signal and re-read by Signal.from_dict, which coerces each

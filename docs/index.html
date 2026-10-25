@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAVIOUR — Shinigami Research Engine</title>
+<meta name="description" content="Paper-only one-minute signal research engine for EUR/USD, BTC/USD and ETH/USD. Zero look-ahead, full spread accounting, automated settlement.">
+<meta name="color-scheme" content="dark">
+<script>document.documentElement.classList.remove("no-js");</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&family=Shippori+Mincho:wght@500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" id="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="Saviour home">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <line x1="16" y1="2" x2="16" y2="30" />
+        <line x1="8" y1="10" x2="24" y2="10" />
+        <line x1="11" y1="24" x2="21" y2="24" />
+      </svg>
+      <span class="brand-text">SAVIOUR</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#engine">Engine</a>
+      <a href="#markets">Markets</a>
+      <a href="#workbench">Workbench</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#charter">Charter</a>
+      <a href="#telegram">Telegram</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ───────────────────────── DIVISION 00 : HERO ───────────────────────── -->
+<section class="hero" id="top">
+  <div class="watermark wm-right" aria-hidden="true">死神</div>
+
+  <div class="wrap hero-inner">
+    <p class="eyebrow reveal">Division 00 &middot; Paper Research Instrument &middot; <span id="live-badge">Verified Baseline</span></p>
+
+    <h1 class="hero-title reveal" data-delay="1">
+      Silence until every gate agrees.<br>
+      Proof when the candle closes.
+    </h1>
+
+    <div class="blade-rule reveal" data-delay="2" aria-hidden="true"></div>
+
+    <p class="lede reveal" data-delay="2">
+      A one-minute signal engine across <strong>EUR/USD</strong>, <strong>BTC/USD</strong>,
+      and <strong>ETH/USD</strong>. Every entry is sealed before its candle opens,
+      every outcome pays its full round-turn spread, and every look-ahead path is
+      guarded by automated causality checks.
+    </p>
+
+    <div class="hero-actions reveal" data-delay="3">
+      <a class="btn btn-solid" href="#workbench">Open Cost &amp; Risk Workbench</a>
+      <a class="btn btn-ghost" href="#evidence">Read 101,730-Bar Evidence</a>
+    </div>
+
+    <dl class="hero-stats reveal" data-delay="4">
+      <div class="stat">
+        <dt>Markets Evaluated</dt>
+        <dd class="mono">3 <span class="unit">FX + Crypto</span></dd>
+      </div>
+      <div class="stat">
+        <dt>Real M1 Bars Audited</dt>
+        <dd class="mono" id="stat-bars">101,730</dd>
+      </div>
+      <div class="stat">
+        <dt>Council Members</dt>
+        <dd class="mono">13 <span class="unit">1 Core + 12</span></dd>
+      </div>
+      <div class="stat">
+        <dt>Test Suite</dt>
+        <dd class="mono" id="stat-tests">635 <span class="unit">Passing</span></dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<!-- ───────────────────────── DIVISION 01 : ENGINE ─────────────────────── -->
+<section class="section section-alt" id="engine">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">DIVISION 01 // PIPELINE</p>
+      <h2 class="reveal">Seven refusal points before a signal exists</h2>
+      <p class="sec-sub reveal" data-delay="1">
+        The engine does not manufacture calls to stay busy. A signal is the rare
+        residue left when data integrity, macro calendar, higher-timeframe structure,
+        regime, strategy council, calibrated uncertainty, and cost arithmetic all concur.
+      </p>
+    </header>
+
+    <ol class="pipeline">
+      <li class="step reveal">
+        <span class="step-n">01 / CAUSALITY</span>
+        <h3>Closed-bar boundary</h3>
+        <p>Drops any bar whose minute has not finished closing. Verified on every push by automated adversarial future-shock tests.</p>
+      </li>
+      <li class="step reveal" data-delay="1">
+        <span class="step-n">02 / DATA GATE</span>
+        <h3>Freshness, continuity, spread</h3>
+        <p>Rejects stale feeds and excessive spreads. FX models bank-desk session widening; 24/7 spot crypto stays continuous round the clock.</p>
+      </li>
+      <li class="step reveal" data-delay="1">
+        <span class="step-n">03 / MACRO BLACKOUT</span>
+        <h3>Scheduled release shield</h3>
+        <p>Stands down across US Non-Farm Payrolls (first Friday 08:30 ET, DST-exact) and operator-configured FOMC, CPI, or ECB windows.</p>
+      </li>
+      <li class="step reveal" data-delay="2">
+        <span class="step-n">04 / MULTI-TIMEFRAME</span>
+        <h3>15-minute resampled bias</h3>
+        <p>Builds closed 5m and 15m structure locally from 1m bars at zero API cost, filtering counter-trend noise on live setups.</p>
+      </li>
+      <li class="step reveal" data-delay="2">
+        <span class="step-n">05 / COUNCIL</span>
+        <h3>Core gate + 12 prototypes</h3>
+        <p>Core confluence requires 5 of 6 checks including mandatory trend and directional ADX. Prototypes earn weight only after 30 real outcomes.</p>
+      </li>
+      <li class="step reveal" data-delay="3">
+        <span class="step-n">06 / META-MODEL &amp; MEMORY</span>
+        <h3>Calibrated veto &amp; mistake block</h3>
+        <p>Online logistic ensemble with isotonic calibration plus Wilson-bound mistake memory that blocks regimes where prior calls failed.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- ───────────────────────── DIVISION 02 : MARKETS ────────────────────── -->
+<section class="section" id="markets">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">DIVISION 02 // INSTRUMENTS</p>
+      <h2 class="reveal">Why crypto sits beside FX</h2>
+      <p class="sec-sub reveal" data-delay="1">
+        On one-minute bars, the binding constraint is not directional accuracy &mdash;
+        it is round-trip spread divided by one-minute movement. Spot BTC/USD and ETH/USD
+        trade 24/7 at a fraction of FX's relative cost.
+      </p>
+    </header>
+
+    <div class="cards">
+      <article class="card reveal">
+        <header class="card-head">
+          <div>
+            <h3>EUR/USD</h3>
+            <p class="card-sub">Spot Foreign Exchange</p>
+          </div>
+          <span class="tag">24/5 Session</span>
+        </header>
+        <dl class="card-stats">
+          <div><dt>Pip Increment</dt><dd class="mono">0.0001</dd></div>
+          <div><dt>Assumed Spread</dt><dd class="mono">1.20 pips</dd></div>
+          <div><dt>Overlap M1 ATR</dt><dd class="mono">1.95 pips</dd></div>
+          <div><dt>Off-Hours M1 ATR</dt><dd class="mono">1.31 pips</dd></div>
+          <div class="row-strong"><dt>Spread / Overlap ATR</dt><dd class="mono">0.62x</dd></div>
+        </dl>
+        <p class="card-note">
+          Viable primarily during London and New York overlap (07:00&ndash;17:00 UTC)
+          with adaptive horizon and 15-minute trend confirmation.
+        </p>
+      </article>
+
+      <article class="card reveal" data-delay="1">
+        <header class="card-head">
+          <div>
+            <h3>BTC/USD</h3>
+            <p class="card-sub">Spot Cryptocurrency</p>
+          </div>
+          <span class="tag">24/7 Continuous</span>
+        </header>
+        <dl class="card-stats">
+          <div><dt>Pip Increment</dt><dd class="mono">$1.00</dd></div>
+          <div><dt>Assumed Spread</dt><dd class="mono">8.00 pips</dd></div>
+          <div><dt>Typical M1 ATR</dt><dd class="mono">58.0 pips</dd></div>
+          <div><dt>Session Calendar</dt><dd class="mono">Round-the-clock</dd></div>
+          <div class="row-strong"><dt>Spread / M1 ATR</dt><dd class="mono">0.14x</dd></div>
+        </dl>
+        <p class="card-note">
+          Roughly four to fourteen times cheaper to cross than EUR/USD relative to
+          per-minute volatility, and active through weekends when FX is shut.
+        </p>
+      </article>
+
+      <article class="card reveal" data-delay="2">
+        <header class="card-head">
+          <div>
+            <h3>ETH/USD</h3>
+            <p class="card-sub">Spot Cryptocurrency</p>
+          </div>
+          <span class="tag">24/7 Continuous</span>
+        </header>
+        <dl class="card-stats">
+          <div><dt>Pip Increment</dt><dd class="mono">$0.10</dd></div>
+          <div><dt>Assumed Spread</dt><dd class="mono">2.40 pips</dd></div>
+          <div><dt>Typical M1 ATR</dt><dd class="mono">23.0 pips</dd></div>
+          <div><dt>Session Calendar</dt><dd class="mono">Round-the-clock</dd></div>
+          <div class="row-strong"><dt>Spread / M1 ATR</dt><dd class="mono">0.10x</dd></div>
+        </dl>
+        <p class="card-note">
+          Lowest relative spread burden of the three instruments. Uses the exact
+          same dimensionless ratios, cost guards, and settlement rules.
+        </p>
+      </article>
+    </div>
+
+    <p class="fineprint reveal">
+      Boundary note: only real spot market feeds are used. Synthetic broker OTC feeds,
+      automated broker order placement, and martingale sizing are permanently excluded.
+    </p>
+  </div>
+</section>
+
+<!-- ───────────────────────── DIVISION 03 : WORKBENCH ──────────────────── -->
+<section class="section section-alt" id="workbench">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">DIVISION 03 // INTERACTIVE WORKBENCH</p>
+      <h2 class="reveal">Cost, break-even &amp; 1&ndash;2% risk calculator</h2>
+      <p class="sec-sub reveal" data-delay="1">
+        Inspect how spread, volatility, hold horizon, and explicit ATR stops interact
+        on each supported market before trusting any signal statistic.
+      </p>
+    </header>
+
+    <div class="workbench reveal">
+      <form class="wb-controls" id="wb-form" onsubmit="return false;">
+        <div class="field">
+          <label for="wb-symbol">Instrument</label>
+          <div class="seg" role="group" aria-label="Instrument">
+            <button type="button" class="seg-btn is-active" data-symbol="EUR/USD">EUR/USD</button>
+            <button type="button" class="seg-btn" data-symbol="BTC/USD">BTC/USD</button>
+            <button type="button" class="seg-btn" data-symbol="ETH/USD">ETH/USD</button>
+          </div>
+          <input type="hidden" id="wb-symbol" value="EUR/USD">
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="wb-side">Direction</label>
+            <select id="wb-side">
+              <option value="BUY">BUY</option>
+              <option value="SELL">SELL</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="wb-horizon">Hold Horizon (min)</label>
+            <input type="number" id="wb-horizon" min="1" max="120" step="1" value="15">
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="wb-entry">Reference Price</label>
+            <input type="number" id="wb-entry" step="any" value="1.08520">
+          </div>
+          <div class="field">
+            <label for="wb-atr">M1 ATR (pips)</label>
+            <input type="number" id="wb-atr" min="0.1" step="0.1" value="1.95">
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="wb-balance">Paper Balance (USD)</label>
+            <input type="number" id="wb-balance" min="100" step="100" value="10000">
+          </div>
+          <div class="field">
+            <label for="wb-risk">Risk per Trade (%)</label>
+            <input type="number" id="wb-risk" min="0.25" max="2.00" step="0.25" value="1.00">
+          </div>
+        </div>
+      </form>
+
+      <div class="wb-output" aria-live="polite">
+        <div class="wb-banner" id="wb-verdict">Evaluating cost gate...</div>
+
+        <div class="wb-grid">
+          <div class="wb-cell">
+            <span class="wb-k">Assumed Spread</span>
+            <strong class="wb-v mono" id="out-spread">1.20 pips</strong>
+          </div>
+          <div class="wb-cell">
+            <span class="wb-k">Break-Even Win Rate</span>
+            <strong class="wb-v mono" id="out-be">65.9%</strong>
+          </div>
+          <div class="wb-cell">
+            <span class="wb-k">Min Viable Hold (3x Cost)</span>
+            <strong class="wb-v mono" id="out-minhold">4 min</strong>
+          </div>
+          <div class="wb-cell">
+            <span class="wb-k">Hard Stop (1.5x ATR)</span>
+            <strong class="wb-v mono" id="out-stop">1.08491</strong>
+          </div>
+          <div class="wb-cell">
+            <span class="wb-k">Target (2.25x ATR)</span>
+            <strong class="wb-v mono" id="out-target">1.08564</strong>
+          </div>
+          <div class="wb-cell">
+            <span class="wb-k">Net R:R After Spread</span>
+            <strong class="wb-v mono" id="out-rr">0.77 : 1</strong>
+          </div>
+          <div class="wb-cell">
+            <span class="wb-k">Capped Risk (max 2%)</span>
+            <strong class="wb-v mono" id="out-riskusd">$100.00</strong>
+          </div>
+          <div class="wb-cell">
+            <span class="wb-k">Paper Position Size</span>
+            <strong class="wb-v mono" id="out-units">242,424 EUR</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── DIVISION 04 : EVIDENCE ───────────────────── -->
+<section class="section" id="evidence">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">DIVISION 04 // EMPIRICAL LEDGER</p>
+      <h2 class="reveal">Measured on 101,730 real EUR/USD bars</h2>
+      <p class="sec-sub reveal" data-delay="1">
+        Every change to the signal engine is judged on chronological out-of-sample
+        candles with full round-turn spread deducted &mdash; never on synthetic
+        walks alone.
+      </p>
+    </header>
+
+    <div class="metrics">
+      <div class="metric reveal">
+        <p class="metric-v mono">58.5%</p>
+        <p class="metric-k">OOS Win Rate (15m MTF Filter)</p>
+        <p class="metric-d">October 2026 out-of-sample (282 trades, London/NY hours), lifting net expectancy from &minus;0.12 to +0.34 pips/trade after 1.20-pip spread.</p>
+      </div>
+      <div class="metric reveal" data-delay="1">
+        <p class="metric-v mono">+0.38</p>
+        <p class="metric-k">Expansion Prototype Net Pips</p>
+        <p class="metric-d">Net pips per trade after 1.20-pip spread in both Aug&ndash;Sep Train (+0.378) and Oct Out-of-Sample (+0.382) across 404 real setups.</p>
+      </div>
+      <div class="metric reveal" data-delay="2">
+        <p class="metric-v mono">5 / 5</p>
+        <p class="metric-k">Causality &amp; Warmup Audits</p>
+        <p class="metric-d">Automated lookahead-analysis and recursive-analysis checks across features, MTF resamplers, all 13 strategies, and live sealing.</p>
+      </div>
+      <div class="metric reveal" data-delay="3">
+        <p class="metric-v mono">1,000 &rarr; All</p>
+        <p class="metric-k">PostgREST Paging Fixed</p>
+        <p class="metric-d">Removed the silent 1,000-row truncation so nightly walk-forward trains on the full 101,730+ bar history rather than 0.98% of it.</p>
+      </div>
+    </div>
+
+    <div class="ledger-table-wrap reveal">
+      <table class="ledger-table">
+        <caption>Real EUR/USD M1 Walk-Forward Ablation (Aug 15 &ndash; Oct 25, 2026 &middot; 1.20-pip spread charged)</caption>
+        <thead>
+          <tr>
+            <th scope="col">Configuration</th>
+            <th scope="col">Window</th>
+            <th scope="col">Trades</th>
+            <th scope="col">Win Rate</th>
+            <th scope="col">Net Pips / Trade</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Core Confluence (unfiltered M1)</td>
+            <td class="mono">Train (Aug&ndash;Sep)</td>
+            <td class="mono">705</td>
+            <td class="mono">51.49%</td>
+            <td class="mono">&minus;0.513</td>
+          </tr>
+          <tr>
+            <td>Core Confluence + 15m MTF Alignment</td>
+            <td class="mono">Train (Aug&ndash;Sep)</td>
+            <td class="mono">408</td>
+            <td class="mono">52.21%</td>
+            <td class="mono">&minus;0.312</td>
+          </tr>
+          <tr>
+            <td>Core Confluence (unfiltered M1)</td>
+            <td class="mono">OOS (Oct 2026)</td>
+            <td class="mono">482</td>
+            <td class="mono">57.47%</td>
+            <td class="mono">&minus;0.116</td>
+          </tr>
+          <tr class="row-hi">
+            <td>Core Confluence + 15m MTF Alignment</td>
+            <td class="mono">OOS (Oct 2026)</td>
+            <td class="mono">282</td>
+            <td class="mono">58.51%</td>
+            <td class="mono">+0.338</td>
+          </tr>
+          <tr class="row-hi">
+            <td>Volatility Expansion Prototype (scalp_expansion)</td>
+            <td class="mono">OOS (Oct 2026)</td>
+            <td class="mono">229</td>
+            <td class="mono">55.02%</td>
+            <td class="mono">+0.382</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── DIVISION 05 : CHARTER ────────────────────── -->
+<section class="section section-alt" id="charter">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">DIVISION 05 // HONESTY CHARTER</p>
+      <h2 class="reveal">Six rules enforced by tests, plus one permanent refusal</h2>
+    </header>
+
+    <div class="rules">
+      <div class="rule reveal">
+        <span class="rule-n">I</span>
+        <div>
+          <h3>UNRESOLVED stays UNRESOLVED</h3>
+          <p>Missing settlement bars are never silently converted into wins, losses, or ties.</p>
+        </div>
+      </div>
+      <div class="rule reveal" data-delay="1">
+        <span class="rule-n">II</span>
+        <div>
+          <h3>Full spread charged on every trade</h3>
+          <p>1.20 pips on EUR/USD, $8.00 on BTC/USD, $0.24 on ETH/USD. Gross-only edges are rejected.</p>
+        </div>
+      </div>
+      <div class="rule reveal" data-delay="1">
+        <span class="rule-n">III</span>
+        <div>
+          <h3>10-second seal deadline</h3>
+          <p>Late signals are discarded rather than backdated; late cron wake-ups roll cleanly to the next unopened minute.</p>
+        </div>
+      </div>
+      <div class="rule reveal" data-delay="2">
+        <span class="rule-n">IV</span>
+        <div>
+          <h3>SENT requires a Telegram message_id</h3>
+          <p>Transport timeouts become UNRESOLVED alerts, never assumed deliveries.</p>
+        </div>
+      </div>
+      <div class="rule reveal" data-delay="2">
+        <span class="rule-n">V</span>
+        <div>
+          <h3>Synthetic data trains nothing</h3>
+          <p>Synthetic series verify plumbing only; weights, calibrators, and promotions require real market bars.</p>
+        </div>
+      </div>
+      <div class="rule reveal" data-delay="3">
+        <span class="rule-n">VI</span>
+        <div>
+          <h3>Why 19-of-20 (95%) was refused</h3>
+          <p>A 95% win rate on M1 bars is manufactured only by tiny targets and removing stops &mdash; net negative once tail losses hit. Honest net expectancy governs instead.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── DIVISION 06 : TELEGRAM ───────────────────── -->
+<section class="section" id="telegram">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">DIVISION 06 // OPERATOR INTERFACE</p>
+      <h2 class="reveal">Six owner-only commands, four-line signals</h2>
+      <p class="sec-sub reveal" data-delay="1">
+        Private to the configured owner chat ID. Signals carry only pair, direction,
+        entry, and expiry; full reasoning is preserved in Supabase for audit, and a
+        cost-charged RESULT message follows settlement automatically.
+      </p>
+    </header>
+
+    <div class="console-grid">
+      <div class="panel reveal">
+        <h3>Command Surface</h3>
+        <ul class="cmd-list">
+          <li><span class="mono">/start</span><span>Enable delivery and verify link</span></li>
+          <li><span class="mono">/signals</span><span>Evaluate EUR/USD, BTC/USD, ETH/USD now</span></li>
+          <li><span class="mono">/status</span><span>Health, ledger, model &amp; key-pool state</span></li>
+          <li><span class="mono">/pause</span><span>Mute outgoing calls while learning continues</span></li>
+          <li><span class="mono">/resume</span><span>Restore live signal delivery</span></li>
+          <li><span class="mono">/help</span><span>Show operator reference</span></li>
+        </ul>
+      </div>
+
+      <div class="panel reveal" data-delay="1">
+        <h3>Wire Format (Signal &amp; Settlement)</h3>
+        <pre class="wire mono">BTC/USD BUY
+Entry:  14:15 UTC
+Expiry: 14:30 UTC
+
+──────────────────────────────
+
+RESULT BTC/USD BUY  #9f31c4a2
+Entry 80,512.40 -&gt; Exit 80,571.90
+Move +59.5 pips | cost 8.0 | net +51.5
+WIN</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <div class="foot-top">
+      <span class="brand-text">SAVIOUR // SHINIGAMI RESEARCH ENGINE</span>
+      <span class="mono dim">Python 3.11 &middot; Stdlib Only &middot; Supabase RLS &middot; GitHub Actions</span>
+    </div>
+    <p class="foot-note">
+      Research and paper-settlement software only. No broker is connected, no OTC
+      synthetic quotes are ingested, and no financial advice is offered.
+    </p>
+  </div>
+</footer>
+
+<script src="assets/main.js" defer></script>
+</body>
+</html>

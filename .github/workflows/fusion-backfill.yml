@@ -51,12 +51,12 @@ jobs:
       - name: Extend candle history
         env:
           BACKFILL: "1"
-          # 100k bars is 20 pages at one credit each, against a daily
-          # allowance of 800. Paced at one page every 8 seconds it stays under
-          # the 8-per-minute limit, so the run completes in about three minutes
-          # instead of aborting at the minute quota. Reaches the 250k target in
-          # roughly three days rather than twelve.
-          BACKFILL_MINUTES: "100000"
+          PAIRS: "EUR/USD,BTC/USD,ETH/USD"
+          # 40k bars per pair is 8 pages each (24 credits total across all
+          # three markets against an 800/day free-tier allowance). Paced at
+          # 8 seconds per page it stays under the 8-per-minute limit and
+          # finishes well inside the 15-minute job timeout.
+          BACKFILL_MINUTES: "40000"
           BACKFILL_TARGET_BARS: "250000"
           BACKFILL_PACE_SECONDS: "8.0"
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
