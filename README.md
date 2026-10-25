@@ -5,8 +5,10 @@ A research-only trading-signal engine for one-minute bars across **EUR/USD**,
 opens, every trade pays its full round-turn spread, and zero broker orders are
 ever placed.
 
-**[Project site & workbench](docs/index.html)** — Shinigami monochrome console,
-interactive cost/risk workbench, empirical walk-forward ledger, and charter.
+**[Shinigami Gate & Operator Console](docs/index.html)** — Pure ceremonial gate
+with Eight-Trigrams (*Fuinjutsu*) release into a 6-page mobile + desktop bot
+control panel (`Signals`, `Telegram`, `Health`, `Strategies`, `Credentials`,
+`Risk & Charter`) with standalone web signal generation.
 
 ## Capabilities
 
@@ -32,10 +34,10 @@ interactive cost/risk workbench, empirical walk-forward ledger, and charter.
 
 ```bash
 cd eurusd-proxy-bot
-python3 -m unittest discover -s tests -t .     # 635 tests
+python3 -m unittest discover -s tests -t .     # 649 tests
 python3 scripts/lookahead_check.py             # 5/5 causality & warmup audits
 python3 scripts/smoke.py 420                   # end-to-end honesty checks
-python3 scripts/web_dashboard.py --port 8080   # Shinigami site + /api/status
+python3 scripts/web_dashboard.py --port 8080   # Operator Console + Control API
 ```
 
 ## Boundaries

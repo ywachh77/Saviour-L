@@ -1,0 +1,19 @@
+{
+  "name": "SAVIOUR — Shinigami Control Console",
+  "short_name": "SAVIOUR",
+  "description": "Multi-market paper research signal engine and operator control panel for EUR/USD, BTC/USD, and ETH/USD.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#09090a",
+  "theme_color": "#09090a",
+  "icons": [
+    {
+      "src": "assets/saviour-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

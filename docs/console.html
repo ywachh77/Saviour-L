@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#09090a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="color-scheme" content="dark">
+<title>SAVIOUR — Operator Control Console</title>
+<meta name="description" content="SAVIOUR multi-market bot control panel: live signal generation, Telegram terminal, health & causality audit, strategy gates, credentials vault, and 1-2% ATR risk sizing.">
+<link rel="icon" type="image/svg+xml" href="assets/saviour-mark.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<script>document.documentElement.classList.remove("no-js");</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Noto+Serif+JP:wght@500;700&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body class="console-body">
+
+<div class="app-shell">
+  <!-- ─────────────────────── DESKTOP COMMAND RAIL ─────────────────────── -->
+  <aside class="side-rail" aria-label="Console navigation">
+    <div class="rail-brand">
+      <a href="index.html" class="rail-logo-link" title="Return to Seal Gate">
+        <svg class="rail-crest" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+          <circle cx="32" cy="32" r="27" stroke="currentColor" stroke-width="1.2"/>
+          <polygon points="32,6 35,28 32,58 29,28" fill="currentColor"/>
+          <line x1="14" y1="28" x2="50" y2="28" stroke="currentColor" stroke-width="1.8"/>
+          <line x1="21" y1="44" x2="43" y2="44" stroke="#9e1f1f" stroke-width="1.6"/>
+        </svg>
+        <div>
+          <div class="rail-title">SAVIOUR</div>
+          <div class="rail-jp" lang="ja">死神統制盤</div>
+        </div>
+      </a>
+    </div>
+
+    <div class="rail-status-box">
+      <div class="rail-status-row">
+        <span class="status-dot" id="rail-dot"></span>
+        <span class="mono" id="rail-bot-state">ACTIVE</span>
+      </div>
+      <div class="mono rail-feed-tag" id="rail-feed-mode">PAPER ENGINE</div>
+    </div>
+
+    <nav class="rail-nav" aria-label="Control pages">
+      <button type="button" class="nav-item is-active" data-nav="signals">
+        <span class="nav-idx mono">01</span>
+        <span class="nav-name">Signals</span>
+        <span class="nav-jp" lang="ja">信号</span>
+      </button>
+      <button type="button" class="nav-item" data-nav="telegram">
+        <span class="nav-idx mono">02</span>
+        <span class="nav-name">Telegram</span>
+        <span class="nav-jp" lang="ja">電信</span>
+      </button>
+      <button type="button" class="nav-item" data-nav="health">
+        <span class="nav-idx mono">03</span>
+        <span class="nav-name">Health</span>
+        <span class="nav-jp" lang="ja">健全</span>
+      </button>
+      <button type="button" class="nav-item" data-nav="strategies">
+        <span class="nav-idx mono">04</span>
+        <span class="nav-name">Strategies</span>
+        <span class="nav-jp" lang="ja">戦術</span>
+      </button>
+      <button type="button" class="nav-item" data-nav="credentials">
+        <span class="nav-idx mono">05</span>
+        <span class="nav-name">Credentials</span>
+        <span class="nav-jp" lang="ja">機密</span>
+      </button>
+      <button type="button" class="nav-item" data-nav="risk">
+        <span class="nav-idx mono">06</span>
+        <span class="nav-name">Risk &amp; Charter</span>
+        <span class="nav-jp" lang="ja">規律</span>
+      </button>
+    </nav>
+
+    <div class="rail-footer">
+      <a href="index.html" class="rail-gate-btn mono">SEAL GATE // 門</a>
+      <p class="rail-note">Research &amp; paper execution only. Zero broker orders.</p>
+    </div>
+  </aside>
+
+  <!-- ───────────────────────── MAIN WORKSPACE ─────────────────────────── -->
+  <div class="workspace">
+    <!-- Mobile + Desktop Top Bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <a href="index.html" class="mobile-crest-link" aria-label="Return to Gate">
+          <svg class="mobile-crest" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+            <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="1.3"/>
+            <polygon points="24,5 26.5,21 24,43 21.5,21" fill="currentColor"/>
+            <line x1="11" y1="21" x2="37" y2="21" stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+        </a>
+        <div>
+          <div class="topbar-kicker mono" id="top-page-code">DIVISION 01 // SIGNALS</div>
+          <h1 class="topbar-title"><span id="top-page-title">Signal Execution</span> <span class="topbar-jp" id="top-page-jp" lang="ja">信号</span></h1>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <span class="pill" id="top-state-pill">BOT ACTIVE</span>
+        <button type="button" class="btn btn-sm btn-ghost" id="top-toggle-pause">Pause Bot</button>
+        <a href="index.html" class="btn btn-sm btn-ghost hide-desktop">Gate</a>
+      </div>
+    </header>
+
+    <div id="global-toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <!-- =================================================================
+         PAGE 01 : SIGNALS (信号)
+         ================================================================= -->
+    <section class="page is-active" id="page-signals" data-page="signals">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">DIRECT WEB EVALUATION // INDEPENDENT OF TELEGRAM</p>
+            <h2 class="panel-title">On-Demand Signal Generator</h2>
+          </div>
+          <span class="mono dim" id="sig-feed-indicator">MODE: PAPER ENGINE</span>
+        </div>
+
+        <div class="signal-controls">
+          <div class="field-group">
+            <span class="field-label">Target Market</span>
+            <div class="seg-group" id="sig-pair-tabs" role="group" aria-label="Select market">
+              <button type="button" class="seg is-active" data-pair="ALL">ALL (3)</button>
+              <button type="button" class="seg" data-pair="EUR/USD">EUR/USD</button>
+              <button type="button" class="seg" data-pair="BTC/USD">BTC/USD</button>
+              <button type="button" class="seg" data-pair="ETH/USD">ETH/USD</button>
+            </div>
+          </div>
+
+          <div class="signal-params">
+            <label class="field">
+              <span class="field-label">Paper Balance (USD)</span>
+              <input type="number" id="sig-balance" class="input mono" value="10000" min="100" step="500">
+            </label>
+            <label class="field">
+              <span class="field-label">Risk / Trade (max 2%)</span>
+              <input type="number" id="sig-risk" class="input mono" value="1.0" min="0.1" max="2.0" step="0.1">
+            </label>
+            <label class="check-field">
+              <input type="checkbox" id="sig-send-tg">
+              <span>Also dispatch to Telegram</span>
+            </label>
+          </div>
+
+          <div class="action-bar">
+            <button type="button" class="btn btn-primary" id="btn-generate-signal">
+              Generate Signal
+            </button>
+            <button type="button" class="btn btn-ghost" id="btn-inspect-now">
+              Inspect Current Bar
+            </button>
+            <button type="button" class="btn btn-ghost" id="btn-settle-due">
+              Settle Due
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Generated Signal Cards Output -->
+      <div id="signal-results" class="signal-cards-grid" aria-live="polite">
+        <div class="empty-stage">
+          <p class="empty-jp" lang="ja">待機中</p>
+          <p class="empty-title">Press <strong>Generate Signal</strong> to evaluate the 13-member council directly in this console.</p>
+          <p class="empty-sub">Signals render here immediately with entry time, expiry horizon, 15m MTF alignment, and 1% ATR stop/target sizing — no Telegram required.</p>
+        </div>
+      </div>
+
+      <!-- Live 3-Market Tape -->
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">ACTIVE INSTRUMENTS</p>
+            <h2 class="panel-title">Market Structure &amp; Cost Gate</h2>
+          </div>
+          <button type="button" class="btn btn-sm btn-ghost" id="btn-refresh-markets">Refresh</button>
+        </div>
+        <div class="market-grid" id="markets-grid"></div>
+      </div>
+
+      <!-- Recent Ledger -->
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">PAPER LEDGER // FULL SPREAD CHARGED</p>
+            <h2 class="panel-title">Sealed Signals &amp; Settlements</h2>
+          </div>
+          <div class="mono dim" id="ledger-summary-pill">0W / 0L / +0.0 pips</div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Pair</th>
+                <th>Side</th>
+                <th>Entry (UTC)</th>
+                <th>Hold</th>
+                <th>Regime</th>
+                <th>Delivery</th>
+                <th>ID</th>
+              </tr>
+            </thead>
+            <tbody id="recent-signals-tbody">
+              <tr><td colspan="7" class="dim">No signals sealed in this session yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================
+         PAGE 02 : TELEGRAM (電信)
+         ================================================================= -->
+    <section class="page" id="page-telegram" data-page="telegram">
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow mono">OWNER-ONLY TRANSPORT</p>
+              <h2 class="panel-title">Telegram Dispatch Status</h2>
+            </div>
+            <span class="pill" id="tg-conn-pill">CHECKING</span>
+          </div>
+          <dl class="kv-list">
+            <div class="kv"><dt>Bot Token</dt><dd class="mono" id="tg-token-mask">Not set</dd></div>
+            <div class="kv"><dt>Owner Chat ID</dt><dd class="mono" id="tg-owner-mask">Not set</dd></div>
+            <div class="kv"><dt>Update Offset Cursor</dt><dd class="mono" id="tg-offset">0</dd></div>
+            <div class="kv"><dt>Pending Outbox</dt><dd class="mono" id="tg-pending">0</dd></div>
+            <div class="kv"><dt>Delivery Law</dt><dd>SENT recorded only on confirmed message_id</dd></div>
+          </dl>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow mono">DIRECT COMMAND CONSOLE</p>
+              <h2 class="panel-title">Execute Bot Commands</h2>
+            </div>
+          </div>
+          <p class="panel-desc">Run any of the six owner commands directly inside the web console. Enable chat mirror only when you also want a copy sent to your phone.</p>
+          <div class="cmd-grid" id="tg-cmd-buttons">
+            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/status">/status</button>
+            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/signals">/signals</button>
+            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/pause">/pause</button>
+            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/resume">/resume</button>
+            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/start">/start</button>
+            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/help">/help</button>
+          </div>
+          <label class="check-field mt-sm">
+            <input type="checkbox" id="tg-mirror-chat">
+            <span>Also send reply to Telegram chat (requires token)</span>
+          </label>
+          <pre class="terminal-box mono" id="tg-terminal-output">Select a command above to inspect the live bot response.</pre>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">AUDIT TRAIL</p>
+            <h2 class="panel-title">Outbox Delivery Queue</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Message Key</th>
+                <th>Kind</th>
+                <th>State</th>
+                <th>Attempts</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody id="tg-outbox-tbody">
+              <tr><td colspan="5" class="dim">Outbox is clean.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================
+         PAGE 03 : HEALTH (健全)
+         ================================================================= -->
+    <section class="page" id="page-health" data-page="health">
+      <div class="grid-3">
+        <div class="stat-card">
+          <span class="stat-label mono">UNIT SUITE</span>
+          <strong class="stat-val mono" id="hl-tests">649</strong>
+          <span class="stat-sub">Passing verification checks</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label mono">CAUSALITY AUDIT</span>
+          <strong class="stat-val mono" id="hl-audit-state">5 / 5 PASS</strong>
+          <span class="stat-sub" id="hl-audit-ms">Zero future leakage</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label mono">TWELVE DATA QUOTA</span>
+          <strong class="stat-val mono" id="hl-quota">0 / 800</strong>
+          <span class="stat-sub" id="hl-slots">Slots ready</span>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow mono">FREQTRADE-STYLE VERIFICATION</p>
+              <h2 class="panel-title">Look-Ahead &amp; Warmup Audit</h2>
+            </div>
+            <button type="button" class="btn btn-sm btn-primary" id="btn-run-audit">Run Audit Now</button>
+          </div>
+          <p class="panel-desc">Shocks future candles across all 3 markets and verifies that features, 5m/15m MTF resamplers, all 13 council members, and engine sealing remain byte-identical.</p>
+          <ul class="check-list" id="hl-lookahead-list"></ul>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow mono">SERVICE DOCTOR</p>
+              <h2 class="panel-title">Environment &amp; Gate Integrity</h2>
+            </div>
+            <button type="button" class="btn btn-sm btn-ghost" id="btn-refresh-health">Refresh</button>
+          </div>
+          <ul class="check-list" id="hl-doctor-list"></ul>
+          <dl class="kv-list mt-md">
+            <div class="kv"><dt>Max Candle Age</dt><dd class="mono" id="hl-max-age">180s</dd></div>
+            <div class="kv"><dt>Max Seal Latency</dt><dd class="mono" id="hl-seal-lat">10s (late signals dropped)</dd></div>
+            <div class="kv"><dt>Spread Gate Ceiling</dt><dd class="mono" id="hl-spread-mult">1.9x base spread</dd></div>
+            <div class="kv"><dt>Unresolved Grace</dt><dd class="mono" id="hl-unresolve">120m (never fabricated)</dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================
+         PAGE 04 : STRATEGIES (戦術)
+         ================================================================= -->
+    <section class="page" id="page-strategies" data-page="strategies">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">LIVE RUNTIME GATES</p>
+            <h2 class="panel-title">Engine Filter Configuration</h2>
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" id="btn-save-config">Apply Changes</button>
+        </div>
+
+        <div class="config-grid" id="strat-config-form">
+          <div class="config-block">
+            <span class="field-label">Enabled Spot Markets</span>
+            <div class="inline-checks">
+              <label class="check-field"><input type="checkbox" name="cfg-pair" value="EUR/USD" checked><span>EUR/USD</span></label>
+              <label class="check-field"><input type="checkbox" name="cfg-pair" value="BTC/USD" checked><span>BTC/USD</span></label>
+              <label class="check-field"><input type="checkbox" name="cfg-pair" value="ETH/USD" checked><span>ETH/USD</span></label>
+            </div>
+          </div>
+
+          <div class="config-block">
+            <span class="field-label">Higher-Timeframe MTF Filter</span>
+            <div class="inline-checks">
+              <label class="check-field"><input type="checkbox" id="cfg-mtf" checked><span>Require MTF Trend Agreement</span></label>
+              <select id="cfg-mtf-min" class="input input-sm mono">
+                <option value="15" selected>15m Structure</option>
+                <option value="5">5m Structure</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="config-block">
+            <span class="field-label">Execution Shields</span>
+            <div class="inline-checks">
+              <label class="check-field"><input type="checkbox" id="cfg-news" checked><span>Macro / US NFP Blackout</span></label>
+              <label class="check-field"><input type="checkbox" id="cfg-adaptive" checked><span>Adaptive Cost Horizon</span></label>
+              <label class="check-field"><input type="checkbox" id="cfg-session"><span>FX Session Filter</span></label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">101,803 REAL EUR/USD M1 BARS // AUG – OCT 2026</p>
+            <h2 class="panel-title">Out-of-Sample Empirical Benchmark</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Configuration (London/NY 07–17Z, 1.20p spread charged)</th>
+                <th>Train WR (Aug–Sep)</th>
+                <th>Train Net / Trade</th>
+                <th>OOS WR (Oct)</th>
+                <th>OOS Net / Trade</th>
+              </tr>
+            </thead>
+            <tbody id="strat-bench-tbody">
+              <tr>
+                <td>Core Confluence (unfiltered 60m)</td>
+                <td class="mono">51.49%</td>
+                <td class="mono">-0.513 pips</td>
+                <td class="mono">57.47%</td>
+                <td class="mono">-0.116 pips</td>
+              </tr>
+              <tr>
+                <td><strong>Core + 15m MTF Alignment (active)</strong></td>
+                <td class="mono">52.21%</td>
+                <td class="mono">-0.312 pips</td>
+                <td class="mono">58.51%</td>
+                <td class="mono pos">+0.338 pips</td>
+              </tr>
+              <tr>
+                <td><strong>scalp_expansion Prototype (active)</strong></td>
+                <td class="mono">54.86%</td>
+                <td class="mono pos">+0.378 pips</td>
+                <td class="mono">55.02%</td>
+                <td class="mono pos">+0.382 pips</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">1 CORE GATE + 12 LEARNED PROTOTYPES</p>
+            <h2 class="panel-title">Council Registry</h2>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Strategy ID</th>
+                <th>Role</th>
+                <th>Rule Summary</th>
+                <th>Allowed Regimes</th>
+                <th>Weight</th>
+                <th>Seen</th>
+              </tr>
+            </thead>
+            <tbody id="strat-members-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================
+         PAGE 05 : CREDENTIALS (機密)
+         ================================================================= -->
+    <section class="page" id="page-credentials" data-page="credentials">
+      <div class="grid-3">
+        <div class="stat-card">
+          <span class="stat-label mono">TWELVE DATA POOL</span>
+          <strong class="stat-val mono" id="cred-td-count">0 / 30</strong>
+          <span class="stat-sub" id="cred-td-detail">Legitimate slots configured</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label mono">SUPABASE RLS STORE</span>
+          <strong class="stat-val mono" id="cred-sb-state">UNSET</strong>
+          <span class="stat-sub" id="cred-sb-url">Local JSONL active</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label mono">TELEGRAM OWNER</span>
+          <strong class="stat-val mono" id="cred-tg-state">UNSET</strong>
+          <span class="stat-sub" id="cred-tg-chat">Web console active</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">LOCAL VAULT // .ENV (GIT-IGNORED, CHMOD 600)</p>
+            <h2 class="panel-title">Configure Service Credentials</h2>
+          </div>
+        </div>
+        <p class="panel-desc">Values entered below are written atomically to your local git-ignored <span class="mono">.env</span> file with <span class="mono">0600</span> owner-only permissions and never echoed back in plaintext. Leave any field blank to keep its existing value.</p>
+
+        <form id="cred-form" class="cred-form" autocomplete="off">
+          <div class="grid-2">
+            <div class="cred-box">
+              <h3 class="subhead">Twelve Data Key Pool (1 to 30 Slots)</h3>
+              <p class="field-hint">One key per line. One free key (800 credits/day) covers all 3 markets (~312 credits/day). Do not register multiple free accounts to bypass provider rate limits.</p>
+              <textarea id="in-td-keys" class="input mono textarea" rows="4" placeholder="Paste primary key on line 1 (optional legitimate extra keys on lines 2..30)"></textarea>
+              <div class="slot-chips" id="cred-slot-chips"></div>
+            </div>
+
+            <div class="cred-box">
+              <h3 class="subhead">Supabase &amp; Telegram</h3>
+              <label class="field">
+                <span class="field-label">SUPABASE_URL</span>
+                <input type="url" id="in-sb-url" class="input mono" placeholder="https://your-project.supabase.co">
+              </label>
+              <label class="field">
+                <span class="field-label">SUPABASE_SERVICE_ROLE_KEY</span>
+                <input type="password" id="in-sb-key" class="input mono" placeholder="service_role secret (never anon)">
+              </label>
+              <label class="field">
+                <span class="field-label">TELEGRAM_BOT_TOKEN</span>
+                <input type="password" id="in-tg-token" class="input mono" placeholder="123456789:AAH...">
+              </label>
+              <label class="field">
+                <span class="field-label">TELEGRAM_OWNER_CHAT_ID</span>
+                <input type="text" id="in-tg-chat" class="input mono" placeholder="Numeric owner chat ID">
+              </label>
+            </div>
+          </div>
+
+          <div class="action-bar mt-md">
+            <button type="submit" class="btn btn-primary">Save to Local Vault</button>
+            <button type="button" class="btn btn-ghost" id="btn-clear-td">Clear Twelve Data Slots</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- =================================================================
+         PAGE 06 : RISK & CHARTER (規律)
+         ================================================================= -->
+    <section class="page" id="page-risk" data-page="risk">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">1–2% ATR POSITION SIZER &amp; COST SOLVER</p>
+            <h2 class="panel-title">Paper Risk &amp; Break-Even Calculator</h2>
+          </div>
+        </div>
+
+        <form id="wb-form" class="wb-grid" onsubmit="return false;">
+          <div class="wb-inputs">
+            <div class="seg-group" role="group" aria-label="Calculator market">
+              <button type="button" class="seg wb-seg is-active" data-symbol="EUR/USD">EUR/USD</button>
+              <button type="button" class="seg wb-seg" data-symbol="BTC/USD">BTC/USD</button>
+              <button type="button" class="seg wb-seg" data-symbol="ETH/USD">ETH/USD</button>
+            </div>
+            <input type="hidden" id="wb-symbol" value="EUR/USD">
+
+            <div class="grid-2-tight">
+              <label class="field">
+                <span class="field-label">Direction</span>
+                <select id="wb-side" class="input mono">
+                  <option value="BUY">BUY</option>
+                  <option value="SELL">SELL</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">Hold (min)</span>
+                <input type="number" id="wb-horizon" class="input mono" value="15" min="1" max="120">
+              </label>
+              <label class="field">
+                <span class="field-label">Entry Price</span>
+                <input type="number" id="wb-entry" class="input mono" value="1.08520" step="any">
+              </label>
+              <label class="field">
+                <span class="field-label">M1 ATR (pips)</span>
+                <input type="number" id="wb-atr" class="input mono" value="1.95" step="0.05" min="0.05">
+              </label>
+              <label class="field">
+                <span class="field-label">Account (USD)</span>
+                <input type="number" id="wb-balance" class="input mono" value="10000" step="500" min="100">
+              </label>
+              <label class="field">
+                <span class="field-label">Risk % (cap 2%)</span>
+                <input type="number" id="wb-risk" class="input mono" value="1.0" step="0.1" min="0.1" max="5.0">
+              </label>
+            </div>
+          </div>
+
+          <div class="wb-outputs">
+            <dl class="kv-list">
+              <div class="kv"><dt>Round-Turn Spread</dt><dd class="mono" id="out-spread">1.20 pips</dd></div>
+              <div class="kv"><dt>Break-Even Win Rate</dt><dd class="mono" id="out-be">66.0%</dd></div>
+              <div class="kv"><dt>Min Viable Hold (3x cost)</dt><dd class="mono" id="out-minhold">6 min</dd></div>
+              <div class="kv"><dt>Hard Stop (1.5x ATR)</dt><dd class="mono" id="out-stop">1.08228</dd></div>
+              <div class="kv"><dt>Target (2.25x ATR)</dt><dd class="mono" id="out-target">1.08959</dd></div>
+              <div class="kv"><dt>Net Reward : Risk</dt><dd class="mono" id="out-rr">0.77 : 1</dd></div>
+              <div class="kv"><dt>Capped Dollar Risk</dt><dd class="mono" id="out-riskusd">$100.00 (1.00%)</dd></div>
+              <div class="kv"><dt>Paper Position Size</dt><dd class="mono" id="out-units">24,242 EUR</dd></div>
+            </dl>
+            <p class="verdict-banner mono" id="wb-verdict"></p>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">NON-NEGOTIABLE BOUNDARIES</p>
+            <h2 class="panel-title">The Honesty Charter</h2>
+          </div>
+        </div>
+        <div class="charter-grid">
+          <div class="charter-item">
+            <span class="mono charter-num">01 // NO FABRICATED OUTCOMES</span>
+            <p>Missing exit candles settle as UNRESOLVED with NULL net_pips — never converted into a win, loss, or tie.</p>
+          </div>
+          <div class="charter-item">
+            <span class="mono charter-num">02 // NO BACKDATED ENTRIES</span>
+            <p>Any signal that cannot seal within 10 seconds of the minute opening is dropped as DISCARDED_LATE.</p>
+          </div>
+          <div class="charter-item">
+            <span class="mono charter-num">03 // FULL SPREAD ON EVERY TRADE</span>
+            <p>Every settlement deducts the market round-turn spread (1.2p EUR/USD, 8.0p BTC/USD, 2.4p ETH/USD).</p>
+          </div>
+          <div class="charter-item">
+            <span class="mono charter-num">04 // REAL SPOT DATA ONLY</span>
+            <p>Synthetic paper feeds never update model weights or council votes. Quotex OTC, Martingale, and 95% win-rate fabrication are permanently refused.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ───────────────────── MOBILE BOTTOM APP TAB BAR ──────────────────── -->
+  <nav class="mobile-tabbar" aria-label="Mobile navigation">
+    <button type="button" class="tab-btn is-active" data-nav="signals">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <polyline points="3 13 8 13 11 5 14 19 17 11 21 11"/>
+      </svg>
+      <span>Signals</span>
+    </button>
+    <button type="button" class="tab-btn" data-nav="telegram">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <polygon points="21 3 3 11 10 14 13 21 21 3"/>
+      </svg>
+      <span>Telegram</span>
+    </button>
+    <button type="button" class="tab-btn" data-nav="health">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <rect x="4" y="4" width="16" height="16"/>
+        <polyline points="8 12 11 15 16 9"/>
+      </svg>
+      <span>Health</span>
+    </button>
+    <button type="button" class="tab-btn" data-nav="strategies">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="#09090a"/>
+        <line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="#09090a"/>
+        <line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="#09090a"/>
+      </svg>
+      <span>Strategies</span>
+    </button>
+    <button type="button" class="tab-btn" data-nav="credentials">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <rect x="5" y="11" width="14" height="9"/>
+        <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+      </svg>
+      <span>Vault</span>
+    </button>
+    <button type="button" class="tab-btn" data-nav="risk">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <polygon points="12 3 20 7 20 13 12 21 4 13 4 7 12 3"/>
+      </svg>
+      <span>Risk</span>
+    </button>
+  </nav>
+</div>
+
+<script src="assets/main.js"></script>
+</body>
+</html>
