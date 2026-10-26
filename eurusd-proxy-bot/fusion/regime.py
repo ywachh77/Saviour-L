@@ -97,24 +97,45 @@ def classify(
 CONTINUATION_SCALPS = frozenset({"scalp_impulse", "scalp_micro_breakout", "scalp_expansion"})
 REVERSION_SCALPS = frozenset({"scalp_reversion", "scalp_vwap_reversion", "scalp_pivot_fade"})
 TREND_SCALPS = frozenset({"scalp_stoch_cross"})
+CONTINUATION_METHODS = frozenset(
+    {
+        "smc_fvg_displacement",
+        "ttm_keltner_squeeze",
+        "supertrend_flip",
+        "ema_ribbon_pullback",
+        "session_box_breakout",
+    }
+)
+REVERSION_METHODS = frozenset(
+    {
+        "smc_liquidity_sweep",
+        "smc_order_block",
+        "connors_rsi2_reversion",
+        "vwap_sigma_reversion",
+    }
+)
 
 ALLOWED = {
     # Too early to know anything: only the model-backed reads may speak.
     UNKNOWN: frozenset({"orbix_confluence", "ml_consensus"}),
-    # Elevated volatility: breakouts and impulses can ride it, but fading a
-    # move in a volatile tape is how accounts die, so the reversion scalps sit out.
-    VOLATILE: frozenset({"orbix_confluence", "breakout"}) | CONTINUATION_SCALPS,
-    # Directional pressure present: continuation plus pullback-to-value.
+    # Elevated volatility: breakouts, impulses, squeezes and stop-sweeps can ride it,
+    # while passive mean-reversion scalps sit out.
+    VOLATILE: frozenset({"orbix_confluence", "breakout", "smc_liquidity_sweep"})
+    | CONTINUATION_SCALPS
+    | frozenset({"smc_fvg_displacement", "ttm_keltner_squeeze", "supertrend_flip", "session_box_breakout"}),
+    # Directional pressure present: continuation plus pullback-to-value & order blocks.
     TREND: frozenset(
         {"orbix_confluence", "ml_consensus", "trend_pullback", "breakout", "orbix_cadence"}
     )
     | CONTINUATION_SCALPS
     | TREND_SCALPS
-    | frozenset({"scalp_vwap_reversion"}),
-    # No directional pressure: this is where fading the edges belongs.
+    | CONTINUATION_METHODS
+    | frozenset({"scalp_vwap_reversion", "smc_order_block", "connors_rsi2_reversion"}),
+    # No directional pressure: this is where fading the edges & liquidity sweeps belong.
     RANGE: frozenset({"orbix_confluence", "ml_consensus", "range_reversal", "orbix_cadence"})
     | REVERSION_SCALPS
-    | TREND_SCALPS,
+    | TREND_SCALPS
+    | REVERSION_METHODS,
 }
 
 

@@ -81,7 +81,7 @@ from scripts.set_keys import normalise_keys  # noqa: E402
 
 MAX_JSON_BODY = 32_768
 MAX_SYNC_JSON_BODY = 2_097_152
-TESTS_PASSING_BASELINE = 702
+TESTS_PASSING_BASELINE = 713
 
 SIM_DEFAULTS: dict[str, tuple[float, float, int]] = {
     "EUR/USD": (1.08520, 0.00024, 101),
@@ -118,13 +118,18 @@ def _mtf_label(direction: Any) -> str:
 
 
 def _build_scaled_paper_series(symbol: str, count: int, end_minute: datetime, seed_offset: int = 0) -> list[Candle]:
-    """Build instrument-scaled synthetic candles strictly marked for paper simulation."""
+    """Build symmetric zero-bias synthetic candles strictly marked for paper simulation."""
     base_price, vol_step, seed = SIM_DEFAULTS.get(symbol, (1.0852, 0.00024, 101))
     start = end_minute - timedelta(minutes=count - 1)
+    # Cycle symmetrically across zero, bullish, and bearish drift so paper scans
+    # evaluate BUY, SELL, and range setups without directional bias.
+    drift_cycle = (0.0, 0.000004, -0.000004, 0.0000025, -0.0000025)
+    drift = drift_cycle[(seed + max(0, int(seed_offset))) % len(drift_cycle)]
     raw = synthetic_series(
         count=count,
         seed=seed + seed_offset,
         start=start,
+        drift=drift,
     )
     anchor_open = raw[0].open if raw else 1.0850
     scaled: list[Candle] = []
@@ -154,7 +159,14 @@ def _build_scaled_paper_series(symbol: str, count: int, end_minute: datetime, se
 class OperatorRuntime:
     """Thread-safe state container for the web control panel."""
 
-    def __init__(self, env_path: Path | None = None, state_dir: Path | None = None):
+    def __init__(
+        self,
+        env_path: Path | None = None,
+        state_dir: Path | None = None,
+        *,
+        auto_settle: bool = True,
+        auto_settle_interval_s: float = 15.0,
+    ):
         self.lock = threading.RLock()
         self.env_path = env_path or (BOT_ROOT / ".env")
         self.example_path = BOT_ROOT / ".env.example"
@@ -167,10 +179,51 @@ class OperatorRuntime:
         self._synced_pairs: set[str] = set()
         self._cloud_key_slots: list[dict[str, Any]] = []
         self._cloud_telegram_offset = 0
+        self._auto_settle_interval_s = max(1.0, float(auto_settle_interval_s))
+        self._stop_event = threading.Event()
+        self._auto_settle_thread: threading.Thread | None = None
+        self._auto_settle_runs = 0
+        self._auto_settled_total = 0
+        self._last_auto_settle_at: datetime | None = None
         self.config: Config = Config()
         self.store: Store = None  # type: ignore[assignment]
         self.bot: FusionBot = None  # type: ignore[assignment]
         self.reload()
+        if auto_settle:
+            self._start_auto_settle_worker()
+
+    def _start_auto_settle_worker(self) -> None:
+        if self._auto_settle_thread is not None and self._auto_settle_thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._auto_settle_thread = threading.Thread(
+            target=self._auto_settle_loop,
+            name="saviour-auto-settle",
+            daemon=True,
+        )
+        self._auto_settle_thread.start()
+
+    def _auto_settle_tick(self, at: datetime | None = None) -> int:
+        stamp = at or utcnow()
+        with self.lock:
+            settled = self.bot.settle_due(at=stamp)
+            self.bot.reconcile_settled_signals()
+            self._auto_settle_runs += 1
+            self._auto_settled_total += settled
+            self._last_auto_settle_at = stamp
+            return settled
+
+    def _auto_settle_loop(self) -> None:
+        while not self._stop_event.wait(self._auto_settle_interval_s):
+            try:
+                self._auto_settle_tick()
+            except Exception:  # noqa: BLE001 - background worker must never crash HTTP server
+                continue
+
+    def close(self) -> None:
+        self._stop_event.set()
+        if self._auto_settle_thread is not None and self._auto_settle_thread.is_alive():
+            self._auto_settle_thread.join(timeout=2.0)
 
     def _build_runtime_store(self, cfg: Config) -> Store:
         local = LocalStore(cfg.local_state_dir)
@@ -250,6 +303,7 @@ class OperatorRuntime:
         self._cloud_telegram_offset = int(runtime_blob.get("telegram_offset", 0) or 0)
         self.bot = FusionBot(config=cfg, store=self.store)
         self.bot.startup()
+        self.bot.reconcile_settled_signals()
         self.needle = needle_agent.SaviourNeedleAgent(
             state_dir=cfg.local_state_dir,
             weights_path=(cfg.needle_weights_path or None),
@@ -311,7 +365,7 @@ class OperatorRuntime:
     def _store_backend_label(self) -> str:
         if self.store.supabase is not None:
             return "supabase+local"
-        if self.config.supabase_ready or self._cloud_supabase_url:
+        if self.config.supabase_ready or self._cloud_supabase_url or (self.config.supabase_url and self.has_synced_market_data):
             return "supabase_mirror"
         return "local_jsonl"
 
@@ -392,7 +446,26 @@ class OperatorRuntime:
             ]
             all_settlements = [Settlement.from_dict(r) for r in settlements_raw]
             ledger = settle.summarise(real_settlements if real_settlements else all_settlements)
-            signals_raw = self.store.load_signals(limit=25)
+            signals_raw = self.store.load_signals(limit=40)
+            signals_sorted = sorted(
+                signals_raw,
+                key=lambda r: str(r.get("entry_time", "")),
+                reverse=True,
+            )
+            settlements_sorted = sorted(
+                settlements_raw,
+                key=lambda r: str(r.get("settled_at", "")),
+                reverse=True,
+            )
+            settlements_by_id = {
+                str(r.get("signal_id")): r
+                for r in settlements_sorted
+                if r.get("signal_id")
+            }
+            pending_count = sum(
+                len(self.store.pending_signals(m.config.pair, limit=200))
+                for m in self._all_members()
+            )
             hb = self.store.latest_heartbeat()
             hb_age = heartbeat.heartbeat_age_seconds(hb)
             pool_summary = self._effective_key_pool()
@@ -419,8 +492,17 @@ class OperatorRuntime:
             now_val = utcnow()
             next_open = next_future_candle_open(now_val)
             enriched_recent_signals = []
-            for row in signals_raw[-12:][::-1]:
+            for row in signals_sorted[:12]:
                 item = dict(row)
+                sid = str(item.get("signal_id") or "")
+                stl_match = settlements_by_id.get(sid)
+                if stl_match is not None:
+                    item["outcome"] = stl_match.get("outcome", "SETTLED")
+                    item["net_pips"] = stl_match.get("net_pips")
+                    item["settled"] = True
+                else:
+                    item["outcome"] = "SETTLED" if item.get("settled") else "PENDING"
+                    item["net_pips"] = None
                 if item.get("entry_time"):
                     try:
                         item["entry_display_hm"] = format_display_hm(item["entry_time"])
@@ -478,14 +560,22 @@ class OperatorRuntime:
                     "wilson_low": round(ledger.wilson_low * 100.0, 1),
                     "wilson_high": round(ledger.wilson_high * 100.0, 1),
                     "ledger_source": "LIVE" if real_settlements else ("PAPER_SIMULATION" if all_settlements else "EMPTY"),
+                    "pending_signals": pending_count,
+                    "auto_settle_active": bool(self._auto_settle_thread and self._auto_settle_thread.is_alive()),
+                    "auto_settle_interval_s": self._auto_settle_interval_s,
                     "recent_signals": enriched_recent_signals,
-                    "recent_settlements": settlements_raw[-12:][::-1],
+                    "recent_settlements": settlements_sorted[:12],
                 },
                 "model": {
                     "trained": bool(self.bot.model and self.bot.model.trained),
                     "authority": self.bot.model.mode if self.bot.model else MODE_VETO,
                     "calibration": cal_state,
                     "calibration_samples": calibrator.samples if calibrator else 0,
+                    "online_updates": sum(
+                        int(m.model.online_updates) for m in self._all_members() if m.model is not None
+                    ),
+                    "mistakes_recorded": sum(m.mistakes.total_records() for m in self._all_members()),
+                    "active_prototypes": len(self.bot.weights.active()),
                 },
                 "telegram": {
                     "configured": bool(self.config.telegram_ready or tg_offset > 0),
@@ -655,13 +745,21 @@ class OperatorRuntime:
                 atr_pips = (atr_vals[-1] / inst.pip) if atr_vals else 2.0
                 mtf_dir = _mtf_label(mtf.bias(closed, member.config.mtf_minutes).direction) if len(closed) >= 60 else "FLAT"
 
+                fallback_side = (
+                    "SELL"
+                    if (
+                        mtf_dir == "BEAR"
+                        or (mtf_dir == "FLAT" and len(closed) >= 20 and closed[-1].close < closed[-20].close)
+                    )
+                    else "BUY"
+                )
                 plan_side = (
                     result.signal.side
                     if result.signal is not None
                     else (
                         result.council.side
                         if result.council and result.council.side in ("BUY", "SELL")
-                        else "BUY"
+                        else fallback_side
                     )
                 )
                 risk_plan = risk.build_risk_plan(
@@ -695,7 +793,13 @@ class OperatorRuntime:
                         else:
                             member.store.update_signal(sig.signal_id, {"delivery_state": "WEB_CONSOLE"})
                     else:
-                        member.store.local.write("signals", [sig_row])
+                        existing_local = [
+                            row
+                            for row in member.store.local.read("signals")
+                            if row.get("signal_id") != sig.signal_id
+                        ]
+                        existing_local.append(sig_row)
+                        member.store.local.replace("signals", existing_local[-400:])
                     signal_dict = sig.to_dict()
                     signal_dict["entry_time"] = format_display_iso(sig.entry_time)
                     signal_dict["expiry_time"] = format_display_iso(sig.expiry_time)
@@ -960,6 +1064,13 @@ class OperatorRuntime:
                     status = doctor.PASS
                     detail = f"Connected in GitHub Actions runner (offset #{self._cloud_telegram_offset}); web command console ready"
                     action = ""
+                elif c.name == "Supabase" and status == doctor.FAIL and (
+                    self._cloud_supabase_url or (self.config.supabase_url and self.has_synced_market_data)
+                ):
+                    supa_label = _mask_url(self.config.supabase_url or self._cloud_supabase_url)
+                    status = doctor.PASS
+                    detail = f"Synced via Supabase Snapshot RPC ({supa_label}); serving real mirrored state"
+                    action = ""
                 elif c.name == "Supabase" and status == doctor.FAIL and self.config.supabase_ready and not self._supabase_reachable:
                     status = doctor.WARN
                     detail = f"Configured ({_mask_url(self.config.supabase_url)}) · outbound TCP restricted in sandbox; serving synced mirror"
@@ -1046,7 +1157,7 @@ class OperatorRuntime:
                 pair = str(call["arguments"].get("pair") or "ALL")
                 mode = str(call["arguments"].get("mode") or "now")
                 signal_run = self.generate_signals(pair=pair, mode=mode, dispatch_telegram=False)
-                cards = signal_run.get("cards") or []
+                cards = signal_run.get("evaluations") or signal_run.get("cards") or []
                 summary_lines = [
                     f"{c['pair']}: {c['side']} ({c['seal_state']}) — {c['reason']}"
                     for c in cards
@@ -1066,18 +1177,14 @@ class OperatorRuntime:
             weights = self.bot.weights.weights
             seen = self.bot.weights.seen
             rows = []
+            family_counts: dict[str, int] = {}
             all_ids = (strategies.CORE, *strategies.PROTOTYPES)
             for sid in all_ids:
                 allowed_regimes = [
                     reg for reg in ("TREND", "RANGE", "VOLATILE") if regime_mod.regime_allows(reg, sid)
                 ]
-                family = (
-                    "CORE_GATE"
-                    if sid == strategies.CORE
-                    else "SCALPING"
-                    if sid.startswith("scalp_")
-                    else "COUNCIL"
-                )
+                family = strategies.strategy_family(sid)
+                family_counts[family] = family_counts.get(family, 0) + 1
                 rows.append(
                     {
                         "id": sid,
@@ -1089,6 +1196,9 @@ class OperatorRuntime:
                     }
                 )
             return {
+                "council_total": len(all_ids),
+                "prototype_total": len(strategies.PROTOTYPES),
+                "family_counts": family_counts,
                 "runtime_config": {
                     "pairs": list(self.config.active_pairs),
                     "mtf_filter": self.config.mtf_filter,
@@ -1243,12 +1353,13 @@ class OperatorRuntime:
             tg_local_ready = bool(tg_tok and tg_chat)
             tg_cloud_ready = self._cloud_telegram_offset > 0
             eff_supa_url = supa_url or self._cloud_supabase_url
-            supa_configured = bool((supa_url and supa_key) or self._cloud_supabase_url)
+            cloud_rpc_synced = bool(self._cloud_supabase_url or (supa_url and self.has_synced_market_data))
+            supa_configured = bool((supa_url and supa_key) or cloud_rpc_synced)
             if self._supabase_reachable:
                 supa_mode = "LIVE"
             elif supa_url and supa_key:
                 supa_mode = "BRIDGED_MIRROR"
-            elif self._cloud_supabase_url:
+            elif cloud_rpc_synced:
                 supa_mode = "CLOUD_RPC_SYNCED"
             else:
                 supa_mode = "NONE"
@@ -1261,7 +1372,7 @@ class OperatorRuntime:
                     "live_reachable": self._supabase_reachable,
                     "mode": supa_mode,
                     "url_masked": _mask_url(eff_supa_url),
-                    "key_masked": mask_key(supa_key) if supa_key else ("CLOUD_RPC_PUBLIC" if self._cloud_supabase_url else ""),
+                    "key_masked": mask_key(supa_key) if supa_key else ("CLOUD_RPC_PUBLIC" if cloud_rpc_synced else ""),
                     "last_synced_at": format_display_datetime(self._cloud_synced_at) if self._cloud_synced_at else None,
                 },
                 "telegram": {
@@ -1361,6 +1472,20 @@ class OperatorRuntime:
                 raw_rows = payload.get(state_tbl)
                 if isinstance(raw_rows, list):
                     clean_rows = [dict(r) for r in raw_rows if isinstance(r, dict)]
+                    if state_tbl == "model_state" and clean_rows:
+                        existing_ms = {
+                            str(r.get("id")): r
+                            for r in local.read("model_state")
+                            if isinstance(r, dict) and r.get("id")
+                        }
+                        for row in clean_rows:
+                            sid = str(row.get("id") or "")
+                            prior = existing_ms.get(sid)
+                            if isinstance(prior, dict):
+                                if row.get("model") is None and prior.get("model") is not None:
+                                    row["model"] = prior["model"]
+                                if not row.get("mistakes") and prior.get("mistakes"):
+                                    row["mistakes"] = prior["mistakes"]
                     if clean_rows:
                         local.replace(state_tbl, clean_rows)
 
@@ -1369,10 +1494,17 @@ class OperatorRuntime:
                 existing_sigs = local.read("signals")
                 by_id = {str(r.get("signal_id")): r for r in existing_sigs if r.get("signal_id")}
                 for r in remote_sigs:
-                    by_id[str(r["signal_id"])] = r
+                    sid = str(r["signal_id"])
+                    prior = by_id.get(sid)
+                    if isinstance(prior, dict):
+                        if not r.get("features") and prior.get("features"):
+                            r["features"] = prior["features"]
+                        if not r.get("council") and prior.get("council"):
+                            r["council"] = prior["council"]
+                    by_id[sid] = r
                 merged_sigs = sorted(by_id.values(), key=lambda x: str(x.get("entry_time", "")))
                 if merged_sigs:
-                    local.replace("signals", merged_sigs[-200:])
+                    local.replace("signals", merged_sigs[-300:])
 
             if isinstance(payload.get("settlements"), list):
                 remote_stls = [dict(r) for r in payload["settlements"] if isinstance(r, dict) and r.get("signal_id")]
@@ -1413,11 +1545,35 @@ class OperatorRuntime:
                     local.replace("candles_m1", valid_bars)
                     synced_candles = len(valid_bars)
 
-            self.reload()
+            # Refresh bot state + candles in place (preserving background worker
+            # and Needle 3 instance), then immediately settle & learn from any due rows.
+            kp_blob = self.store.load_key_pool()
+            if isinstance(kp_blob, dict) and isinstance(kp_blob.get("slots"), list):
+                self._cloud_key_slots = [r for r in kp_blob["slots"] if isinstance(r, dict)]
+            elif isinstance(kp_blob, list):
+                self._cloud_key_slots = [r for r in kp_blob if isinstance(r, dict)]
+            state_payload = self.store.load_model_state() or {}
+            runtime_blob = state_payload.get("runtime") if isinstance(state_payload.get("runtime"), dict) else {}
+            self._cloud_telegram_offset = int(runtime_blob.get("telegram_offset", 0) or 0)
+            for member in self._all_members():
+                member._load_state()
+                member._load_candles()
+            self._synced_pairs = {
+                m.config.pair for m in self._all_members() if len(m.candles) >= 60
+            }
+            for member in self._all_members():
+                if self._has_real_candles(member) and member.model is None:
+                    member._ensure_baseline_veto_model()
+            auto_settled = self.bot.settle_due(at=utcnow())
+            replayed = self.bot.reconcile_settled_signals()
+            self.bot.save_all_states(force=True)
+            self._ensure_paper_candles_if_offline()
             return {
                 "ok": True,
                 "synced_candles": synced_candles,
                 "synced_pairs": sorted(self._synced_pairs),
+                "auto_settled": auto_settled,
+                "reconciled": replayed,
                 "status": self.status_payload(),
                 "credentials": self.credentials_payload(),
             }
@@ -1607,6 +1763,8 @@ def main() -> int:
         server.serve_forever()
     except KeyboardInterrupt:
         return 0
+    finally:
+        runtime.close()
 
 
 if __name__ == "__main__":

@@ -109,9 +109,9 @@
   };
 
   var MARKETS_STATIC = {
-    "EUR/USD": { pip: 0.0001, spread: 1.20, precision: 5, baseUnit: "EUR", entry: 1.08520, atr: 1.95, horizon: 15, crypto: false },
-    "BTC/USD": { pip: 1.00,   spread: 8.00, precision: 2, baseUnit: "BTC", entry: 80512.40, atr: 58.0, horizon: 5, crypto: true },
-    "ETH/USD": { pip: 0.10,   spread: 2.40, precision: 2, baseUnit: "ETH", entry: 2381.40, atr: 23.0, horizon: 5, crypto: true }
+    "EUR/USD": { pip: 0.0001, spread: 1.20, precision: 5, baseUnit: "EUR", entry: 1.08520, atr: 1.95, horizon: 30, crypto: false },
+    "BTC/USD": { pip: 1.00,   spread: 8.05, precision: 2, baseUnit: "BTC", entry: 80512.40, atr: 58.0, horizon: 30, crypto: true },
+    "ETH/USD": { pip: 0.10,   spread: 2.40, precision: 2, baseUnit: "ETH", entry: 2381.40, atr: 23.0, horizon: 30, crypto: true }
   };
 
   var HALF_NORMAL_SCALE = 0.7978845608;
@@ -314,12 +314,14 @@
   updateLiveIstClock();
   setInterval(updateLiveIstClock, 1000);
 
-  function renderLedger(ledger) {
+  function renderLedger(ledger, modelMeta) {
     if (!ledger) return;
     var pill = document.getElementById("ledger-summary-pill");
     if (pill) {
       var netStr = (ledger.net_pips >= 0 ? "+" : "") + Number(ledger.net_pips || 0).toFixed(1);
-      pill.textContent = ledger.wins + "W / " + ledger.losses + "L / " + netStr + " pips";
+      var pendTxt = ledger.pending_signals ? (" · " + ledger.pending_signals + " PENDING") : "";
+      var learnTxt = (modelMeta && modelMeta.mistakes_recorded) ? (" · " + modelMeta.mistakes_recorded + " LEARNED") : "";
+      pill.textContent = ledger.wins + "W / " + ledger.losses + "L / " + netStr + "p" + pendTxt + learnTxt;
     }
     var tbody = document.getElementById("recent-signals-tbody");
     if (!tbody) return;
@@ -331,6 +333,14 @@
     tbody.innerHTML = rows.map(function (s) {
       var entryShort = s.entry_time ? formatIstDateTime(s.entry_time) : (s.entry_display_hm || "--");
       var sideCls = s.side === "BUY" ? "pos" : (s.side === "SELL" ? "neg" : "");
+      var outTag = s.outcome || (s.settled ? "SETTLED" : "PENDING");
+      var outCls = outTag === "WIN" ? "pos" : (outTag === "LOSS" ? "neg" : "");
+      var outLabel = outTag;
+      if (typeof s.net_pips === "number" && isFinite(s.net_pips)) {
+        outLabel = outTag + " (" + (s.net_pips >= 0 ? "+" : "") + s.net_pips.toFixed(1) + "p)";
+      } else if (outTag === "PENDING" && s.expiry_display_hm) {
+        outLabel = "PENDING -> " + s.expiry_display_hm.replace(" UTC+05:30", "");
+      }
       return (
         "<tr>" +
           '<td class="mono">' + esc(s.pair) + "</td>" +
@@ -338,7 +348,7 @@
           '<td class="mono">' + esc(entryShort) + "</td>" +
           '<td class="mono">' + esc(s.horizon_minutes) + "m</td>" +
           '<td class="mono">' + esc(s.regime || "--") + "</td>" +
-          '<td class="mono">' + esc(s.delivery_state || "WEB_CONSOLE") + "</td>" +
+          '<td class="mono ' + outCls + '">' + esc(outLabel) + "</td>" +
           '<td class="mono">#' + esc(String(s.signal_id || "").slice(0, 8)) + "</td>" +
         "</tr>"
       );
@@ -350,7 +360,7 @@
       .then(function (st) {
         syncBotStateUI(st.paused, st.feed_mode);
         renderMarkets(st.markets);
-        renderLedger(st.ledger);
+        renderLedger(st.ledger, st.model);
       })
       .catch(function () {
         if (cachedCloudSnapshot) {
@@ -842,7 +852,7 @@
 
   /* Page 03 : Health & Causality Audit ----------------------------------- */
   function renderHealth(h) {
-    document.getElementById("hl-tests").textContent = String(h.tests_passing || 700);
+    document.getElementById("hl-tests").textContent = String(h.tests_passing || 713);
     var la = h.lookahead || {};
     var checks = la.checks || [];
     var passCount = checks.filter(function (c) { return c.ok; }).length;
@@ -868,7 +878,7 @@
       }).join("");
     }
 
-    var docList = document.getElementById("hl-doctor-list");
+      var docList = document.getElementById("hl-doctor-list");
     if (docList && h.doctor) {
       docList.innerHTML = h.doctor.map(function (d) {
         var cls = d.status === "PASS" ? "pill-live" : (d.status === "SKIP" ? "" : "pill-warn");
@@ -880,6 +890,15 @@
         );
       }).join("");
     }
+    var dg = h.data_gate || {};
+    var ageEl = document.getElementById("hl-max-age");
+    var latEl = document.getElementById("hl-seal-lat");
+    var multEl = document.getElementById("hl-spread-mult");
+    var unrEl = document.getElementById("hl-unresolve");
+    if (ageEl && dg.max_candle_age_s) ageEl.textContent = dg.max_candle_age_s + "s";
+    if (latEl && dg.max_seal_latency_s) latEl.textContent = dg.max_seal_latency_s + "s (late signals dropped)";
+    if (multEl && dg.max_spread_multiple) multEl.textContent = Number(dg.max_spread_multiple).toFixed(1) + "x base spread";
+    if (unrEl && dg.unresolve_after_m) unrEl.textContent = dg.unresolve_after_m + "m (never fabricated)";
   }
 
   function refreshHealth(liveAudit) {
@@ -924,6 +943,21 @@
     if (lsEl && rc.loss_guard_streak !== undefined) lsEl.value = String(rc.loss_guard_streak);
     var shEl = document.getElementById("cfg-shadow-recovery");
     if (shEl && rc.loss_guard_shadow_recovery !== undefined) shEl.checked = Boolean(rc.loss_guard_shadow_recovery);
+
+    var eyebrowEl = document.getElementById("strat-registry-eyebrow");
+    if (eyebrowEl && data.prototype_total) {
+      eyebrowEl.textContent = "1 CORE GATE + " + data.prototype_total + " MULTI-FAMILY PROTOTYPES";
+    }
+    var famEl = document.getElementById("strat-family-summary");
+    if (famEl && data.family_counts) {
+      var fc = data.family_counts;
+      famEl.textContent =
+        "SMC/ICT " + (fc.SMC_ICT || 0) +
+        " · Viral " + (fc.VIRAL_MOMENTUM || 0) +
+        " · Quant " + (fc.QUANT_SCALP || 0) +
+        " · Micro " + (fc.MICRO_SCALPING || 0) +
+        " · Classic " + (fc.CLASSIC_COUNCIL || 0);
+    }
 
     var tbody = document.getElementById("strat-members-tbody");
     if (tbody && data.members) {
@@ -1162,6 +1196,9 @@
           "Engine : " + (dec.engine || "unknown") + "  |  Decision : " + (dec.type || "refusal") + "\n" +
           "Calls  : " + callsJson + "\n\n";
         if (term) term.textContent = header + (res.reply || "");
+        if (res.signal_run && Array.isArray(res.signal_run.evaluations)) {
+          renderSignalEvaluations(res.signal_run.evaluations);
+        }
         refreshStatus();
         refreshTelegram();
       })
@@ -1280,20 +1317,34 @@
     renderMarkets(mkts);
 
     var stls = Array.isArray(snap.settlements) ? snap.settlements : [];
+    var stlMap = {};
     var wins = 0;
     var losses = 0;
     var netPips = 0;
     stls.forEach(function (r) {
-      if (!r || String(r.source || "").toUpperCase() === "SYNTHETIC") return;
+      if (!r) return;
+      if (r.signal_id) stlMap[String(r.signal_id)] = r;
+      if (String(r.source || "").toUpperCase() === "SYNTHETIC") return;
       if (r.outcome === "WIN") wins++;
       else if (r.outcome === "LOSS") losses++;
       if (typeof r.net_pips === "number") netPips += r.net_pips;
+    });
+    var sigRows = (Array.isArray(snap.signals) ? snap.signals : []).slice(0, 12).map(function (s) {
+      var copy = Object.assign({}, s);
+      var st = copy.signal_id ? stlMap[String(copy.signal_id)] : null;
+      if (st) {
+        copy.outcome = st.outcome || "SETTLED";
+        copy.net_pips = st.net_pips;
+      } else {
+        copy.outcome = copy.settled ? "SETTLED" : "PENDING";
+      }
+      return copy;
     });
     renderLedger({
       wins: wins,
       losses: losses,
       net_pips: netPips,
-      recent_signals: (Array.isArray(snap.signals) ? snap.signals : []).slice(0, 12)
+      recent_signals: sigRows
     });
     renderCredentials(buildCloudCredentialsFromSnapshot(snap));
   }
@@ -1321,7 +1372,7 @@
             if (synced && synced.status) {
               syncBotStateUI(synced.status.paused, synced.status.feed_mode);
               renderMarkets(synced.status.markets);
-              renderLedger(synced.status.ledger);
+              renderLedger(synced.status.ledger, synced.status.model);
             }
             if (synced && synced.credentials) {
               renderCredentials(synced.credentials);

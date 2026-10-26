@@ -85,6 +85,7 @@ class BacktestReport:
     model_accuracy: float | None = None
     model_points: int = 0
     learned_weights: dict[str, float] = field(default_factory=dict)
+    council_state: dict = field(default_factory=dict)
     per_fold: list[dict] = field(default_factory=list)
     note: str = ""
 
@@ -469,6 +470,7 @@ def run_backtest(
 
     report.coverage = (report.signals / len(usable)) if usable else 0.0
     report.learned_weights = dict(weights.active())
+    report.council_state = weights.to_dict()
     if model_points:
         report.model_points = len(model_points)
         report.model_accuracy = (
