@@ -55,7 +55,7 @@ from .timeutil import (
 # signal is considered late and dropped.
 SEAL_OFFSET_SECONDS = 0.5
 COMMAND_POLL_SECONDS = 2.0
-MAX_STORED_CANDLES = 600
+MAX_STORED_CANDLES = 750
 SAVE_STATE_EVERY = 10
 
 
@@ -222,7 +222,8 @@ class FusionBot:
         ][-4000:]
 
     def _load_candles(self) -> None:
-        rows = self.store.load_candles(self.config.pair, limit=MAX_STORED_CANDLES)
+        cap = max(MAX_STORED_CANDLES, int(getattr(self.config, "candle_history", 0) or 0))
+        rows = self.store.load_candles(self.config.pair, limit=cap)
         candles: list[Candle] = []
         for row in rows:
             try:
@@ -230,7 +231,7 @@ class FusionBot:
             except (ValueError, KeyError, TypeError):
                 continue
         candles.sort(key=lambda candle: candle.timestamp)
-        self.candles = candles[-MAX_STORED_CANDLES:]
+        self.candles = candles[-cap:]
 
     # ------------------------------------------------------------------- loop
     def run_forever(self) -> None:  # pragma: no cover - long running
@@ -886,7 +887,8 @@ class FusionBot:
             else:
                 revised += 1
         if rows:
-            self.candles = sorted(known.values(), key=lambda item: item.timestamp)[-MAX_STORED_CANDLES:]
+            cap = max(MAX_STORED_CANDLES, int(getattr(self.config, "candle_history", 0) or 0))
+            self.candles = sorted(known.values(), key=lambda item: item.timestamp)[-cap:]
             self.store.save_candles(rows)
         return added
 

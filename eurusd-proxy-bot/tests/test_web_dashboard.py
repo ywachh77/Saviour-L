@@ -267,6 +267,115 @@ class TestOperatorDashboardAPI(unittest.TestCase):
         self.assertTrue(rc["loss_guard_shadow_recovery"])
         self.assertTrue(rc["fx_rollover_guard"])
 
+    def test_cloud_sync_hydrates_empty_runtime_into_supabase_sync_and_cloud_credentials(self):
+        from datetime import datetime, timedelta, timezone
+
+        base = datetime(2026, 10, 25, 20, 0, tzinfo=timezone.utc)
+        candles = []
+        for sym, p0, step in (("EUR/USD", 1.1200, 0.00001), ("BTC/USD", 80000.0, 0.5), ("ETH/USD", 2320.0, 0.05)):
+            for i in range(680):
+                c = p0 + i * step
+                candles.append(
+                    {
+                        "pair": sym,
+                        "timestamp": (base + timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "open": c - step,
+                        "high": c + step,
+                        "low": c - step * 2,
+                        "close": c,
+                        "volume": 0.0,
+                    }
+                )
+        snap = {
+            "project_ref": "idudlcxkihqnvecwqqoj",
+            "api_keys": [
+                {
+                    "id": "keypool",
+                    "cursor": 0,
+                    "slots": [
+                        {
+                            "index": 0,
+                            "label": "f6df...fb(32)",
+                            "enabled": True,
+                            "day_used": 39,
+                            "day_limit": 800,
+                            "minute_used": 2,
+                            "minute_limit": 8,
+                            "total_calls": 94,
+                            "total_failures": 0,
+                        }
+                    ],
+                }
+            ],
+            "model_state": [
+                {
+                    "id": "champion",
+                    "runtime": {"paused": False, "telegram_offset": 309256988},
+                    "mistakes": {"wins": {}, "losses": {}, "version": 1},
+                }
+            ],
+            "signals": [
+                {
+                    "signal_id": "live_sig_001",
+                    "pair": "ETH/USD",
+                    "side": "SELL",
+                    "entry_time": "2026-10-26T00:41:00Z",
+                    "expiry_time": "2026-10-26T00:46:00Z",
+                    "generated_at": "2026-10-26T00:41:01Z",
+                    "horizon_minutes": 5,
+                    "strategy": "fusion_council",
+                    "reason": "Core 5/6",
+                    "source": "LIVE",
+                    "regime": "TREND",
+                    "spread_pips": 2.4,
+                    "seal_state": "SIGNAL",
+                    "delivery_state": "SENT",
+                    "settled": True,
+                }
+            ],
+            "settlements": [
+                {
+                    "signal_id": "live_sig_001",
+                    "outcome": "WIN",
+                    "entry_price": 2338.23,
+                    "exit_price": 2333.46,
+                    "gross_pips": 47.7,
+                    "move_pips": -47.7,
+                    "net_pips": 45.3,
+                    "spread_pips": 2.4,
+                    "settled_at": "2026-10-26T00:47:00Z",
+                    "source": "LIVE",
+                }
+            ],
+            "candles_m1": candles,
+        }
+        code, synced = self._post("/api/cloud_sync", snap)
+        self.assertEqual(code, 200)
+        self.assertTrue(synced["ok"])
+        self.assertEqual(synced["synced_candles"], 2040)
+        self.assertEqual(synced["status"]["feed_mode"], "SUPABASE_SYNC")
+        for mkt in synced["status"]["markets"]:
+            self.assertEqual(mkt["candles"], 680)
+            self.assertNotEqual(mkt["mtf_60m"], "WARMUP")
+        self.assertEqual(synced["status"]["ledger"]["wins"], 1)
+
+        creds = synced["credentials"]
+        self.assertTrue(creds["supabase"]["configured"])
+        self.assertIn(creds["supabase"]["mode"], ("CLOUD_RPC_SYNCED", "BRIDGED_MIRROR", "LIVE"))
+        self.assertTrue(creds["twelvedata"]["configured"])
+        self.assertEqual(creds["twelvedata"]["slot_count"], 1)
+        self.assertTrue(creds["telegram"]["configured"])
+        self.assertIn("309256988", creds["telegram"]["owner_chat_masked"])
+
+    def test_console_snapshot_rpc_migration_contract(self):
+        mig = Path(__file__).resolve().parent.parent / "supabase" / "migrations" / "0004_console_snapshot_rpc.sql"
+        self.assertTrue(mig.is_file())
+        sql = mig.read_text(encoding="utf-8").lower()
+        self.assertIn("create or replace function public.get_console_snapshot", sql)
+        self.assertIn("security definer", sql)
+        self.assertIn("revoke all on function public.get_console_snapshot(integer) from public", sql)
+        self.assertIn("grant execute on function public.get_console_snapshot(integer) to anon", sql)
+
 
 if __name__ == "__main__":
     unittest.main()
