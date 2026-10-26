@@ -529,8 +529,8 @@ class TestOnDemandSignals(unittest.TestCase):
         text = format_brief_signal(signal)
         self.assertIn("EUR/USD", text)
         self.assertIn("BUY", text)
-        self.assertIn("10:42", text)
-        self.assertIn("11:22", text)
+        self.assertIn("16:12 UTC+05:30", text)
+        self.assertIn("16:52 UTC+05:30", text)
         for hidden in ("Model:", "Regime:", "Why:"):
             self.assertNotIn(hidden, text)
 

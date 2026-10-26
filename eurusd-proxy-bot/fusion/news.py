@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .timeutil import parse_datetime
+from .timeutil import format_display_hm, parse_datetime
 
 PRE_RELEASE_MINUTES = 5
 POST_RELEASE_MINUTES = 15
@@ -149,7 +149,7 @@ def check_blackout(
                 True,
                 label,
                 f"News blackout: inside configured {label} window "
-                f"({start.strftime('%H:%M')}Z–{end.strftime('%H:%M')}Z).",
+                f"({format_display_hm(start)}–{format_display_hm(end)}).",
             )
 
     if "USD" in clean_pair and is_nfp_window(

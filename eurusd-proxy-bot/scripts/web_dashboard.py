@@ -66,11 +66,21 @@ from fusion.telegram import (  # noqa: E402
     render_result_message,
     render_signal_message,
 )
-from fusion.timeutil import floor_minute, format_datetime, minute_bucket, now as utcnow  # noqa: E402
+from fusion.timeutil import (  # noqa: E402
+    DISPLAY_TZ_LABEL,
+    floor_minute,
+    format_datetime,
+    format_display_datetime,
+    format_display_hm,
+    format_display_iso,
+    minute_bucket,
+    next_future_candle_open,
+    now as utcnow,
+)
 from scripts.set_keys import normalise_keys  # noqa: E402
 
 MAX_JSON_BODY = 32_768
-TESTS_PASSING_BASELINE = 691
+TESTS_PASSING_BASELINE = 700
 
 SIM_DEFAULTS: dict[str, tuple[float, float, int]] = {
     "EUR/USD": (1.08520, 0.00024, 101),
@@ -192,6 +202,13 @@ class OperatorRuntime:
             cfg.mtf_minutes = 15
         if not envfile.get_value(env_lines, "MTF_MIN_GAP_BPS"):
             cfg.mtf_min_gap_bps = 2.0
+        if not envfile.get_value(env_lines, "MTF_MACRO_FILTER"):
+            cfg.mtf_macro_filter = True
+            cfg.mtf_macro_min_gap_bps = 1.5
+        if not envfile.get_value(env_lines, "SIGNAL_HORIZON_MINUTES"):
+            cfg.horizon_minutes = 30
+        if not envfile.get_value(env_lines, "MIN_ATR_TO_SPREAD_RATIO"):
+            cfg.min_atr_to_spread_ratio = 1.4
         if not envfile.get_value(env_lines, "CANDLE_HISTORY"):
             cfg.candle_history = 750
         if not envfile.get_value(env_lines, "NEWS_FILTER"):
@@ -314,7 +331,8 @@ class OperatorRuntime:
         inst = instruments.for_symbol(member.config.pair)
         candles = member.candles
         latest_close = candles[-1].close if candles else SIM_DEFAULTS.get(inst.symbol, (1.0, 0.0002, 1))[0]
-        latest_ts = format_datetime(candles[-1].timestamp) if candles else None
+        latest_ts = format_display_iso(candles[-1].timestamp) if candles else None
+        latest_disp = format_display_hm(candles[-1].timestamp) if candles else None
         atr_vals = [v for v in calc_atr(candles, 14) if v is not None] if len(candles) >= 20 else []
         atr_pips = (atr_vals[-1] / inst.pip) if atr_vals else (1.95 if inst.symbol == "EUR/USD" else 58.0 if inst.symbol == "BTC/USD" else 23.0)
         feat_series = feat_mod.compute_features(candles, instrument=inst) if len(candles) >= 60 else []
@@ -347,6 +365,7 @@ class OperatorRuntime:
             "candles": len(candles),
             "latest_price": round(latest_close, inst.precision),
             "latest_timestamp": latest_ts,
+            "latest_display_time": latest_disp,
             "atr_pips": round(atr_pips, 2),
             "ker_10": round(float(latest_feat.get("ker_10", 0.0)), 3) if latest_feat else 0.0,
             "chop_14": round(float(latest_feat.get("chop_14", 50.0)), 1) if latest_feat else 50.0,
@@ -394,9 +413,31 @@ class OperatorRuntime:
                 if (self.bot.telegram and self.bot.telegram.offset)
                 else self._cloud_telegram_offset
             )
+            now_val = utcnow()
+            next_open = next_future_candle_open(now_val)
+            enriched_recent_signals = []
+            for row in signals_raw[-12:][::-1]:
+                item = dict(row)
+                if item.get("entry_time"):
+                    try:
+                        item["entry_display_hm"] = format_display_hm(item["entry_time"])
+                        item["entry_time"] = format_display_iso(item["entry_time"])
+                    except Exception:  # noqa: BLE001
+                        pass
+                if item.get("expiry_time"):
+                    try:
+                        item["expiry_display_hm"] = format_display_hm(item["expiry_time"])
+                        item["expiry_time"] = format_display_iso(item["expiry_time"])
+                    except Exception:  # noqa: BLE001
+                        pass
+                enriched_recent_signals.append(item)
             return {
                 "engine": "SAVIOUR",
                 "mode": "PAPER_RESEARCH_ONLY",
+                "timezone": DISPLAY_TZ_LABEL,
+                "server_time": format_display_datetime(now_val),
+                "next_candle_hm": format_display_hm(next_open),
+                "seconds_until_next_candle": round(max(0.0, (next_open - now_val).total_seconds()), 1),
                 "feed_mode": feed_mode,
                 "paused": self.bot.paused,
                 "active_pairs": list(self.config.active_pairs),
@@ -434,7 +475,7 @@ class OperatorRuntime:
                     "wilson_low": round(ledger.wilson_low * 100.0, 1),
                     "wilson_high": round(ledger.wilson_high * 100.0, 1),
                     "ledger_source": "LIVE" if real_settlements else ("PAPER_SIMULATION" if all_settlements else "EMPTY"),
-                    "recent_signals": signals_raw[-12:][::-1],
+                    "recent_signals": enriched_recent_signals,
                     "recent_settlements": settlements_raw[-12:][::-1],
                 },
                 "model": {
@@ -497,7 +538,11 @@ class OperatorRuntime:
                 self.bot.flush_key_pool()
                 base_now = utcnow()
 
-            eval_stamp = self.bot._sealable_stamp(base_now)
+            # Always target the upcoming future M1 candle (> base_now) — never
+            # the currently forming candle and never historical past bars.
+            future_entry = next_future_candle_open(base_now)
+            seconds_to_open = round(max(0.0, (future_entry - base_now).total_seconds()), 1)
+            causal_cutoff = floor_minute(base_now)
 
             cards: list[dict[str, Any]] = []
             emitted_count = 0
@@ -505,28 +550,47 @@ class OperatorRuntime:
             for member in targets:
                 inst = instruments.for_symbol(member.config.pair)
                 saved_real_candles = list(member.candles) if (not is_live and self._has_real_candles(member)) else None
+                closed_real = closed_before(saved_real_candles, causal_cutoff) if saved_real_candles else []
+                real_is_fresh = bool(
+                    closed_real
+                    and (base_now - closed_real[-1].timestamp).total_seconds() <= member.config.max_candle_age_seconds
+                )
 
+                chosen_stamp = future_entry
                 if is_live:
-                    chosen_stamp = member._sealable_stamp(base_now)
-                    # Strip any forming current-minute bar against real wall clock base_now
-                    # so rolling chosen_stamp to next_minute can never leak an open bar.
-                    eval_candles = closed_before(member.candles, base_now)
+                    eval_candles = closed_before(member.candles, causal_cutoff)
                     member_source_tag = "LIVE"
                     feed_label = "LIVE"
                     steps_scanned = 1
-                    result = member.engine.evaluate(
-                        eval_candles,
-                        model=member.model,
-                        ensemble=member.ensemble,
-                        weights=member.weights,
-                        source=member_source_tag,
-                        at=chosen_stamp,
-                        mistakes=member.mistakes,
-                    )
-                elif saved_real_candles is not None and mode == "now":
-                    # Evaluate the latest synced real M1 bar from Supabase directly.
-                    eval_candles = saved_real_candles
-                    chosen_stamp = eval_candles[-1].timestamp + timedelta(minutes=1, seconds=1)
+                    guard = member._check_runtime_protections(future_entry)
+                    if guard.blocked:
+                        result = member.engine.evaluate(
+                            [],
+                            source="LIVE",
+                            at=future_entry,
+                            observed_at=base_now,
+                        )
+                        result = type(result)(
+                            seal_state=charter.SEAL_ABSTAIN,
+                            signal=None,
+                            reason=guard.reason,
+                            gate=result.gate,
+                            regime="UNKNOWN",
+                        )
+                    else:
+                        result = member.engine.evaluate(
+                            eval_candles,
+                            model=member.model,
+                            ensemble=member.ensemble,
+                            weights=member.weights,
+                            source=member_source_tag,
+                            at=future_entry,
+                            observed_at=base_now,
+                            mistakes=member.mistakes,
+                        )
+                elif saved_real_candles is not None and (real_is_fresh or mode == "now"):
+                    # Evaluate synced real M1 bars strictly against the upcoming future next candle.
+                    eval_candles = closed_real if closed_real else saved_real_candles
                     member_source_tag = "LIVE"
                     feed_label = "SUPABASE_SYNC"
                     steps_scanned = 1
@@ -536,73 +600,53 @@ class OperatorRuntime:
                         ensemble=member.ensemble,
                         weights=member.weights,
                         source=member_source_tag,
-                        at=chosen_stamp,
+                        at=future_entry,
+                        observed_at=base_now,
                         mistakes=member.mistakes,
                     )
                 else:
-                    # First scan across synced real Supabase bars when available; otherwise paper simulation.
+                    # Standalone paper simulation anchored to the real current minute so
+                    # entry_time is ALWAYS the upcoming future next candle (UTC+05:30).
                     steps_scanned = 0
                     result = None
                     eval_candles = member.candles
-                    chosen_stamp = eval_stamp
                     member_source_tag = "SYNTHETIC"
                     feed_label = "PAPER_SIMULATION"
+                    anchor_closed = causal_cutoff - timedelta(minutes=1)
+                    max_paper_steps = 140 if mode == "scan" else 1
+                    for _ in range(max_paper_steps):
+                        self._sim_step += 1
+                        steps_scanned += 1
+                        eval_candles = _build_scaled_paper_series(
+                            inst.symbol,
+                            count=280,
+                            end_minute=anchor_closed,
+                            seed_offset=self._sim_step,
+                        )
+                        result = member.engine.evaluate(
+                            eval_candles,
+                            model=member.model,
+                            ensemble=member.ensemble,
+                            weights=member.weights,
+                            source="SYNTHETIC",
+                            at=future_entry,
+                            observed_at=base_now,
+                            mistakes=member.mistakes,
+                        )
+                        if result.actionable or mode != "scan":
+                            break
+                        # If FX off-hours/weekend blocks this market at the real wall-clock hour,
+                        # stop immediately rather than spinning through seeds that share the same timestamp.
+                        if result.gate is not None and not result.gate.usable:
+                            break
+                        if "weekend rollover" in (result.reason or "").lower():
+                            break
+                    if saved_real_candles is None:
+                        member.candles = eval_candles
+                    else:
+                        member.candles = saved_real_candles
 
-                    if saved_real_candles is not None and mode == "scan" and len(saved_real_candles) >= 80:
-                        for end_idx in range(len(saved_real_candles), max(70, len(saved_real_candles) - 90), -1):
-                            steps_scanned += 1
-                            window = saved_real_candles[:end_idx]
-                            cand_stamp = window[-1].timestamp + timedelta(minutes=1, seconds=1)
-                            cand_res = member.engine.evaluate(
-                                window,
-                                model=member.model,
-                                ensemble=member.ensemble,
-                                weights=member.weights,
-                                source="LIVE",
-                                at=cand_stamp,
-                                mistakes=member.mistakes,
-                            )
-                            if cand_res.actionable:
-                                eval_candles = window
-                                chosen_stamp = cand_stamp
-                                member_source_tag = "LIVE"
-                                feed_label = "SUPABASE_SYNC"
-                                result = cand_res
-                                break
-
-                    if result is None:
-                        max_paper_steps = 90 if mode == "scan" else 1
-                        for _ in range(max_paper_steps):
-                            self._sim_step += 1
-                            steps_scanned += 1
-                            chosen_stamp = (
-                                datetime(2026, 1, 5, 13, 0, 1, tzinfo=timezone.utc) + timedelta(minutes=self._sim_step)
-                                if mode == "scan"
-                                else eval_stamp
-                            )
-                            eval_candles = _build_scaled_paper_series(
-                                inst.symbol,
-                                count=max(260, member.config.candle_history),
-                                end_minute=floor_minute(chosen_stamp) - timedelta(minutes=1),
-                                seed_offset=self._sim_step,
-                            )
-                            result = member.engine.evaluate(
-                                eval_candles,
-                                model=member.model,
-                                ensemble=member.ensemble,
-                                weights=member.weights,
-                                source="SYNTHETIC",
-                                at=chosen_stamp,
-                                mistakes=member.mistakes,
-                            )
-                            if result.actionable or mode != "scan":
-                                break
-                        if saved_real_candles is None:
-                            member.candles = eval_candles
-                        else:
-                            member.candles = saved_real_candles
-
-                closed = closed_before(eval_candles, chosen_stamp)
+                closed = closed_before(eval_candles, causal_cutoff)
                 latest_close = closed[-1].close if closed else (eval_candles[-1].close if eval_candles else 1.0)
                 atr_vals = [v for v in calc_atr(closed, 14) if v is not None] if len(closed) >= 20 else []
                 atr_pips = (atr_vals[-1] / inst.pip) if atr_vals else 2.0
@@ -640,7 +684,7 @@ class OperatorRuntime:
                         bucket=minute_bucket(chosen_stamp),
                         delivery_state="WEB_CONSOLE",
                     )
-                    if is_live and mode == "now":
+                    if is_live:
                         member.store.save_signal(sig_row)
                         if dispatch_telegram and member.telegram and member.telegram.configured and not member.paused:
                             member.deliver(sig, brief=True)
@@ -650,6 +694,12 @@ class OperatorRuntime:
                     else:
                         member.store.local.write("signals", [sig_row])
                     signal_dict = sig.to_dict()
+                    signal_dict["entry_time"] = format_display_iso(sig.entry_time)
+                    signal_dict["expiry_time"] = format_display_iso(sig.expiry_time)
+                    signal_dict["generated_at"] = format_display_iso(sig.generated_at)
+                    signal_dict["entry_hm"] = format_display_hm(sig.entry_time)
+                    signal_dict["expiry_hm"] = format_display_hm(sig.expiry_time)
+                    signal_dict["timezone"] = DISPLAY_TZ_LABEL
                     signal_dict["entry_display"] = f"{latest_close:,.{inst.precision}f}"
                     brief_text = format_brief_signal(sig, member.telegram_format)
                     full_text = format_signal(sig, member.telegram_format)
@@ -662,7 +712,13 @@ class OperatorRuntime:
                         "pair": inst.symbol,
                         "precision": inst.precision,
                         "feed_source": feed_label,
-                        "evaluated_at": format_datetime(chosen_stamp),
+                        "timezone": DISPLAY_TZ_LABEL,
+                        "evaluated_at": format_display_iso(base_now),
+                        "evaluated_display": format_display_datetime(base_now),
+                        "target_entry_at": format_display_iso(future_entry),
+                        "target_entry_hm": format_display_hm(future_entry),
+                        "seconds_until_entry": seconds_to_open,
+                        "is_future_entry": True,
                         "steps_scanned": steps_scanned,
                         "latest_price": round(latest_close, inst.precision),
                         "atr_pips": round(atr_pips, 2),
@@ -695,6 +751,10 @@ class OperatorRuntime:
             )
             return {
                 "ok": True,
+                "timezone": DISPLAY_TZ_LABEL,
+                "evaluated_at": format_display_datetime(base_now),
+                "target_entry_hm": format_display_hm(future_entry),
+                "seconds_until_entry": seconds_to_open,
                 "feed_mode": overall_feed,
                 "emitted": emitted_count,
                 "dispatch_telegram": bool(dispatch_telegram),

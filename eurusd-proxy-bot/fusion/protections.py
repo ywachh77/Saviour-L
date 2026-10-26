@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from typing import Iterable, Mapping
 
 from . import charter
-from .timeutil import add_minutes, parse_datetime
+from .timeutil import add_minutes, format_display_hm, format_display_iso, parse_datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,9 +74,9 @@ def check_fx_rollover(
             return ProtectionVerdict(
                 True,
                 "fx_rollover",
-                f"FX weekend rollover guard: {expiry.strftime('%H:%M')}Z expiry crosses the "
-                "Friday 21:55Z market close and would become UNRESOLVED.",
-                until=friday_cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                f"FX weekend rollover guard: {format_display_hm(expiry)} expiry crosses the "
+                f"{format_display_hm(friday_cutoff)} market close and would become UNRESOLVED.",
+                until=format_display_iso(friday_cutoff),
             )
     return CLEAR
 

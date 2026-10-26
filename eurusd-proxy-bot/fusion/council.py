@@ -174,7 +174,7 @@ def run_council(
     """
     weights = weights or CouncilWeights()
     core: Decision = strategies.REGISTRY[strategies.CORE](
-        candle, previous_close, features, probability_up, min_checks=min_checks
+        candle, previous_close, features, probability_up, min_checks=min_checks, regime=regime
     )
 
     votes: list[Vote] = []

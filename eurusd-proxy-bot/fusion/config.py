@@ -224,7 +224,7 @@ class Config:
     digest_minute_utc: int = 5
     nightly_hour_utc: int = 23
     nightly_minute_utc: int = 55
-    timezone_name: str = "UTC"
+    timezone_name: str = "UTC+05:30"
     local_state_dir: str = "var"
     runner: str = "github-actions"
 

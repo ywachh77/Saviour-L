@@ -52,12 +52,15 @@ def orbix_confluence(
     probability_up: float | None = None,
     *,
     min_checks: int = 5,
+    regime: str = "UNKNOWN",
     **_ignored,
 ) -> Decision:
     """The 6-check core gate.
 
-    Requires at least ``min_checks`` of six checks AND the two mandatory ones
-    (trend, directional ADX). A rule score is a count, not a probability.
+    Requires at least ``min_checks`` of six checks AND the mandatory checks
+    for the active entry mode. Tuned on 2025 real M1 bars and validated
+    out-of-sample on 2026 EUR/USD, BTC/USD, and ETH/USD M1 candles under both
+    minute-boundary and 1-bar next-candle forward execution.
     """
     if features is None:
         return Decision("NO SIGNAL", "Not enough completed candles to calculate indicators.", None, 0)
@@ -78,12 +81,15 @@ def orbix_confluence(
     cci = features.get("cci", 0.0)
     body_atr = features["body_atr_ratio"]
     close_pos = features["close_position"]
+    vwap_dev = float(features.get("vwap_dev", 0.0) or 0.0)
     bb_lo = features.get("bb_lower", close)
     bb_hi = features.get("bb_upper", close)
     bb_pos = (close - bb_lo) / max(bb_hi - bb_lo, 1e-12) if bb_hi > bb_lo else 0.5
+    atr_bps = max(0.5, 10_000.0 * abs(float(atr_pct)))
 
-    # 1. Trend Pullback Rebound: enter WITH the trend after a 3-bar pullback
-    #    turns back in trend direction, instead of chasing 20-bar breakout highs.
+    # 1. Trend Value Pullback Rebound: enter WITH the trend after a 3-bar
+    #    pullback resets into the value zone of the Bollinger channel and
+    #    turns back in trend direction, instead of buying overextended tops.
     pullback_checks = {
         "trend": {
             "BUY": features["ema_fast"] >= features["ema_slow"] * 0.9997 and close > features["ema_slow"],
@@ -98,8 +104,8 @@ def orbix_confluence(
             "SELL": features["return_1"] < 0.0 and close < candle.open and rsi < rsi_prev,
         },
         "RSI & oscillator": {
-            "BUY": 35.0 <= rsi <= 58.0 and stoch_k <= 78.0 and cci <= 115.0,
-            "SELL": 42.0 <= rsi <= 65.0 and stoch_k >= 22.0 and cci >= -115.0,
+            "BUY": 35.0 <= rsi <= 58.0 and bb_pos <= 0.85 and stoch_k <= 78.0 and cci <= 115.0,
+            "SELL": 42.0 <= rsi <= 65.0 and bb_pos >= 0.15 and stoch_k >= 22.0 and cci >= -115.0,
         },
         "candle quality": {
             "BUY": 0.12 <= body_atr <= 1.25 and close_pos >= 0.62,
@@ -126,33 +132,82 @@ def orbix_confluence(
                 pb_score,
             )
 
-    # 2. Confirmed Stretch Exhaustion Reversal: after a 2-sigma Bollinger/VWAP
-    #    stretch and oversold/overbought oscillator hook, enter on a confirmed
-    #    turn bar when higher-timeframe structure is not in runaway opposition.
+    # 2. Bounded-Macro Stretch Exhaustion Reversal: captures either (a) a
+    #    confirmed Bollinger/VWAP reclaim turn after a 2-sigma stretch, or
+    #    (b) an orderly 2.3-sigma wick-rejection absorption bar when the 60m
+    #    and 15m higher timeframes are bounded rather than in a runaway crash.
+    gap15 = float(features.get("mtf_gap_15", 0.0) or 0.0)
+    slope15 = float(features.get("mtf_slope_15", 0.0) or 0.0)
+    gap60 = float(features.get("mtf_gap_60", 0.0) or 0.0)
+    slope60 = float(features.get("mtf_slope_60", 0.0) or 0.0)
+    wick_lo = float(features.get("wick_lower", 0.0) or 0.0)
+    wick_hi = float(features.get("wick_upper", 0.0) or 0.0)
+    body_rat = float(features.get("body_ratio", 0.0) or 0.0)
+    max_macro_stretch = max(5.5, 2.8 * atr_bps)
+    max_macro_slope = max(0.95, 0.45 * atr_bps)
+    max_15m_opp = max(5.5, 2.6 * atr_bps)
+
+    buy_reclaim = (
+        (bb_pos <= 0.16 or vwap_dev <= -1.70)
+        and close > candle.open
+        and features["return_1"] > 0.0
+        and rsi > rsi_prev
+        and rsi_prev <= 33.0
+        and (stoch_k <= 26.0 or cci <= -115.0)
+        and 0.10 <= body_atr <= 1.25
+        and close_pos >= 0.58
+    )
+    buy_absorption = (
+        str(regime or "UNKNOWN").upper() == "RANGE"
+        and bb_pos <= 0.03
+        and vwap_dev <= -1.85
+        and rsi <= 29.5
+        and body_atr <= 1.20
+        and wick_lo >= 0.22
+    )
+    sell_reclaim = (
+        (bb_pos >= 0.84 or vwap_dev >= 1.70)
+        and close < candle.open
+        and features["return_1"] < 0.0
+        and rsi < rsi_prev
+        and rsi_prev >= 67.0
+        and (stoch_k >= 74.0 or cci >= 115.0)
+        and 0.10 <= body_atr <= 1.25
+        and close_pos <= 0.42
+    )
+    sell_absorption = (
+        str(regime or "UNKNOWN").upper() == "RANGE"
+        and bb_pos >= 0.97
+        and vwap_dev >= 1.85
+        and rsi >= 70.5
+        and body_atr <= 1.20
+        and wick_hi >= 0.22
+    )
+
     reversal_checks = {
         "band stretch": {
-            "BUY": bb_pos <= 0.16 or features.get("vwap_dev", 0.0) <= -1.7,
-            "SELL": bb_pos >= 0.84 or features.get("vwap_dev", 0.0) >= 1.7,
+            "BUY": (bb_pos <= 0.16 or vwap_dev <= -1.70) or (bb_pos <= 0.03 and vwap_dev <= -1.85),
+            "SELL": (bb_pos >= 0.84 or vwap_dev >= 1.70) or (bb_pos >= 0.97 and vwap_dev >= 1.85),
         },
         "reversal turn": {
-            "BUY": close > candle.open and features["return_1"] > 0.0 and rsi > rsi_prev,
-            "SELL": close < candle.open and features["return_1"] < 0.0 and rsi < rsi_prev,
+            "BUY": buy_reclaim or buy_absorption,
+            "SELL": sell_reclaim or sell_absorption,
         },
         "oscillator hook": {
-            "BUY": rsi_prev <= 33.0 and (stoch_k <= 26.0 or cci <= -115.0),
-            "SELL": rsi_prev >= 67.0 and (stoch_k >= 74.0 or cci >= 115.0),
+            "BUY": (rsi_prev <= 33.0 and (stoch_k <= 26.0 or cci <= -115.0)) or rsi <= 29.5,
+            "SELL": (rsi_prev >= 67.0 and (stoch_k >= 74.0 or cci >= 115.0)) or rsi >= 70.5,
         },
         "candle quality": {
-            "BUY": 0.12 <= body_atr <= 1.35 and close_pos >= 0.60,
-            "SELL": 0.12 <= body_atr <= 1.35 and close_pos <= 0.40,
+            "BUY": body_atr <= 1.25 and (close_pos >= 0.58 or wick_lo >= 0.22),
+            "SELL": body_atr <= 1.25 and (close_pos <= 0.42 or wick_hi >= 0.22),
         },
         "non-runaway HTF": {
-            "BUY": features.get("mtf_gap_15", 0.0) >= -6.0 and features.get("mtf_slope_15", 0.0) >= -1.2,
-            "SELL": features.get("mtf_gap_15", 0.0) <= 6.0 and features.get("mtf_slope_15", 0.0) <= 1.2,
+            "BUY": abs(gap60) <= max_macro_stretch and abs(slope60) <= max_macro_slope and gap15 >= -max_15m_opp and slope15 >= -max_macro_slope,
+            "SELL": abs(gap60) <= max_macro_stretch and abs(slope60) <= max_macro_slope and gap15 <= max_15m_opp and slope15 <= max_macro_slope,
         },
         "rejection structure": {
-            "BUY": features.get("wick_lower", 0.0) >= 0.15 or features.get("body_ratio", 0.0) >= 0.45,
-            "SELL": features.get("wick_upper", 0.0) >= 0.15 or features.get("body_ratio", 0.0) >= 0.45,
+            "BUY": wick_lo >= 0.16 or body_rat >= 0.45,
+            "SELL": wick_hi >= 0.16 or body_rat >= 0.45,
         },
     }
     for candidate_side in ("BUY", "SELL"):
@@ -171,22 +226,21 @@ def orbix_confluence(
                 rv_score,
             )
 
-    # 3. Non-Climax Strong-ADX Trend Continuation: only when directional ADX is
-    #    genuinely strong (>= 25), oscillators are non-exhausted, candle body is
-    #    orderly (never a >1.20 ATR climax spike), and price still has headroom
-    #    inside the 20-bar range rather than chasing an exhausted breakout top.
+    # 3. Non-Overextended Strong-ADX Trend Value Continuation: blocks extreme
+    #    sawtooth churn (Dreiss Choppiness >= 78) and Bollinger band blowoffs.
+    not_pure_chop = float(features.get("chop_14", 50.0) or 50.0) < 78.0
     checks = {
         "trend": {
-            "BUY": features["ema_fast"] > features["ema_slow"] and close > features["ema_fast"],
-            "SELL": features["ema_fast"] < features["ema_slow"] and close < features["ema_fast"],
+            "BUY": not_pure_chop and features["ema_fast"] > features["ema_slow"] and close > features["ema_fast"],
+            "SELL": not_pure_chop and features["ema_fast"] < features["ema_slow"] and close < features["ema_fast"],
         },
         "momentum": {
             "BUY": features["return_1"] > 0 and features["return_3"] > 0 and rsi >= rsi_prev,
             "SELL": features["return_1"] < 0 and features["return_3"] < 0 and rsi <= rsi_prev,
         },
         "RSI band": {
-            "BUY": 50.0 <= rsi <= 64.0 and stoch_k <= 85.0 and cci <= 130.0,
-            "SELL": 36.0 <= rsi <= 50.0 and stoch_k >= 15.0 and cci >= -130.0,
+            "BUY": 50.0 <= rsi <= 64.0 and bb_pos <= 0.98 and stoch_k <= 85.0 and cci <= 130.0,
+            "SELL": 36.0 <= rsi <= 50.0 and bb_pos >= 0.02 and stoch_k >= 15.0 and cci >= -130.0,
         },
         "directional ADX": {
             "BUY": features["adx"] >= 20.0 and features["plus_di"] > features["minus_di"],
@@ -197,8 +251,8 @@ def orbix_confluence(
             "SELL": 0.12 <= body_atr <= 1.25 and close_pos <= 0.35,
         },
         "value headroom": {
-            "BUY": close < features["prior_high_20"],
-            "SELL": close > features["prior_low_20"],
+            "BUY": close < features["prior_high_20"] and bb_pos <= 0.98,
+            "SELL": close > features["prior_low_20"] and bb_pos >= 0.02,
         },
     }
 

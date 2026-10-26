@@ -41,7 +41,15 @@ from .telegram import (
     render_result_message,
     render_signal_message,
 )
-from .timeutil import minute_bucket, now, parse_datetime, seconds_until_next_minute, floor_minute
+from .timeutil import (
+    floor_minute,
+    format_display_hm,
+    minute_bucket,
+    next_future_candle_open,
+    now,
+    parse_datetime,
+    seconds_until_next_minute,
+)
 
 # How far past the minute boundary the pipeline is allowed to seal before the
 # signal is considered late and dropped.
@@ -522,15 +530,16 @@ class FusionBot:
                 self.ingest(at=raw_now)
                 self.flush_key_pool()
             real_now = at or now()
-            stamp = self._sealable_stamp(real_now) if at is None else at
-            causal_candles = closed_before(self.candles, real_now)
+            stamp = next_future_candle_open(real_now) if at is None else at
+            obs_now = real_now if at is None else None
+            causal_candles = closed_before(self.candles, floor_minute(real_now) if at is None else real_now)
             if not causal_candles:
                 return "No price data available. The provider may be unreachable; try again shortly."
 
             guard = self._check_runtime_protections(stamp)
             if guard.blocked:
                 return (
-                    "No setup right now.\n"
+                    f"No setup right now (next candle {format_display_hm(stamp)}).\n"
                     f"{guard.reason}\n\n"
                     "The bot only reports what its gates actually agree on. "
                     "Asking again will not change the answer until the market does."
@@ -543,11 +552,12 @@ class FusionBot:
                 weights=self.weights,
                 source="LIVE",
                 at=stamp,
+                observed_at=obs_now,
                 mistakes=self.mistakes,
             )
             if not result.actionable or result.signal is None:
                 return (
-                    "No setup right now.\n"
+                    f"No setup right now (next candle {format_display_hm(stamp)}).\n"
                     f"{result.reason}\n\n"
                     "The bot only reports what its gates actually agree on. "
                     "Asking again will not change the answer until the market does."
@@ -566,13 +576,14 @@ class FusionBot:
         self.ingest_all(at=raw_now)
         self.flush_key_pool()
         real_now = at or now()
-        stamp = self._sealable_stamp(real_now) if at is None else at
+        stamp = next_future_candle_open(real_now) if at is None else at
+        obs_now = real_now if at is None else None
 
         emitted: list[str] = []
         refusals: list[str] = []
         any_candles = False
         for member in (self, *self.peer_bots.values()):
-            causal_candles = closed_before(member.candles, real_now)
+            causal_candles = closed_before(member.candles, floor_minute(real_now) if at is None else real_now)
             if not causal_candles:
                 refusals.append(f"{member.config.pair}: no price data available.")
                 continue
@@ -588,6 +599,7 @@ class FusionBot:
                 weights=member.weights,
                 source="LIVE",
                 at=stamp,
+                observed_at=obs_now,
                 mistakes=member.mistakes,
             )
             if not result.actionable or result.signal is None:
@@ -607,7 +619,7 @@ class FusionBot:
         if not any_candles:
             return "No price data available. The provider may be unreachable; try again shortly."
         return (
-            "No setup right now.\n"
+            f"No setup right now (next candle {format_display_hm(stamp)}).\n"
             + "\n".join(refusals)
             + "\n\nThe bot only reports what its gates actually agree on. "
             "Asking again will not change the answer until the market does."
