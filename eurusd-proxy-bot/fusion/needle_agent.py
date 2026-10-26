@@ -647,9 +647,9 @@ class SaviourNeedleAgent:
         if cact_path is None:
             return None
         try:
-            import needle  # type: ignore[import-not-found]
-
             if self._native_model is None or self._native_loaded_weights != str(cact_path):
+                import needle  # type: ignore[import-not-found]
+
                 self._native_model = needle.Needle(
                     tools=SAVIOUR_NEEDLE_TOOLS,
                     weights=str(cact_path),
