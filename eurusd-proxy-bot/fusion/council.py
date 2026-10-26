@@ -96,9 +96,12 @@ class CouncilWeights:
         if not payload:
             return cls()
         result = cls()
-        result.net = {str(k): float(v) for k, v in (payload.get("net") or {}).items()}
-        result.seen = {str(k): int(v) for k, v in (payload.get("seen") or {}).items()}
-        result.weights = {str(k): float(v) for k, v in (payload.get("weights") or {}).items()}
+        for k, v in (payload.get("net") or {}).items():
+            result.net[str(k)] = float(v)
+        for k, v in (payload.get("seen") or {}).items():
+            result.seen[str(k)] = int(v)
+        for k, v in (payload.get("weights") or {}).items():
+            result.weights[str(k)] = float(v)
         result.version = int(payload.get("version", 1))
         return result
 
@@ -245,6 +248,20 @@ def run_council(
             return CouncilResult(
                 "NO SIGNAL",
                 why,
+                core.score,
+                tuple(votes),
+                round(support, 4),
+                round(opposition, 4),
+                False,
+            )
+        extra_checks = mistakes.extra_confluence_checks(key)
+        required_checks = min(6, min_checks + extra_checks)
+        if extra_checks > 0 and core.score < required_checks:
+            streak = mistakes.loss_streak(key)
+            return CouncilResult(
+                "NO SIGNAL",
+                f"Post-mortem tightening: setup {key} has {streak} consecutive losses; "
+                f"requiring {required_checks}/6 core confluence (passed {core.score}/6).",
                 core.score,
                 tuple(votes),
                 round(support, 4),

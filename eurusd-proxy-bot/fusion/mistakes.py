@@ -73,6 +73,8 @@ class MistakeMemory:
 
     wins: dict[str, int] = field(default_factory=dict)
     losses: dict[str, int] = field(default_factory=dict)
+    streaks: dict[str, int] = field(default_factory=dict)
+    reconciled_ids: list[str] = field(default_factory=list)
     version: int = 1
 
     def observe(self, key: str, won: bool) -> None:
@@ -83,8 +85,10 @@ class MistakeMemory:
         losses = int(self.losses.get(key, 0))
         if won:
             wins += 1
+            self.streaks[key] = 0
         else:
             losses += 1
+            self.streaks[key] = int(self.streaks.get(key, 0)) + 1
         total = wins + losses
         if total > MAX_SAMPLES:
             # Halve rather than clamp: the cell keeps learning, older evidence
@@ -94,6 +98,26 @@ class MistakeMemory:
         self.wins[key] = wins
         self.losses[key] = losses
         self.version += 1
+
+    def loss_streak(self, key: str) -> int:
+        """Consecutive decided losses on this exact regime|session|side cell."""
+        return int(self.streaks.get(key, 0))
+
+    def extra_confluence_checks(self, key: str) -> int:
+        """Immediate tightening after >=2 consecutive losses before a full ban."""
+        return 1 if self.loss_streak(key) >= 2 else 0
+
+    def mark_reconciled(self, signal_id: str) -> bool:
+        """Return True the first time ``signal_id`` is recorded; False if already seen."""
+        sid = str(signal_id or "").strip()
+        if not sid:
+            return True
+        if sid in self.reconciled_ids:
+            return False
+        self.reconciled_ids.append(sid)
+        if len(self.reconciled_ids) > 600:
+            self.reconciled_ids = self.reconciled_ids[-600:]
+        return True
 
     def record(self, outcome: str, key: str) -> None:
         """Record by outcome label, ignoring anything that was not decided."""
@@ -142,6 +166,8 @@ class MistakeMemory:
         return {
             "wins": dict(self.wins),
             "losses": dict(self.losses),
+            "streaks": {k: v for k, v in self.streaks.items() if v > 0},
+            "reconciled_ids": list(self.reconciled_ids[-600:]),
             "version": self.version,
         }
 
@@ -152,6 +178,10 @@ class MistakeMemory:
         result = cls()
         result.wins = {str(k): int(v) for k, v in (payload.get("wins") or {}).items()}
         result.losses = {str(k): int(v) for k, v in (payload.get("losses") or {}).items()}
+        result.streaks = {str(k): int(v) for k, v in (payload.get("streaks") or {}).items() if int(v) > 0}
+        raw_ids = payload.get("reconciled_ids")
+        if isinstance(raw_ids, list):
+            result.reconciled_ids = [str(x) for x in raw_ids if x][-600:]
         result.version = int(payload.get("version", 1))
         return result
 

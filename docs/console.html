@@ -197,10 +197,10 @@
       <div class="panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow mono">PAPER LEDGER // FULL SPREAD CHARGED</p>
+            <p class="eyebrow mono">PAPER LEDGER // AUTO-SETTLEMENT &amp; LOSS LEARNING</p>
             <h2 class="panel-title">Sealed Signals &amp; Settlements</h2>
           </div>
-          <div class="mono dim" id="ledger-summary-pill">0W / 0L / +0.0 pips</div>
+          <div class="mono dim" id="ledger-summary-pill">0W / 0L / +0.0 pips · AUTO-SETTLE</div>
         </div>
         <div class="table-wrap">
           <table class="data-table">
@@ -211,7 +211,7 @@
                 <th>Entry (UTC+05:30)</th>
                 <th>Hold</th>
                 <th>Regime</th>
-                <th>Delivery</th>
+                <th>Status / Net</th>
                 <th>ID</th>
               </tr>
             </thead>
@@ -353,7 +353,7 @@
               <span class="mono dim fmt-hint">Click token to insert</span>
             </div>
             <div class="token-bar" id="tg-sig-tokens"></div>
-            <textarea id="tg-sig-template" class="input mono fmt-textarea" rows="5" spellcheck="false" placeholder="{pair} {side} ({horizon}m) #{short_id}&#10;Entry: {entry_hm}Z -> Expiry: {expiry_hm}Z&#10;Regime: {regime} | Model: {probability}&#10;Gate: {reason}"></textarea>
+            <textarea id="tg-sig-template" class="input mono fmt-textarea" rows="5" spellcheck="false" placeholder="{pair} {side} ({horizon}m) #{short_id}&#10;Entry: {entry_hm} UTC+05:30 -> Expiry: {expiry_hm} UTC+05:30&#10;Regime: {regime} | Model: {probability}&#10;Gate: {reason}"></textarea>
           </div>
 
           <div class="fmt-editor-box">
@@ -411,7 +411,7 @@
       <div class="grid-3">
         <div class="stat-card">
           <span class="stat-label mono">UNIT SUITE</span>
-          <strong class="stat-val mono" id="hl-tests">700</strong>
+          <strong class="stat-val mono" id="hl-tests">713</strong>
           <span class="stat-sub">Passing verification checks</span>
         </div>
         <div class="stat-card">
@@ -435,7 +435,7 @@
             </div>
             <button type="button" class="btn btn-sm btn-primary" id="btn-run-audit">Run Audit Now</button>
           </div>
-          <p class="panel-desc">Shocks future candles across all 3 markets and verifies that features, 5m/15m MTF resamplers, all 13 council members, and engine sealing remain byte-identical.</p>
+          <p class="panel-desc" id="hl-council-desc">Shocks future candles across all 3 markets and verifies that features, 5m/15m/60m MTF resamplers, all 22 council members, and engine sealing remain byte-identical.</p>
           <ul class="check-list" id="hl-lookahead-list"></ul>
         </div>
 
@@ -449,9 +449,9 @@
           </div>
           <ul class="check-list" id="hl-doctor-list"></ul>
           <dl class="kv-list mt-md">
-            <div class="kv"><dt>Max Candle Age</dt><dd class="mono" id="hl-max-age">180s</dd></div>
+            <div class="kv"><dt>Max Candle Age</dt><dd class="mono" id="hl-max-age">130s</dd></div>
             <div class="kv"><dt>Max Seal Latency</dt><dd class="mono" id="hl-seal-lat">10s (late signals dropped)</dd></div>
-            <div class="kv"><dt>Spread Gate Ceiling</dt><dd class="mono" id="hl-spread-mult">1.9x base spread</dd></div>
+            <div class="kv"><dt>Spread Gate Ceiling</dt><dd class="mono" id="hl-spread-mult">2.0x base spread</dd></div>
             <div class="kv"><dt>Unresolved Grace</dt><dd class="mono" id="hl-unresolve">120m (never fabricated)</dd></div>
           </dl>
         </div>
@@ -592,16 +592,17 @@
       <div class="panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow mono">1 CORE GATE + 12 LEARNED PROTOTYPES</p>
-            <h2 class="panel-title">Council Registry</h2>
+            <p class="eyebrow mono" id="strat-registry-eyebrow">1 CORE GATE + 21 MULTI-FAMILY PROTOTYPES</p>
+            <h2 class="panel-title">Council &amp; Strategy Family Registry</h2>
           </div>
+          <div class="mono dim" id="strat-family-summary">SMC/ICT · Viral Momentum · Quant Scalp · Micro Scalp · Classic</div>
         </div>
         <div class="table-wrap">
           <table class="data-table">
             <thead>
               <tr>
                 <th>Strategy ID</th>
-                <th>Role</th>
+                <th>Family</th>
                 <th>Rule Summary</th>
                 <th>Allowed Regimes</th>
                 <th>Weight</th>

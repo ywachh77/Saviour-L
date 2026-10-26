@@ -25,14 +25,18 @@ from .indicators import (
     choppiness_index,
     ema,
     kaufman_er,
+    keltner_squeeze,
     mean,
     median,
     pstdev,
     rolling_std,
     rsi,
+    smc_structure,
     stochastic,
     streak,
+    supertrend_window,
     vwap,
+    vwap_zscore,
 )
 
 # Scalping needs a rolling "fair value" anchor. 30 one-minute bars is half an
@@ -171,14 +175,24 @@ def compute_features(
     closes = [candle.close for candle in candles]
     ema_fast = ema(closes, 5)
     ema_slow = ema(closes, 20)
+    ema_8_vals = ema(closes, 8)
+    ema_13_vals = ema(closes, 13)
+    ema_21_vals = ema(closes, 21)
+    ema_34_vals = ema(closes, 34)
+    ema_50_vals = ema(closes, 50)
     rsi_values = rsi(closes, 14)
+    rsi_2_values = rsi(closes, 2)
     atr_values = atr(candles, 14)
     adx_values, plus_di_values, minus_di_values = adx(candles, 14)
     stoch_k_values, stoch_d_values = stochastic(candles, STOCH_PERIOD, STOCH_SMOOTH)
     cci_values = cci(candles, CCI_PERIOD)
     vwap_values = vwap(candles, VWAP_PERIOD)
+    vwap_z_values = vwap_zscore(candles, VWAP_PERIOD)
     ker_10_values = kaufman_er(closes, 10)
     chop_14_values = choppiness_index(candles, 14)
+    squeeze_on_vals, linreg_mom_vals = keltner_squeeze(candles)
+    st_dir_vals, st_flip_vals = supertrend_window(candles)
+    fvg_bull_vals, fvg_bear_vals, ob_bull_vals, ob_bear_vals = smc_structure(candles, atr_values)
     # Resampled once for the whole series rather than per bar. See
     # mtf.bias_series -- doing it per bar is quadratic and a 250k-bar backfill
     # would take hours instead of seconds.
@@ -258,6 +272,26 @@ def compute_features(
         micro_prior = candles[index - MICRO_PIVOT_BARS : index]
         micro_prior_high = max(item.high for item in micro_prior)
         micro_prior_low = min(item.low for item in micro_prior)
+        prior_15 = candles[max(0, index - 15) : index]
+        prior_high_15 = max(item.high for item in prior_15)
+        prior_low_15 = min(item.low for item in prior_15)
+        prior_30 = candles[max(0, index - 30) : index]
+        prior_high_30 = max(item.high for item in prior_30)
+        prior_low_30 = min(item.low for item in prior_30)
+        prior_box_30_atr = _safe_ratio(prior_high_30 - prior_low_30, atr_values[index], 5.0)
+
+        ema_8_now = float(ema_8_vals[index] if ema_8_vals[index] is not None else ema_fast[index])
+        ema_13_now = float(ema_13_vals[index] if ema_13_vals[index] is not None else ema_slow[index])
+        ema_21_now = float(ema_21_vals[index] if ema_21_vals[index] is not None else ema_slow[index])
+        ema_34_now = float(ema_34_vals[index] if ema_34_vals[index] is not None else ema_slow[index])
+        ema_50_now = float(ema_50_vals[index] if ema_50_vals[index] is not None else ema_34_now)
+        rsi_2_now = float(rsi_2_values[index] if rsi_2_values[index] is not None else rsi_values[index])
+        rsi_2_prev = float(rsi_2_values[index - 1] if rsi_2_values[index - 1] is not None else rsi_2_now)
+        vwap_z_now = float(vwap_z_values[index] if vwap_z_values[index] is not None else 0.0)
+        sq_now = 1.0 if squeeze_on_vals[index] else 0.0
+        sq_recent = 1.0 if any(squeeze_on_vals[max(0, index - 3) : index]) else 0.0
+        mom_now = float(linreg_mom_vals[index] if linreg_mom_vals[index] is not None else 0.0)
+        mom_prev = float(linreg_mom_vals[index - 1] if linreg_mom_vals[index - 1] is not None else mom_now)
 
         feature = {
             # model inputs (ordered in FEATURE_NAMES)
@@ -337,6 +371,31 @@ def compute_features(
             "vwap": vwap_values[index],
             "prior_high_5": micro_prior_high,
             "prior_low_5": micro_prior_low,
+            "prior_high_15": prior_high_15,
+            "prior_low_15": prior_low_15,
+            "prior_high_30": prior_high_30,
+            "prior_low_30": prior_low_30,
+            "prior_box_30_atr": prior_box_30_atr,
+            "wick_upper_ratio": _safe_ratio(candle.high - max(candle.open, candle.close), candle_range),
+            "wick_lower_ratio": _safe_ratio(min(candle.open, candle.close) - candle.low, candle_range),
+            "ema_8": ema_8_now,
+            "ema_13": ema_13_now,
+            "ema_21": ema_21_now,
+            "ema_34": ema_34_now,
+            "ema_50": ema_50_now,
+            "rsi_2": rsi_2_now,
+            "rsi_2_previous": rsi_2_prev,
+            "vwap_z": vwap_z_now,
+            "ttm_squeeze_now": sq_now,
+            "ttm_squeeze_recent": sq_recent,
+            "linreg_mom_12": mom_now,
+            "linreg_mom_previous": mom_prev,
+            "supertrend_dir": float(st_dir_vals[index]),
+            "supertrend_flipped": float(st_flip_vals[index]),
+            "fvg_bull_active": float(fvg_bull_vals[index]),
+            "fvg_bear_active": float(fvg_bear_vals[index]),
+            "ob_bull_tap": float(ob_bull_vals[index]),
+            "ob_bear_tap": float(ob_bear_vals[index]),
             "atr_pips": atr_values[index] / pip,
             "ker_10": float(ker_10_values[index]) if ker_10_values[index] is not None else 0.0,
             "chop_14": float(chop_14_values[index]) if chop_14_values[index] is not None else 50.0,

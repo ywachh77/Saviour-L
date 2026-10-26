@@ -315,3 +315,257 @@ def choppiness_index(candles: Sequence[Candle], period: int = 14) -> list[float 
             result[index] = max(0.0, min(100.0, raw))
     return result
 
+
+def vwap_zscore(candles: Sequence[Candle], period: int = 30) -> list[float | None]:
+    """Rolling causal VWAP Z-score: signed standard-deviation distance from VWAP."""
+    items = list(candles)
+    size = len(items)
+    result: list[float | None] = [None] * size
+    if size < period or period < 2:
+        return result
+    vwap_vals = vwap(items, period=period)
+    typical = typical_prices(items)
+    for index in range(period - 1, size):
+        anchor = vwap_vals[index]
+        if anchor is None:
+            continue
+        window = typical[index - period + 1 : index + 1]
+        sigma = pstdev(window)
+        if sigma <= 1e-12:
+            result[index] = 0.0
+        else:
+            z = (items[index].close - anchor) / sigma
+            result[index] = max(-8.0, min(8.0, z))
+    return result
+
+
+def keltner_squeeze(
+    candles: Sequence[Candle],
+    *,
+    bb_period: int = 20,
+    bb_mult: float = 2.0,
+    kc_period: int = 20,
+    kc_mult: float = 1.5,
+    atr_period: int = 14,
+    mom_period: int = 12,
+) -> tuple[list[bool], list[float | None]]:
+    """Causal John Carter TTM Bollinger-inside-Keltner Squeeze + normalized momentum.
+
+    Returns ``(squeeze_on, linreg_mom_atr)`` aligned to ``candles``. ``squeeze_on[i]``
+    is True when the 20-bar 2.0-sigma Bollinger envelope sits strictly inside the
+    20-EMA +/- 1.5x ATR(14) Keltner Channel. ``linreg_mom_atr[i]`` is the 12-bar
+    linear-regression midline oscillator scaled by ATR so thresholds hold identically
+    across FX and spot crypto.
+    """
+    items = list(candles)
+    size = len(items)
+    squeeze_on: list[bool] = [False] * size
+    momentum: list[float | None] = [None] * size
+    if size < max(bb_period, kc_period, atr_period, mom_period):
+        return squeeze_on, momentum
+
+    closes = [c.close for c in items]
+    kc_mid = ema(closes, kc_period)
+    atr_vals = atr(items, atr_period)
+
+    # Precompute constants for least-squares slope/endpoint over mom_period points (x = 0..m-1)
+    m = mom_period
+    mean_x = (m - 1) / 2.0
+    denom_x = sum((x - mean_x) ** 2 for x in range(m)) or 1.0
+
+    start_idx = max(bb_period, kc_period, atr_period, mom_period) - 1
+    for index in range(start_idx, size):
+        mid_kc = kc_mid[index]
+        atr_now = atr_vals[index]
+        if mid_kc is None or atr_now is None:
+            continue
+        bb_win = closes[index - bb_period + 1 : index + 1]
+        bb_mid = mean(bb_win)
+        bb_half = bb_mult * pstdev(bb_win)
+        kc_half = kc_mult * atr_now
+        if atr_now > 1e-15:
+            squeeze_on[index] = (bb_mid - bb_half) > (mid_kc - kc_half) and (bb_mid + bb_half) < (mid_kc + kc_half)
+
+        # Midline delta oscillator smoothed via OLS endpoint at x = m - 1
+        deltas: list[float] = []
+        for cursor in range(index - m + 1, index + 1):
+            sub = items[cursor - m + 1 : cursor + 1]
+            if len(sub) < m:
+                deltas.append(0.0)
+                continue
+            donchian_mid = 0.5 * (max(c.high for c in sub) + min(c.low for c in sub))
+            sma_mid = mean([c.close for c in sub])
+            deltas.append(items[cursor].close - 0.5 * (donchian_mid + sma_mid))
+        mean_y = mean(deltas)
+        slope = sum((x - mean_x) * (deltas[x] - mean_y) for x in range(m)) / denom_x
+        fitted_end = mean_y + slope * (m - 1 - mean_x)
+        scale = atr_now if atr_now > 1e-12 else 1.0
+        momentum[index] = max(-10.0, min(10.0, fitted_end / scale))
+
+    return squeeze_on, momentum
+
+
+def supertrend_window(
+    candles: Sequence[Candle],
+    *,
+    period: int = 10,
+    multiplier: float = 3.0,
+    window: int = 52,
+) -> tuple[list[float], list[float]]:
+    """Causal fixed-lookback ATR Supertrend direction (+1.0 / -1.0) and flip flag (1.0 / 0.0).
+
+    Evaluating over a bounded causal window ``candles[i - window + 1 : i + 1]``
+    guarantees both zero future leakage and exact invariance between 240-bar and
+    320-bar warmup histories.
+    """
+    items = list(candles)
+    size = len(items)
+    directions: list[float] = [0.0] * size
+    flips: list[float] = [0.0] * size
+    if size < period + 2:
+        return directions, flips
+
+    trs = true_ranges(items)
+    local_atr: list[float | None] = [None] * size
+    prefix_tr = [0.0] * (size + 1)
+    for idx in range(size):
+        prefix_tr[idx + 1] = prefix_tr[idx] + trs[idx]
+    for idx in range(period - 1, size):
+        local_atr[idx] = (prefix_tr[idx + 1] - prefix_tr[idx - period + 1]) / period
+
+    for index in range(period + 1, size):
+        start = max(period - 1, index - window + 1)
+        prev_upper = 0.0
+        prev_lower = 0.0
+        prev_dir = 1.0 if items[start].close >= items[start].open else -1.0
+        curr_dir = prev_dir
+        prev_step_dir = prev_dir
+
+        for k in range(start, index + 1):
+            a_val = local_atr[k]
+            if a_val is None:
+                continue
+            hl2 = 0.5 * (items[k].high + items[k].low)
+            basic_upper = hl2 + multiplier * a_val
+            basic_lower = hl2 - multiplier * a_val
+            if k == start:
+                final_upper = basic_upper
+                final_lower = basic_lower
+                curr_dir = 1.0 if items[k].close >= hl2 else -1.0
+            else:
+                prev_close = items[k - 1].close
+                final_upper = (
+                    basic_upper
+                    if (basic_upper < prev_upper or prev_close > prev_upper)
+                    else prev_upper
+                )
+                final_lower = (
+                    basic_lower
+                    if (basic_lower > prev_lower or prev_close < prev_lower)
+                    else prev_lower
+                )
+                if prev_dir < 0 and items[k].close > final_upper:
+                    curr_dir = 1.0
+                elif prev_dir > 0 and items[k].close < final_lower:
+                    curr_dir = -1.0
+                else:
+                    curr_dir = prev_dir
+            prev_step_dir = prev_dir
+            prev_dir = curr_dir
+            prev_upper = final_upper
+            prev_lower = final_lower
+
+        directions[index] = curr_dir
+        flips[index] = 1.0 if (curr_dir != prev_step_dir and index > start) else 0.0
+
+    return directions, flips
+
+
+def smc_structure(
+    candles: Sequence[Candle],
+    atr_values: Sequence[float | None],
+    *,
+    fvg_lookback: int = 5,
+    ob_lookback: int = 24,
+) -> tuple[list[float], list[float], list[float], list[float]]:
+    """Causal ICT Fair Value Gap (FVG) & Institutional Order Block (OB) mitigation detector.
+
+    Returns ``(fvg_bull, fvg_bear, ob_bull_tap, ob_bear_tap)`` as floats in ``{0.0, 1.0}``
+    aligned to ``candles`` using strictly completed bars ``<= index``.
+    """
+    items = list(candles)
+    size = len(items)
+    fvg_bull = [0.0] * size
+    fvg_bear = [0.0] * size
+    ob_bull_tap = [0.0] * size
+    ob_bear_tap = [0.0] * size
+    if size < 15:
+        return fvg_bull, fvg_bear, ob_bull_tap, ob_bear_tap
+
+    for index in range(14, size):
+        atr_now = atr_values[index]
+        if atr_now is None or atr_now <= 1e-12:
+            continue
+        bar = items[index]
+
+        # 1. ICT 3-Candle Displacement Fair Value Gap (fresh formation or unmitigated retest)
+        start_fvg = max(2, index - fvg_lookback)
+        for k in range(index, start_fvg - 1, -1):
+            c0 = items[k - 2]
+            c1 = items[k - 1]
+            c2 = items[k]
+            mid_body = abs(c1.close - c1.open)
+            if mid_body < 0.70 * atr_now:
+                continue
+            # Bullish FVG: gap between candle k-2 high and candle k low
+            if c1.close > c1.open and c2.low > c0.high + 0.08 * atr_now:
+                gap_low, gap_high = c0.high, c2.low
+                invalidated = any(items[m].close < gap_low for m in range(k + 1, index + 1))
+                if not invalidated and (k == index or (bar.low <= gap_high and bar.close >= gap_low and bar.close > bar.open)):
+                    fvg_bull[index] = 1.0
+                    break
+            # Bearish FVG: gap between candle k-2 low and candle k high
+            if c1.close < c1.open and c2.high < c0.low - 0.08 * atr_now:
+                gap_low, gap_high = c2.high, c0.low
+                invalidated = any(items[m].close > gap_high for m in range(k + 1, index + 1))
+                if not invalidated and (k == index or (bar.high >= gap_low and bar.close <= gap_high and bar.close < bar.open)):
+                    fvg_bear[index] = 1.0
+                    break
+
+        # 2. SMC Institutional Order Block Mitigation Tap (last opposite candle before BOS impulse)
+        start_ob = max(6, index - ob_lookback)
+        for k in range(index - 2, start_ob - 1, -1):
+            origin = items[k]
+            imp1 = items[k + 1]
+            prior_struct_high = max(c.high for c in items[max(0, k - 6) : k])
+            prior_struct_low = min(c.low for c in items[max(0, k - 6) : k])
+
+            # Bullish OB: bearish origin candle followed by displacement break above prior 6-bar high
+            if (
+                origin.close < origin.open
+                and imp1.close > imp1.open
+                and (imp1.close - origin.low) >= 1.15 * atr_now
+                and imp1.close > prior_struct_high
+            ):
+                zone_low, zone_high = origin.low, max(origin.open, origin.close)
+                broken = any(items[m].close < zone_low for m in range(k + 2, index))
+                if not broken and bar.low <= zone_high and bar.close > zone_low and bar.close > bar.open:
+                    ob_bull_tap[index] = 1.0
+                    break
+
+            # Bearish OB: bullish origin candle followed by displacement break below prior 6-bar low
+            if (
+                origin.close > origin.open
+                and imp1.close < imp1.open
+                and (origin.high - imp1.close) >= 1.15 * atr_now
+                and imp1.close < prior_struct_low
+            ):
+                zone_low, zone_high = min(origin.open, origin.close), origin.high
+                broken = any(items[m].close > zone_high for m in range(k + 2, index))
+                if not broken and bar.high >= zone_low and bar.close < zone_high and bar.close < bar.open:
+                    ob_bear_tap[index] = 1.0
+                    break
+
+    return fvg_bull, fvg_bear, ob_bull_tap, ob_bear_tap
+
+

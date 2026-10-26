@@ -61,6 +61,18 @@ class OnlineLogisticModel:
     def trained(self) -> bool:
         return bool(self.weights) and self.training_samples > 0
 
+    @classmethod
+    def cold_start_veto(cls) -> "OnlineLogisticModel":
+        """Neutral zero-weight VETO baseline so live settlements learn from trade #1."""
+        model = cls(mode=MODE_VETO)
+        dim = len(model.feature_names)
+        model.weights = [0.0] * dim
+        model.bias = 0.0
+        model.means = [0.0] * dim
+        model.scales = [1.0] * dim
+        model.training_samples = 1
+        return model
+
     @property
     def compatible(self) -> bool:
         return self.feature_version == FEATURE_VERSION and tuple(self.feature_names) == FEATURE_NAMES

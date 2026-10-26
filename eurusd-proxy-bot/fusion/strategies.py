@@ -9,21 +9,20 @@ from __future__ import annotations
 
 from typing import Callable
 
-from . import scalping
+from . import methods, scalping
 from .domain import Candle, Decision
 
 CORE = "orbix_confluence"
 
-# The scalping family is appended last and stays last: it is the newest, the
-# least proven, and the most exposed to spread. Order here is documentation of
-# that, not a ranking the code depends on.
+# Strategy council prototypes grouped across classic, micro-scalping, SMC/ICT
+# institutional structure, viral volatility/momentum, and quantified scalping.
 PROTOTYPES = (
     "trend_pullback",
     "range_reversal",
     "breakout",
     "ml_consensus",
     "orbix_cadence",
-) + scalping.SCALPING_PROTOTYPES
+) + scalping.SCALPING_PROTOTYPES + methods.METHOD_PROTOTYPES
 
 MEMBERS = {
     CORE: "Orbix Confluence Gate (6 checks, 5-of-6 with mandatory trend + ADX)",
@@ -34,6 +33,18 @@ MEMBERS = {
     "orbix_cadence": "Calibrated model read with EMA context",
 }
 MEMBERS.update(scalping.SCALPING_MEMBERS)
+MEMBERS.update(methods.METHOD_MEMBERS)
+
+
+def strategy_family(strategy_id: str) -> str:
+    """Return the transparent strategy family label for any council member."""
+    if strategy_id == CORE:
+        return "CORE_GATE"
+    if strategy_id in methods.METHOD_FAMILIES:
+        return methods.METHOD_FAMILIES[strategy_id]
+    if strategy_id in scalping.SCALPING_PROTOTYPES:
+        return "MICRO_SCALPING"
+    return "CLASSIC_COUNCIL"
 
 # Volatility band the core gate was written for. Outside it the gate abstains
 # rather than pretending a rule set tuned on calm bars still applies.
@@ -140,8 +151,19 @@ def orbix_confluence(
     slope15 = float(features.get("mtf_slope_15", 0.0) or 0.0)
     gap60 = float(features.get("mtf_gap_60", 0.0) or 0.0)
     slope60 = float(features.get("mtf_slope_60", 0.0) or 0.0)
-    wick_lo = float(features.get("wick_lower", 0.0) or 0.0)
-    wick_hi = float(features.get("wick_upper", 0.0) or 0.0)
+    candle_span = candle.high - candle.low
+    wick_lo_candle = ((min(candle.open, candle.close) - candle.low) / candle_span) if candle_span > 1e-12 else 0.0
+    wick_hi_candle = ((candle.high - max(candle.open, candle.close)) / candle_span) if candle_span > 1e-12 else 0.0
+    wick_lo = max(
+        float(features.get("wick_lower_ratio", 0.0) or 0.0),
+        float(features.get("wick_lower", 0.0) or 0.0),
+        wick_lo_candle,
+    )
+    wick_hi = max(
+        float(features.get("wick_upper_ratio", 0.0) or 0.0),
+        float(features.get("wick_upper", 0.0) or 0.0),
+        wick_hi_candle,
+    )
     body_rat = float(features.get("body_ratio", 0.0) or 0.0)
     max_macro_stretch = max(5.5, 2.8 * atr_bps)
     max_macro_slope = max(0.95, 0.45 * atr_bps)
@@ -408,6 +430,7 @@ REGISTRY: dict[str, Callable[..., Decision]] = {
     "orbix_cadence": orbix_cadence,
 }
 REGISTRY.update(scalping.SCALPING_REGISTRY)
+REGISTRY.update(methods.METHOD_REGISTRY)
 
 # Every member must be either the core gate or a prototype, and every prototype
 # must have a rule and a human-readable description. A member registered in one

@@ -56,7 +56,7 @@ from .timeutil import (
 SEAL_OFFSET_SECONDS = 0.5
 COMMAND_POLL_SECONDS = 2.0
 MAX_STORED_CANDLES = 750
-SAVE_STATE_EVERY = 10
+SAVE_STATE_EVERY = 1
 
 
 def format_signal(signal: Signal, fmt: TelegramFormatConfig | None = None) -> str:
@@ -116,6 +116,7 @@ class FusionBot:
     mistakes: MistakeMemory = field(default_factory=MistakeMemory)
     telegram_format: TelegramFormatConfig = field(default_factory=TelegramFormatConfig)
     shadow_recovery: dict[str, Any] = field(default_factory=lambda: {"pending": None, "cleared_at": None})
+    _saved_telegram_offset: int | None = None
     peer_bots: dict[str, "FusionBot"] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ setup
@@ -201,8 +202,10 @@ class FusionBot:
         runtime = runtime or {}
         self.paused = bool(runtime.get("paused", False))
         offset = runtime.get("telegram_offset")
-        if self.telegram is not None and isinstance(offset, int) and offset > 0:
-            self.telegram.offset = offset
+        if isinstance(offset, int) and offset > 0:
+            self._saved_telegram_offset = offset
+            if self.telegram is not None:
+                self.telegram.offset = offset
         self.stale_feed_minutes = int(runtime.get("stale_feed_minutes") or 0)
         saved_fmt = runtime.get("telegram_format")
         if isinstance(saved_fmt, dict):
@@ -731,8 +734,16 @@ class FusionBot:
             sleep_fn(wait_seconds)
         return now()
 
-    def ingest_all(self, at: datetime | None = None) -> int:
-        """Fetch latest candles across all configured instruments concurrently."""
+    def ingest_all(self, at: datetime | None = None, *, sleep_fn=time.sleep) -> int:
+        """Fetch latest candles across all configured instruments concurrently.
+
+        Twelve Data's free CDN occasionally publishes the just-closed ``M-1``
+        minute bar ~6-7s after ``:00``. When ``at`` falls inside the opening
+        seal window and a live ``TwelveDataProvider`` has not yet indexed
+        ``M-1`` on the first pass, perform at most one lightweight
+        ``outputsize=6`` catch-up poll around ``:07.1s`` while staying well
+        inside both the 8/min key quota and the 10s charter seal ceiling.
+        """
         members = [
             m
             for m in (self, *self.peer_bots.values())
@@ -740,11 +751,37 @@ class FusionBot:
         ]
         if not members:
             return 0
-        if len(members) == 1:
-            return members[0].ingest(at=at)
-        with ThreadPoolExecutor(max_workers=len(members)) as pool:
-            futures = [pool.submit(m.ingest, at=at) for m in members]
-            return sum(int(f.result() or 0) for f in futures)
+
+        def _fetch_batch(targets: list[FusionBot], size: int | None = None) -> int:
+            if len(targets) == 1:
+                return int(targets[0].ingest(at=at, outputsize=size) or 0)
+            with ThreadPoolExecutor(max_workers=len(targets)) as pool:
+                futs = [pool.submit(m.ingest, at=at, outputsize=size) for m in targets]
+                return sum(int(f.result() or 0) for f in futs)
+
+        added = _fetch_batch(members)
+
+        if at is not None:
+            opened = floor_minute(at)
+            expected_prev = opened - timedelta(minutes=1)
+            lagging = [
+                m
+                for m in members
+                if getattr(m.provider, "pool", None) is not None
+                and not getattr(m.provider, "synthetic", False)
+                and (
+                    not closed_before(m.candles, opened)
+                    or closed_before(m.candles, opened)[-1].timestamp < expected_prev
+                )
+            ]
+            if lagging:
+                elapsed = (now() - opened).total_seconds()
+                if 0.0 <= elapsed <= 6.8:
+                    wait_s = min(1.5, max(0.25, 7.1 - elapsed))
+                    sleep_fn(wait_s)
+                    added += _fetch_batch(lagging, size=6)
+
+        return added
 
     def minute_cycle(
         self,
@@ -768,8 +805,8 @@ class FusionBot:
             return CycleReport(bucket, "SKIPPED", "Another runner already claimed this minute.")
 
         if not _already_ingested:
-            if not _as_peer and self.peer_bots:
-                self.ingest_all(at=woke_at)
+            if not _as_peer and (self.peer_bots or real_clock_mode):
+                self.ingest_all(at=woke_at if real_clock_mode else None)
             else:
                 self.ingest(at=woke_at)
 
@@ -854,12 +891,27 @@ class FusionBot:
         )
         return report
 
-    def ingest(self, at: datetime | None = None) -> int:
+    def ingest(self, at: datetime | None = None, *, outputsize: int | None = None) -> int:
         """Fetch the newest candles and merge them into memory and the store."""
         if self.provider is None or not getattr(self.provider, "configured", False):
             return 0
+        if outputsize is not None:
+            req_size = int(outputsize)
+        elif (
+            at is not None
+            and len(self.candles) >= 120
+            and getattr(self.provider, "pool", None) is not None
+            and not getattr(self.provider, "synthetic", False)
+            and 0.0 <= (at - self.candles[-1].timestamp).total_seconds() <= 1800.0
+        ):
+            # Warm live cycle: fetch incremental tail instead of 750-bar history
+            # so Twelve Data's CDN responds faster with fresher tail bars and
+            # all 3 markets finish well inside the 10s Charter seal ceiling.
+            req_size = min(int(self.config.candle_history), 45)
+        else:
+            req_size = int(self.config.candle_history)
         try:
-            fresh = self.provider.time_series(self.config.pair, self.config.timeframe, self.config.candle_history)
+            fresh = self.provider.time_series(self.config.pair, self.config.timeframe, req_size)
         except Exception as error:  # noqa: BLE001 - provider failures must not kill the loop
             self.store.alert("provider_error", str(error)[:300])
             return 0
@@ -1333,6 +1385,7 @@ class FusionBot:
         # Post-mortem: remember what this setup cost, so a pattern that keeps
         # losing can be refused instead of re-tried. Rebuilt from what the
         # signal stored, so the same bar always lands in the same cell.
+        self.mistakes.mark_reconciled(signal.signal_id)
         self.mistakes.record(
             settlement.outcome,
             MistakeMemory.fingerprint(
@@ -1344,13 +1397,24 @@ class FusionBot:
             ),
         )
 
+        # Ensure a causal MODE_VETO baseline model exists (fit strictly on bars
+        # closed before signal.entry_time, or cold-start neutral VETO) so every
+        # confirmed real outcome updates online weights from trade #1.
+        self._ensure_baseline_veto_model(before=signal.entry_time)
+
+        # Loss-focused learning rate: mistakes carry 1.35x gradient focus (capped
+        # at 0.05) so repeating losing setups are down-weighted promptly.
+        effective_lr = float(self.config.online_learning_rate)
+        if settlement.outcome == charter.LOSS:
+            effective_lr = min(0.05, effective_lr * 1.35)
+
         # Model learning: test before learn, once per confirmed non-tied outcome.
         step = learning.online_step(
             self.model,
             signal.features,
             label,
             source=signal.source,
-            learning_rate=self.config.online_learning_rate,
+            learning_rate=effective_lr,
             allow_synthetic=self.config.allow_synthetic_learning,
         )
         self.store.log_event(dict(step.to_dict(), kind="online_step", signal_id=signal.signal_id))
@@ -1361,8 +1425,7 @@ class FusionBot:
             self._refit_calibration()
 
         self.settled_since_save += 1
-        if self.settled_since_save >= SAVE_STATE_EVERY:
-            self._save_state(force=True)
+        self._save_state(force=True)
 
         self._check_expectancy()
 
@@ -1484,6 +1547,13 @@ class FusionBot:
             self.model = model
         if ensemble.ready:
             self.ensemble = ensemble
+        if (
+            not getattr(self.provider, "synthetic", False)
+            and report.system is not None
+            and getattr(report.system, "council_state", None)
+            and not self.weights.active()
+        ):
+            self.weights = CouncilWeights.from_dict(report.system.council_state)
         self.nightly_report = report.to_dict()
         self.store.save_model_version(
             {
@@ -1570,6 +1640,111 @@ class FusionBot:
         if notify and self.telegram is not None and self.telegram.configured:
             self.telegram.send(digest.alert_message(kind, detail))
 
+    def _ensure_baseline_veto_model(self, *, before: datetime | None = None) -> None:
+        """Fit a causal MODE_VETO baseline on real prior bars (or cold-start neutral VETO)."""
+        if self.model is not None and self.model.trained:
+            return
+        if getattr(self.provider, "synthetic", False) and not self.config.allow_synthetic_learning:
+            return
+
+        history = self._training_candles()
+        if before is not None:
+            cutoff = parse_datetime(before)
+            rep_h = learning._representative_horizon(history[-600:] if history else [], self.config)
+            # Purge by rep_h minutes so no training label's exit crosses ``before``.
+            safe_cutoff = cutoff - timedelta(minutes=max(1, rep_h))
+            history = closed_before(history, safe_cutoff)
+        history = history[-6000:]
+        if len(history) >= 60:
+            inst = instruments.for_symbol(self.config.pair)
+            rep_horizon = learning._representative_horizon(history, self.config)
+            samples = learning.build_training_samples(history, horizon=rep_horizon, instrument=inst)
+            if len(samples) >= 40:
+                try:
+                    fitted = OnlineLogisticModel(mode=MODE_VETO).fit(
+                        [item.to_pair() for item in samples], epochs=80
+                    )
+                    fitted.mode = MODE_VETO
+                    self.model = fitted
+                    return
+                except ValueError:
+                    pass
+        self.model = OnlineLogisticModel.cold_start_veto()
+
+    def reconcile_settled_signals(self, *, _as_peer: bool = False) -> int:
+        """Idempotently replay historical settled real outcomes not yet recorded in memory."""
+        replayed = 0
+        if not getattr(self.provider, "synthetic", False):
+            signals_by_id = {
+                str(r.get("signal_id")): r
+                for r in self.store.load_signals(limit=500)
+                if r.get("signal_id") and str(r.get("pair") or "EUR/USD").upper() == self.config.pair
+            }
+            stl_rows = [
+                r
+                for r in self.store.load_settlements(limit=500)
+                if r.get("signal_id") in signals_by_id and not charter.is_synthetic(r.get("source"))
+            ]
+            stl_rows.sort(key=lambda r: str(r.get("settled_at", "")))
+            for s_row in stl_rows:
+                sid = str(s_row["signal_id"])
+                if not self.mistakes.mark_reconciled(sid):
+                    continue
+                sig_raw = signals_by_id.get(sid)
+                if not sig_raw:
+                    continue
+                try:
+                    sig = Signal.from_dict(sig_raw)
+                    stl = _settlement_from_row(s_row)
+                except (KeyError, ValueError, TypeError):
+                    continue
+                if stl.outcome in (charter.TIED, charter.UNRESOLVED):
+                    continue
+                winning = settle.winning_side(stl)
+                if winning is not None:
+                    self.weights.observe(_votes_from_signal(sig), winning)
+                self.mistakes.record(
+                    stl.outcome,
+                    MistakeMemory.fingerprint(
+                        sig.regime,
+                        session_of(sig.entry_time, instruments.for_symbol(self.config.pair))
+                        if self.config.session_filter
+                        else None,
+                        sig.side,
+                    ),
+                )
+                label = settle.learning_label(sig, stl)
+                if label in (0, 1) and sig.features:
+                    self._ensure_baseline_veto_model(before=sig.entry_time)
+                    eff_lr = float(self.config.online_learning_rate)
+                    if stl.outcome == charter.LOSS:
+                        eff_lr = min(0.05, eff_lr * 1.35)
+                    step = learning.online_step(
+                        self.model,
+                        sig.features,
+                        label,
+                        source=sig.source,
+                        learning_rate=eff_lr,
+                    )
+                    if step.raw is not None:
+                        self.calibration_points.append((float(step.raw), int(label)))
+                replayed += 1
+            if replayed > 0:
+                self.calibration_points = self.calibration_points[-4000:]
+                self._refit_calibration()
+                self._save_state(force=True)
+
+        if not _as_peer:
+            for peer in self.peer_bots.values():
+                replayed += peer.reconcile_settled_signals(_as_peer=True)
+        return replayed
+
+    def save_all_states(self, *, force: bool = True) -> None:
+        """Persist primary and peer market states immediately."""
+        self._save_state(force=force)
+        for peer in self.peer_bots.values():
+            peer._save_state(force=force)
+
     # ------------------------------------------------------------ persistence
     def _save_state(self, *, force: bool = False) -> None:
         if not force and self.settled_since_save < SAVE_STATE_EVERY:
@@ -1579,7 +1754,9 @@ class FusionBot:
             "ensemble": self.ensemble.to_dict(),
             "runtime": {
                 "paused": self.paused,
-                "telegram_offset": self.telegram.offset if self.telegram else None,
+                "telegram_offset": (
+                    self.telegram.offset if self.telegram is not None else self._saved_telegram_offset
+                ),
                 "stale_feed_minutes": self.stale_feed_minutes,
                 "telegram_format": self.telegram_format.to_dict(),
                 "shadow_recovery": dict(self.shadow_recovery),

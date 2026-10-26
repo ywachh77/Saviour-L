@@ -92,7 +92,9 @@ begin
           to_char(generated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as generated_at,
           horizon_minutes, strategy, reason, source,
           probability_up, probability_raw, calibration_state, uncertainty,
-          regime, council, '{}'::jsonb as features, spread_pips,
+          regime, council,
+          case when coalesce(settled, false) then '{}'::jsonb else coalesce(features, '{}'::jsonb) end as features,
+          spread_pips,
           seal_state, delivery_state, message_id, settled, bucket, entry_price
         from public.signals
         order by entry_time desc

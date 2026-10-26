@@ -27,6 +27,7 @@ class TestOperatorDashboardAPI(unittest.TestCase):
         self.thread.start()
 
     def tearDown(self):
+        self.runtime.close()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
@@ -102,7 +103,8 @@ class TestOperatorDashboardAPI(unittest.TestCase):
     def test_strategies_and_runtime_config_toggle(self):
         code, strat = self._get("/api/strategies")
         self.assertEqual(code, 200)
-        self.assertEqual(len(strat["members"]), 13)
+        self.assertEqual(len(strat["members"]), 22)
+        self.assertEqual(strat["prototype_total"], 21)
 
         code, updated = self._post(
             "/api/config",

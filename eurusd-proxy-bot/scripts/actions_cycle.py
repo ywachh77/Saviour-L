@@ -80,13 +80,15 @@ def main() -> int:
     bot = FusionBot(config=config, store=store, telegram=telegram)
     bot.startup()
     try:
-        # Align to the real minute seal window ([4.2s, 6.8s] past the boundary)
-        # AFTER startup state hydration: Twelve Data publishes the just-closed
-        # M1 bar ~3-3.5s after :00s, and parallel 3-pair ingest finishes in ~1.3s,
-        # sealing around :05.5s (well inside the 10s Charter ceiling).
-        bot.wait_for_seal_window(min_offset_seconds=4.2, max_entry_seconds=6.8)
+        # Align to the real minute seal window ([4.5s, 6.4s] past the boundary)
+        # AFTER startup state hydration: warm cycles fetch an incremental 45-bar
+        # tail first and, if Twelve Data's CDN has not published M-1 yet, run
+        # one fast :07.1s outputsize=6 catch-up poll while keeping all 3 markets
+        # comfortably inside the 10s Charter seal ceiling.
+        bot.wait_for_seal_window(min_offset_seconds=4.5, max_entry_seconds=6.4)
         report = bot.minute_cycle()
         bot.settle_due()
+        bot.reconcile_settled_signals()
         bot.flush_outbox()
         bot.run_scheduled()
         print(report.to_dict())
@@ -103,6 +105,7 @@ def main() -> int:
             handled = bot.listen(listen_seconds)
             print(f"listened for {listen_seconds:.0f}s, handled {handled} command(s)")
     finally:
+        bot.save_all_states(force=True)
         bot.flush_key_pool()
 
     return 0

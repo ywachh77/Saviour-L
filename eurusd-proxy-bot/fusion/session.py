@@ -96,6 +96,10 @@ ALLOWED: dict[str, frozenset[str]] = {
             "scalp_pivot_fade",
             "scalp_vwap_reversion",
             "scalp_stoch_cross",
+            "smc_liquidity_sweep",
+            "smc_order_block",
+            "connors_rsi2_reversion",
+            "vwap_sigma_reversion",
         }
     ),
     LONDON: frozenset(
@@ -110,6 +114,15 @@ ALLOWED: dict[str, frozenset[str]] = {
             "scalp_expansion",
             "scalp_vwap_reversion",
             "scalp_stoch_cross",
+            "smc_liquidity_sweep",
+            "smc_fvg_displacement",
+            "smc_order_block",
+            "ttm_keltner_squeeze",
+            "supertrend_flip",
+            "ema_ribbon_pullback",
+            "connors_rsi2_reversion",
+            "vwap_sigma_reversion",
+            "session_box_breakout",
         }
     ),
     OVERLAP: frozenset(
@@ -124,6 +137,14 @@ ALLOWED: dict[str, frozenset[str]] = {
             "scalp_expansion",
             "scalp_vwap_reversion",
             "scalp_stoch_cross",
+            "smc_liquidity_sweep",
+            "smc_fvg_displacement",
+            "smc_order_block",
+            "ttm_keltner_squeeze",
+            "supertrend_flip",
+            "ema_ribbon_pullback",
+            "connors_rsi2_reversion",
+            "session_box_breakout",
         }
     ),
     NEW_YORK: frozenset(
@@ -140,6 +161,15 @@ ALLOWED: dict[str, frozenset[str]] = {
             "scalp_pivot_fade",
             "scalp_vwap_reversion",
             "scalp_stoch_cross",
+            "smc_liquidity_sweep",
+            "smc_fvg_displacement",
+            "smc_order_block",
+            "ttm_keltner_squeeze",
+            "supertrend_flip",
+            "ema_ribbon_pullback",
+            "connors_rsi2_reversion",
+            "vwap_sigma_reversion",
+            "session_box_breakout",
         }
     ),
     OFF_HOURS: frozenset(
@@ -152,6 +182,8 @@ ALLOWED: dict[str, frozenset[str]] = {
             "scalp_pivot_fade",
             "scalp_vwap_reversion",
             "scalp_stoch_cross",
+            "connors_rsi2_reversion",
+            "vwap_sigma_reversion",
         }
     ),
 }
