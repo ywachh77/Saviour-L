@@ -80,7 +80,8 @@ from fusion.timeutil import (  # noqa: E402
 from scripts.set_keys import normalise_keys  # noqa: E402
 
 MAX_JSON_BODY = 32_768
-TESTS_PASSING_BASELINE = 700
+MAX_SYNC_JSON_BODY = 2_097_152
+TESTS_PASSING_BASELINE = 702
 
 SIM_DEFAULTS: dict[str, tuple[float, float, int]] = {
     "EUR/USD": (1.08520, 0.00024, 101),
@@ -161,6 +162,8 @@ class OperatorRuntime:
         self._sim_step = 0
         self._last_audit: dict[str, Any] | None = None
         self._supabase_reachable = False
+        self._cloud_supabase_url = ""
+        self._cloud_synced_at: datetime | None = None
         self._synced_pairs: set[str] = set()
         self._cloud_key_slots: list[dict[str, Any]] = []
         self._cloud_telegram_offset = 0
@@ -308,7 +311,7 @@ class OperatorRuntime:
     def _store_backend_label(self) -> str:
         if self.store.supabase is not None:
             return "supabase+local"
-        if self.config.supabase_ready:
+        if self.config.supabase_ready or self._cloud_supabase_url:
             return "supabase_mirror"
         return "local_jsonl"
 
@@ -1239,16 +1242,27 @@ class OperatorRuntime:
 
             tg_local_ready = bool(tg_tok and tg_chat)
             tg_cloud_ready = self._cloud_telegram_offset > 0
+            eff_supa_url = supa_url or self._cloud_supabase_url
+            supa_configured = bool((supa_url and supa_key) or self._cloud_supabase_url)
+            if self._supabase_reachable:
+                supa_mode = "LIVE"
+            elif supa_url and supa_key:
+                supa_mode = "BRIDGED_MIRROR"
+            elif self._cloud_supabase_url:
+                supa_mode = "CLOUD_RPC_SYNCED"
+            else:
+                supa_mode = "NONE"
             return {
                 "env_file_exists": self.env_path.is_file(),
                 "env_file_name": ".env (git-ignored, chmod 600)",
                 "max_twelvedata_slots": MAX_SLOTS,
                 "supabase": {
-                    "configured": bool(supa_url and supa_key),
+                    "configured": supa_configured,
                     "live_reachable": self._supabase_reachable,
-                    "mode": "LIVE" if self._supabase_reachable else ("BRIDGED_MIRROR" if (supa_url and supa_key) else "NONE"),
-                    "url_masked": _mask_url(supa_url),
-                    "key_masked": mask_key(supa_key),
+                    "mode": supa_mode,
+                    "url_masked": _mask_url(eff_supa_url),
+                    "key_masked": mask_key(supa_key) if supa_key else ("CLOUD_RPC_PUBLIC" if self._cloud_supabase_url else ""),
+                    "last_synced_at": format_display_datetime(self._cloud_synced_at) if self._cloud_synced_at else None,
                 },
                 "telegram": {
                     "configured": bool(tg_local_ready or tg_cloud_ready),
@@ -1332,6 +1346,82 @@ class OperatorRuntime:
                 "credentials": self.credentials_payload(),
             }
 
+    def ingest_cloud_snapshot(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Hydrate local mirror from a sanitized read-only Supabase console snapshot."""
+        if not isinstance(payload, dict):
+            raise ValueError("Cloud snapshot must be a JSON object.")
+        with self.lock:
+            ref = str(payload.get("project_ref") or "").strip().lower()
+            if ref and ref.isalnum() and 10 <= len(ref) <= 40:
+                self._cloud_supabase_url = f"https://{ref}.supabase.co"
+            self._cloud_synced_at = utcnow()
+
+            local = self.store.local
+            for state_tbl in ("api_keys", "model_state", "council_weights", "heartbeats", "learning_events"):
+                raw_rows = payload.get(state_tbl)
+                if isinstance(raw_rows, list):
+                    clean_rows = [dict(r) for r in raw_rows if isinstance(r, dict)]
+                    if clean_rows:
+                        local.replace(state_tbl, clean_rows)
+
+            if isinstance(payload.get("signals"), list):
+                remote_sigs = [dict(r) for r in payload["signals"] if isinstance(r, dict) and r.get("signal_id")]
+                existing_sigs = local.read("signals")
+                by_id = {str(r.get("signal_id")): r for r in existing_sigs if r.get("signal_id")}
+                for r in remote_sigs:
+                    by_id[str(r["signal_id"])] = r
+                merged_sigs = sorted(by_id.values(), key=lambda x: str(x.get("entry_time", "")))
+                if merged_sigs:
+                    local.replace("signals", merged_sigs[-200:])
+
+            if isinstance(payload.get("settlements"), list):
+                remote_stls = [dict(r) for r in payload["settlements"] if isinstance(r, dict) and r.get("signal_id")]
+                existing_stls = local.read("settlements")
+                by_sid = {str(r.get("signal_id")): r for r in existing_stls if r.get("signal_id")}
+                for r in remote_stls:
+                    by_sid[str(r["signal_id"])] = r
+                merged_stls = sorted(by_sid.values(), key=lambda x: str(x.get("settled_at", "")))
+                if merged_stls:
+                    local.replace("settlements", merged_stls[-500:])
+
+            synced_candles = 0
+            if isinstance(payload.get("candles_m1"), list):
+                valid_bars = []
+                for r in payload["candles_m1"]:
+                    if not isinstance(r, dict):
+                        continue
+                    pair = str(r.get("pair") or "").strip().upper()
+                    ts = str(r.get("timestamp") or "").strip()
+                    if pair not in ("EUR/USD", "BTC/USD", "ETH/USD") or not ts:
+                        continue
+                    try:
+                        valid_bars.append(
+                            {
+                                "pair": pair,
+                                "timestamp": ts,
+                                "open": float(r["open"]),
+                                "high": float(r["high"]),
+                                "low": float(r["low"]),
+                                "close": float(r["close"]),
+                                "volume": float(r.get("volume", 0.0) or 0.0),
+                            }
+                        )
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                if valid_bars:
+                    valid_bars.sort(key=lambda x: (x["pair"], x["timestamp"]))
+                    local.replace("candles_m1", valid_bars)
+                    synced_candles = len(valid_bars)
+
+            self.reload()
+            return {
+                "ok": True,
+                "synced_candles": synced_candles,
+                "synced_pairs": sorted(self._synced_pairs),
+                "status": self.status_payload(),
+                "credentials": self.credentials_payload(),
+            }
+
 
 def make_handler(runtime: OperatorRuntime):
     class DashboardHandler(SimpleHTTPRequestHandler):
@@ -1351,13 +1441,13 @@ def make_handler(runtime: OperatorRuntime):
             self.end_headers()
             self.wfile.write(raw)
 
-        def _read_json_body(self) -> dict[str, Any]:
+        def _read_json_body(self, max_bytes: int = MAX_JSON_BODY) -> dict[str, Any]:
             ctype = str(self.headers.get("Content-Type", "")).lower()
             if "application/json" not in ctype:
                 raise ValueError("Content-Type must be application/json.")
             length = int(self.headers.get("Content-Length", "0") or 0)
-            if length > MAX_JSON_BODY:
-                raise OverflowError("Request payload exceeds 32 KB limit.")
+            if length > max_bytes:
+                raise OverflowError(f"Request payload exceeds {max_bytes // 1024} KB limit.")
             raw = self.rfile.read(length) if length > 0 else b"{}"
             parsed = json.loads(raw.decode("utf-8") or "{}")
             if not isinstance(parsed, dict):
@@ -1430,8 +1520,9 @@ def make_handler(runtime: OperatorRuntime):
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             route = parsed.path.rstrip("/") or "/"
+            body_cap = MAX_SYNC_JSON_BODY if route == "/api/cloud_sync" else MAX_JSON_BODY
             try:
-                body = self._read_json_body()
+                body = self._read_json_body(max_bytes=body_cap)
             except OverflowError as exc:
                 self._send_json({"ok": False, "error": str(exc)}, status=413)
                 return
@@ -1440,6 +1531,10 @@ def make_handler(runtime: OperatorRuntime):
                 return
 
             try:
+                if route == "/api/cloud_sync":
+                    self._send_json(runtime.ingest_cloud_snapshot(body))
+                    return
+
                 if route == "/api/signals":
                     res = runtime.generate_signals(
                         pair=str(body.get("pair", "ALL")),

@@ -353,6 +353,10 @@
         renderLedger(st.ledger);
       })
       .catch(function () {
+        if (cachedCloudSnapshot) {
+          applyStaticCloudSnapshot(cachedCloudSnapshot);
+          return;
+        }
         var fallback = Object.keys(MARKETS_STATIC).map(function (sym) {
           var m = MARKETS_STATIC[sym];
           return {
@@ -1009,7 +1013,13 @@
   }
 
   function refreshCredentials() {
-    apiGet("api/credentials").then(renderCredentials).catch(function () {});
+    apiGet("api/credentials")
+      .then(renderCredentials)
+      .catch(function () {
+        if (cachedCloudSnapshot) {
+          renderCredentials(buildCloudCredentialsFromSnapshot(cachedCloudSnapshot));
+        }
+      });
   }
 
   var credForm = document.getElementById("cred-form");
@@ -1179,8 +1189,155 @@
     });
   });
 
+  /* Permanent Supabase Read-Only Telemetry & Market Bridge --------------- */
+  var SUPABASE_PUBLIC_URL = "https://idudlcxkihqnvecwqqoj.supabase.co";
+  var SUPABASE_PUBLISHABLE_KEY = "sb_publishable_yEZ6hFlXmmRTUVFPMNnTqQ_xWE2NFnH";
+  var cachedCloudSnapshot = null;
+
+  function buildCloudCredentialsFromSnapshot(snap) {
+    var akList = Array.isArray(snap && snap.api_keys) ? snap.api_keys : [];
+    var slots = (akList[0] && Array.isArray(akList[0].slots)) ? akList[0].slots : [];
+    var msList = Array.isArray(snap && snap.model_state) ? snap.model_state : [];
+    var champ = msList.filter(function (r) { return r && r.id === "champion"; })[0] || msList[0] || {};
+    var tgOffset = Number((champ.runtime && champ.runtime.telegram_offset) || 0);
+    return {
+      max_twelvedata_slots: 30,
+      supabase: {
+        configured: true,
+        mode: "CLOUD_RPC_SYNCED",
+        url_masked: "https://idud...qqoj.supabase.co",
+        key_masked: "CLOUD_RPC_PUBLIC"
+      },
+      twelvedata: {
+        configured: slots.length > 0,
+        local_keys_ready: false,
+        source: slots.length > 0 ? "CLOUD_SYNCED" : "NONE",
+        slot_count: slots.length,
+        slots_masked: slots.map(function (s, i) {
+          return { slot: Number(s.index != null ? s.index : i) + 1, masked: String(s.label || ("slot-" + (i + 1))) };
+        })
+      },
+      telegram: {
+        configured: tgOffset > 0,
+        local_send_ready: false,
+        source: tgOffset > 0 ? "CLOUD_SYNCED" : "NONE",
+        owner_chat_masked: tgOffset > 0 ? ("offset #" + tgOffset) : ""
+      }
+    };
+  }
+
+  function applyStaticCloudSnapshot(snap) {
+    if (!snap || typeof snap !== "object") return;
+    var msList = Array.isArray(snap.model_state) ? snap.model_state : [];
+    var champ = msList.filter(function (r) { return r && r.id === "champion"; })[0] || msList[0] || {};
+    var isPaused = Boolean(champ.runtime && champ.runtime.paused);
+    syncBotStateUI(isPaused, "SUPABASE_SYNC");
+
+    var barsByPair = { "EUR/USD": [], "BTC/USD": [], "ETH/USD": [] };
+    (Array.isArray(snap.candles_m1) ? snap.candles_m1 : []).forEach(function (b) {
+      if (b && barsByPair[b.pair]) barsByPair[b.pair].push(b);
+    });
+    var mkts = Object.keys(MARKETS_STATIC).map(function (sym) {
+      var meta = MARKETS_STATIC[sym];
+      var arr = barsByPair[sym] || [];
+      var lastClose = arr.length ? Number(arr[arr.length - 1].close) : meta.entry;
+      var trSum = 0;
+      var trCount = 0;
+      for (var i = Math.max(1, arr.length - 14); i < arr.length; i++) {
+        var hi = Number(arr[i].high);
+        var lo = Number(arr[i].low);
+        var pc = Number(arr[i - 1].close);
+        trSum += Math.max(hi - lo, Math.abs(hi - pc), Math.abs(lo - pc));
+        trCount++;
+      }
+      var atrPips = trCount > 0 ? (trSum / trCount) / meta.pip : meta.atr;
+      var m15 = "FLAT";
+      var gapBps = 0;
+      if (arr.length >= 30) {
+        var sFast = 0;
+        var sSlow = 0;
+        for (var j = arr.length - 15; j < arr.length; j++) sFast += Number(arr[j].close);
+        for (var k = arr.length - 30; k < arr.length; k++) sSlow += Number(arr[k].close);
+        var mFast = sFast / 15;
+        var mSlow = sSlow / 30;
+        gapBps = mSlow > 0 ? ((mFast - mSlow) / mSlow) * 10000 : 0;
+        m15 = gapBps > 1.5 ? "BULL" : (gapBps < -1.5 ? "BEAR" : "FLAT");
+      }
+      return {
+        symbol: sym,
+        precision: meta.precision,
+        latest_price: lastClose,
+        regime: Math.abs(gapBps) > 3.0 ? "TREND" : "RANGE",
+        mtf_15m: m15,
+        mtf_15m_gap_bps: Number(gapBps.toFixed(1)),
+        mtf_60m: arr.length >= 660 ? m15 : "SYNCED",
+        atr_pips: Number(atrPips.toFixed(2)),
+        spread_pips: meta.spread,
+        resolved_horizon_m: 30,
+        break_even_wr: 54.0
+      };
+    });
+    renderMarkets(mkts);
+
+    var stls = Array.isArray(snap.settlements) ? snap.settlements : [];
+    var wins = 0;
+    var losses = 0;
+    var netPips = 0;
+    stls.forEach(function (r) {
+      if (!r || String(r.source || "").toUpperCase() === "SYNTHETIC") return;
+      if (r.outcome === "WIN") wins++;
+      else if (r.outcome === "LOSS") losses++;
+      if (typeof r.net_pips === "number") netPips += r.net_pips;
+    });
+    renderLedger({
+      wins: wins,
+      losses: losses,
+      net_pips: netPips,
+      recent_signals: (Array.isArray(snap.signals) ? snap.signals : []).slice(0, 12)
+    });
+    renderCredentials(buildCloudCredentialsFromSnapshot(snap));
+  }
+
+  function syncCloudDatabaseSnapshot() {
+    if (typeof fetch !== "function") return;
+    fetch(SUPABASE_PUBLIC_URL + "/rest/v1/rpc/get_console_snapshot", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_PUBLISHABLE_KEY,
+        "Authorization": "Bearer " + SUPABASE_PUBLISHABLE_KEY
+      },
+      body: JSON.stringify({ candle_limit: 740 })
+    })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("RPC " + resp.status);
+        return resp.json();
+      })
+      .then(function (snap) {
+        if (!snap || typeof snap !== "object") return;
+        cachedCloudSnapshot = snap;
+        return apiPost("api/cloud_sync", snap)
+          .then(function (synced) {
+            if (synced && synced.status) {
+              syncBotStateUI(synced.status.paused, synced.status.feed_mode);
+              renderMarkets(synced.status.markets);
+              renderLedger(synced.status.ledger);
+            }
+            if (synced && synced.credentials) {
+              renderCredentials(synced.credentials);
+            }
+          })
+          .catch(function () {
+            applyStaticCloudSnapshot(snap);
+          });
+      })
+      .catch(function () {});
+  }
+
   /* Initial Boot --------------------------------------------------------- */
   refreshNeedleStatus();
   var initPage = (window.location.hash || "").replace(/^#/, "") || "signals";
   activatePage(initPage, false, false);
+  syncCloudDatabaseSnapshot();
+  setInterval(syncCloudDatabaseSnapshot, 45000);
 })();
