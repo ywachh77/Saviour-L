@@ -270,6 +270,50 @@
     }).join("");
   }
 
+  var IST_OFFSET_MS = (5 * 60 + 30) * 60000;
+  var TZ_LABEL = "UTC+05:30";
+
+  function pad2(n) {
+    return (n < 10 ? "0" : "") + n;
+  }
+
+  function toIstShiftedDate(val) {
+    var d = val instanceof Date ? val : new Date(val);
+    if (isNaN(d.getTime())) return null;
+    return new Date(d.getTime() + IST_OFFSET_MS);
+  }
+
+  function formatIstHm(val, includeTz) {
+    var s = toIstShiftedDate(val);
+    if (!s) return "--";
+    var hm = pad2(s.getUTCHours()) + ":" + pad2(s.getUTCMinutes());
+    return includeTz === false ? hm : (hm + " " + TZ_LABEL);
+  }
+
+  function formatIstDateTime(val) {
+    var s = toIstShiftedDate(val);
+    if (!s) return "--";
+    return (
+      s.getUTCFullYear() + "-" + pad2(s.getUTCMonth() + 1) + "-" + pad2(s.getUTCDate()) +
+      " " + pad2(s.getUTCHours()) + ":" + pad2(s.getUTCMinutes()) + " " + TZ_LABEL
+    );
+  }
+
+  function updateLiveIstClock() {
+    var el = document.getElementById("top-clock-pill");
+    if (!el) return;
+    var nowMs = Date.now();
+    var shifted = new Date(nowMs + IST_OFFSET_MS);
+    var nextOpenMs = Math.floor(nowMs / 60000) * 60000 + 60000;
+    var secsLeft = Math.max(0, Math.ceil((nextOpenMs - nowMs) / 1000));
+    var nextShifted = new Date(nextOpenMs + IST_OFFSET_MS);
+    var nowHms = pad2(shifted.getUTCHours()) + ":" + pad2(shifted.getUTCMinutes()) + ":" + pad2(shifted.getUTCSeconds());
+    var nextHm = pad2(nextShifted.getUTCHours()) + ":" + pad2(nextShifted.getUTCMinutes());
+    el.textContent = nowHms + " " + TZ_LABEL + " · NEXT " + nextHm + " (" + secsLeft + "s)";
+  }
+  updateLiveIstClock();
+  setInterval(updateLiveIstClock, 1000);
+
   function renderLedger(ledger) {
     if (!ledger) return;
     var pill = document.getElementById("ledger-summary-pill");
@@ -285,7 +329,7 @@
       return;
     }
     tbody.innerHTML = rows.map(function (s) {
-      var entryShort = String(s.entry_time || "").replace("T", " ").slice(0, 16) + "Z";
+      var entryShort = s.entry_time ? formatIstDateTime(s.entry_time) : (s.entry_display_hm || "--");
       var sideCls = s.side === "BUY" ? "pos" : (s.side === "SELL" ? "neg" : "");
       return (
         "<tr>" +
@@ -336,8 +380,17 @@
       var badgeText = isSig ? card.side : "ABSTAIN // NO SETUP";
       var rp = card.risk_plan || {};
       var sig = card.signal || {};
-      var entryTime = sig.entry_time ? String(sig.entry_time).slice(11, 16) + "Z" : String(card.evaluated_at || "").slice(11, 16) + "Z";
-      var expTime = sig.expiry_time ? String(sig.expiry_time).slice(11, 16) + "Z (" + sig.horizon_minutes + "m)" : "--";
+      var leadHint = (typeof card.seconds_until_entry === "number")
+        ? (" (in " + Math.max(0, Math.round(card.seconds_until_entry)) + "s)")
+        : "";
+      var entryTime = sig.entry_hm
+        ? (sig.entry_hm + leadHint)
+        : (sig.entry_time
+            ? (formatIstHm(sig.entry_time, true) + leadHint)
+            : (card.target_entry_hm ? (card.target_entry_hm + leadHint) : formatIstHm(card.evaluated_at, true)));
+      var expTime = sig.expiry_hm
+        ? (sig.expiry_hm + " (" + sig.horizon_minutes + "m)")
+        : (sig.expiry_time ? (formatIstHm(sig.expiry_time, true) + " (" + sig.horizon_minutes + "m)") : "--");
       var unitDec = card.pair === "EUR/USD" ? 0 : 4;
 
       var votesHtml = (card.votes || []).map(function (v) {
@@ -360,7 +413,7 @@
           '</div>' +
           '<p class="sig-reason">' + esc(card.reason) + '</p>' +
           '<div class="sig-metrics mono">' +
-            '<div><span class="sig-metric-k">Entry Candle</span>' + esc(entryTime) + '</div>' +
+            '<div><span class="sig-metric-k">Next Candle Entry</span>' + esc(entryTime) + '</div>' +
             '<div><span class="sig-metric-k">Expiry / Hold</span>' + esc(expTime) + '</div>' +
             '<div><span class="sig-metric-k">Ref Price</span>' + fmtPrice(card.latest_price, card.precision) + '</div>' +
             '<div><span class="sig-metric-k">Core Checks</span>' + esc(card.core_checks) + " / 6" + '</div>' +
@@ -401,9 +454,12 @@
     var keys = pair === "ALL" ? ["EUR/USD", "BTC/USD", "ETH/USD"] : [pair];
     var now = new Date();
     var nextMin = new Date(Math.floor(now.getTime() / 60000) * 60000 + 60000);
+    var secsUntil = Math.max(1, Math.round((nextMin.getTime() - now.getTime()) / 1000));
     return keys.map(function (sym) {
       var m = MARKETS_STATIC[sym] || MARKETS_STATIC["EUR/USD"];
       var exp = new Date(nextMin.getTime() + m.horizon * 60000);
+      var entryIst = formatIstHm(nextMin, true);
+      var expIst = formatIstHm(exp, true);
       var stopPips = Math.max(m.spread * 1.5, m.atr * 1.5);
       var targetPips = Math.max(stopPips, m.atr * 2.25);
       var cappedFrac = Math.min(0.02, Math.max(0.001, riskPct / 100.0));
@@ -412,7 +468,11 @@
         pair: sym,
         precision: m.precision,
         feed_source: "STATIC_PAPER_ENGINE",
-        evaluated_at: nextMin.toISOString(),
+        timezone: TZ_LABEL,
+        evaluated_at: now.toISOString(),
+        target_entry_hm: entryIst,
+        seconds_until_entry: secsUntil,
+        is_future_entry: true,
         latest_price: m.entry,
         atr_pips: m.atr,
         spread_pips: m.spread,
@@ -420,7 +480,7 @@
         actionable: true,
         seal_state: "SIGNAL",
         side: "BUY",
-        reason: "Core 5/6 aligned with 15m MTF structure (static offline mode — start web_dashboard.py for live backend).",
+        reason: "Core 5/6 aligned with 15m/60m MTF structure for upcoming next candle (static offline mode — start web_dashboard.py for live backend).",
         regime: "TREND",
         core_checks: 5,
         votes: [],
@@ -428,9 +488,11 @@
           signal_id: "static01",
           entry_time: nextMin.toISOString(),
           expiry_time: exp.toISOString(),
+          entry_hm: entryIst,
+          expiry_hm: expIst,
           horizon_minutes: m.horizon
         },
-        brief_text: sym + " BUY\nEntry open of " + nextMin.toISOString().slice(11, 16) + "Z\nExpiry " + exp.toISOString().slice(11, 16) + "Z (" + m.horizon + "m)",
+        brief_text: sym + " BUY\nEntry  open of " + entryIst + " candle\nExpiry " + expIst + "  (" + m.horizon + " min)\n\nPaper — research only, no broker order.",
         risk_plan: {
           stop_price: m.entry - stopPips * m.pip,
           target_price: m.entry + targetPips * m.pip,
@@ -464,8 +526,8 @@
         refreshStatus();
         showToast(
           res.emitted > 0
-            ? ("Sealed " + res.emitted + " signal(s) directly in console.")
-            : "Evaluated " + (res.evaluations || []).length + " market(s): gates abstained on current bar."
+            ? ("Sealed " + res.emitted + " future next-candle signal(s) (" + (res.target_entry_hm || TZ_LABEL) + ").")
+            : ("Evaluated upcoming next candle (" + (res.target_entry_hm || TZ_LABEL) + "): gates abstained.")
         );
       })
       .catch(function () {
@@ -510,17 +572,18 @@
   var SAMPLE_SIGNAL_VALS = {
     pair: "EUR/USD",
     side: "BUY",
-    entry_hm: "14:15",
-    expiry_hm: "14:45",
-    entry_iso: "2026-10-25T14:15:00Z",
-    expiry_iso: "2026-10-25T14:45:00Z",
+    entry_hm: "19:45",
+    expiry_hm: "20:15",
+    tz: "UTC+05:30",
+    entry_iso: "2026-10-25T19:45:00+05:30",
+    expiry_iso: "2026-10-25T20:15:00+05:30",
     horizon: "30",
     regime: "TREND",
     probability: "0.584",
     raw_probability: "0.571",
     calibration_state: "CALIBRATED",
     calibration_desc: "calibrated",
-    reason: "Core 5/6: trend, momentum, RSI band, directional ADX, candle quality.",
+    reason: "Core 5/6 (pullback rebound): trend, pullback reset, rebound turn, RSI & oscillator, candle quality.",
     spread_pips: "1.20",
     core_score: "5",
     short_id: "a8f31c90",
@@ -543,7 +606,7 @@
     spread_pips: "1.2"
   };
 
-  var DEFAULT_SIG_TMPL = "{pair} {side} ({horizon}m) #{short_id}\nEntry: {entry_hm}Z  ->  Expiry: {expiry_hm}Z\nRegime: {regime}  |  Model: {probability} ({calibration_state})\nGate: {reason}\nSpread charged: {spread_pips} pips";
+  var DEFAULT_SIG_TMPL = "{pair} {side} ({horizon}m) #{short_id}\nEntry: {entry_hm} UTC+05:30  ->  Expiry: {expiry_hm} UTC+05:30\nRegime: {regime}  |  Model: {probability} ({calibration_state})\nGate: {reason}\nSpread charged: {spread_pips} pips";
   var DEFAULT_RES_TMPL = "RESULT {pair} {side} #{short_id} -> {verdict}\nFill: {entry_price} -> {exit_price}\nGross {gross_pips}p | Cost {spread_pips}p | Net {net_pips}p";
 
   function safeRenderTokens(tmpl, vals) {
@@ -566,11 +629,11 @@
     var sStyle = sigStyleEl.value || "standard";
     var sigOut = "";
     if (sStyle === "brief") {
-      sigOut = v.pair + " " + v.side + "\nEntry  open of " + v.entry_hm + "Z candle\nExpiry " + v.expiry_hm + "Z  (" + v.horizon + " min)\n#" + v.short_id + "\n\nPaper — research only, no broker order.";
+      sigOut = v.pair + " " + v.side + "\nEntry  open of " + v.entry_hm + " " + v.tz + " candle\nExpiry " + v.expiry_hm + " " + v.tz + "  (" + v.horizon + " min)\n#" + v.short_id + "\n\nPaper — research only, no broker order.";
     } else if (sStyle === "tactical") {
-      sigOut = "[" + v.side + "] " + v.pair + "  ·  " + v.horizon + "m  ·  #" + v.short_id + "\nEntry " + v.entry_hm + "Z  ->  Expiry " + v.expiry_hm + "Z\nRegime " + v.regime + "  |  Model " + v.probability + " (" + v.calibration_state + ")  |  Spread " + v.spread_pips + "p\nGate: " + v.reason + "\nPaper — research only, no broker order.";
+      sigOut = "[" + v.side + "] " + v.pair + "  ·  " + v.horizon + "m  ·  #" + v.short_id + "\nEntry " + v.entry_hm + " " + v.tz + "  ->  Expiry " + v.expiry_hm + " " + v.tz + "\nRegime " + v.regime + "  |  Model " + v.probability + " (" + v.calibration_state + ")  |  Spread " + v.spread_pips + "p\nGate: " + v.reason + "\nPaper — research only, no broker order.";
     } else if (sStyle === "compact") {
-      sigOut = v.pair + " " + v.side + " | in " + v.entry_hm + "Z -> exp " + v.expiry_hm + "Z (" + v.horizon + "m) | " + v.regime + " | p=" + v.probability + " | cost " + v.spread_pips + "p | #" + v.short_id + " [paper]";
+      sigOut = v.pair + " " + v.side + " | in " + v.entry_hm + " " + v.tz + " -> exp " + v.expiry_hm + " " + v.tz + " (" + v.horizon + "m) | " + v.regime + " | p=" + v.probability + " | cost " + v.spread_pips + "p | #" + v.short_id + " [paper]";
     } else if (sStyle === "custom") {
       var rawT = (sigTmplEl && sigTmplEl.value.trim()) ? sigTmplEl.value : DEFAULT_SIG_TMPL;
       sigOut = safeRenderTokens(rawT, v);
@@ -578,7 +641,7 @@
         sigOut += "\nPaper — research only, no broker order.";
       }
     } else {
-      sigOut = v.pair + " " + v.side + "\nEntry: open of the " + v.entry_hm + "Z candle\nExpires: " + v.expiry_hm + "Z (" + v.horizon + " min)\nRegime: " + v.regime + "\nModel: " + v.probability + " — " + v.calibration_desc + " (raw " + v.raw_probability + ")\nWhy: " + v.reason + "\nCost: " + v.spread_pips + " pip spread charged on settlement.\nPaper research signal. No broker order is placed.";
+      sigOut = v.pair + " " + v.side + "\nEntry: open of the " + v.entry_hm + " " + v.tz + " candle\nExpires: " + v.expiry_hm + " " + v.tz + " (" + v.horizon + " min)\nRegime: " + v.regime + "\nModel: " + v.probability + " — " + v.calibration_desc + " (raw " + v.raw_probability + ")\nWhy: " + v.reason + "\nCost: " + v.spread_pips + " pip spread charged on settlement.\nPaper research signal. No broker order is placed.";
     }
 
     var rv = SAMPLE_RESULT_VALS;
@@ -775,7 +838,7 @@
 
   /* Page 03 : Health & Causality Audit ----------------------------------- */
   function renderHealth(h) {
-    document.getElementById("hl-tests").textContent = String(h.tests_passing || 691);
+    document.getElementById("hl-tests").textContent = String(h.tests_passing || 700);
     var la = h.lookahead || {};
     var checks = la.checks || [];
     var passCount = checks.filter(function (c) { return c.ok; }).length;

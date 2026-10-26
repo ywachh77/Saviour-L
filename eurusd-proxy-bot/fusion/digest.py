@@ -11,6 +11,7 @@ from typing import Sequence
 
 from . import charter, heartbeat
 from .settle import LedgerStats
+from .timeutil import DISPLAY_TZ_LABEL, format_display_datetime, now as utcnow
 
 ALERT_STALE_FEED = "stale_feed"
 ALERT_DELIVERY_UNKNOWN = "delivery_unknown"
@@ -50,7 +51,7 @@ def build_digest(
     alerts: Sequence[dict],
     nightly: dict | None = None,
 ) -> str:
-    lines = [f"FUSION BOT daily digest — {day} (UTC)", f"Runner: {runner}", ""]
+    lines = [f"FUSION BOT daily digest — {day} ({DISPLAY_TZ_LABEL})", f"Runner: {runner}", ""]
 
     sent = sum(1 for row in signals if row.get("delivery_state") == charter.DELIVERY_SENT)
     suppressed = sum(1 for row in signals if row.get("delivery_state") == charter.DELIVERY_SUPPRESSED)
@@ -131,6 +132,7 @@ def build_status(
     )
     lines = [
         "FUSION BOT status",
+        f"  clock: {format_display_datetime(utcnow())}",
         f"  {pair_label} · horizon {config.horizon_minutes}m · runner {runner}",
         f"  signals: {'PAUSED' if paused else 'LIVE'}",
         f"  heartbeat: {'missing' if age is None else f'{age:.0f}s ago'}",

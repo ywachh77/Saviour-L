@@ -237,6 +237,7 @@ class FusionEngine:
         regime_state: RegimeState | None = None,
         spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
         mistakes: MistakeMemory | None = None,
+        target_entry: datetime | None = None,
     ) -> Verdict:
         """Run regime, council and meta-model. No data gate, no sealing."""
         config = self.config
@@ -247,7 +248,7 @@ class FusionEngine:
 
         if getattr(config, "news_filter", False):
             blackout = news.check_blackout(
-                add_minutes(candle.timestamp, 1),
+                target_entry or add_minutes(candle.timestamp, 1),
                 pair=getattr(config, "pair", "EUR/USD"),
                 extra_windows=getattr(config, "news_blackout_windows", ""),
             )
@@ -379,12 +380,19 @@ class FusionEngine:
         if getattr(config, "mtf_macro_filter", False):
             gap_60, ready_60 = _mtf_gap_bps(features, 60)
             if ready_60 and gap_60 is not None:
-                macro_min = max(0.0, float(getattr(config, "mtf_macro_min_gap_bps", 1.5) or 0.0))
+                atr_bps = 10_000.0 * abs(float(features.get("atr_pct", 0.0) or 0.0)) if isinstance(features, dict) else 0.0
+                base_macro_min = max(0.0, float(getattr(config, "mtf_macro_min_gap_bps", 1.5) or 0.0))
+                # Scale macro trend requirement with instrument M1 ATR so crypto
+                # (~7-10 bps M1 ATR) demands >= 1.1x M1 ATR of real 1h drift rather
+                # than treating 1.5 bps of flat noise as a macro trend.
+                macro_min = max(base_macro_min, 1.10 * atr_bps) if base_macro_min > 0.0 else 0.0
                 slope_60 = float(features.get("mtf_slope_60", 0.0) or 0.0) if isinstance(features, dict) else 0.0
                 signed_gap_60 = gap_60 if council.side == "BUY" else -gap_60
                 signed_slope_60 = slope_60 if council.side == "BUY" else -slope_60
                 if is_exhaustion_reversal:
-                    if signed_gap_60 < -8.0 and signed_slope_60 < -1.0:
+                    max_opp_gap = max(8.0, 3.2 * atr_bps)
+                    max_opp_slope = max(1.0, 0.45 * atr_bps)
+                    if signed_gap_60 < -max_opp_gap and signed_slope_60 < -max_opp_slope:
                         return Verdict(
                             "NO SIGNAL",
                             f"Macro 60m HTF filter: runaway macro trend ({gap_60:+.2f} bps / slope {slope_60:+.2f} bps) "
@@ -424,21 +432,35 @@ class FusionEngine:
         source: str = "LIVE",
         quote: dict | None = None,
         at: datetime | None = None,
+        observed_at: datetime | None = None,
         mistakes: MistakeMemory | None = None,
     ) -> EngineResult:
-        """Data gate -> features -> decision -> seal, for one live minute."""
+        """Data gate -> features -> decision -> seal, for one live or upcoming minute.
+
+        When ``observed_at`` is supplied (e.g. on-demand next-candle generation
+        where ``at`` is the upcoming future candle open ``T + 1m`` and
+        ``observed_at`` is the real wall clock inside ``T``), ``closed_before``
+        cuts strictly at ``min(stamp, floor_minute(observed_at))`` so the still-
+        forming candle ``T`` can never leak into indicators, while data-gate
+        freshness and seal latency are measured honestly against ``observed_at``.
+        """
         config = self.config
         stamp = at or utcnow()
-        # Decide only on bars that had already closed when the entry minute
-        # opened. The entry bar is still forming at this moment; letting its
-        # high, low and close into the features is look-ahead, and the
-        # walk-forward backtest never had it. See domain.closed_before.
-        candles = closed_before(list(candles), stamp)
+        causal_cutoff = (
+            min(stamp, floor_minute(observed_at))
+            if observed_at is not None
+            else stamp
+        )
+        gate_now = observed_at if observed_at is not None else stamp
+        # Decide only on bars that had already closed when the evaluation
+        # happened. Neither the forming bar nor the future entry bar may enter
+        # the features. See domain.closed_before.
+        candles = closed_before(list(candles), causal_cutoff)
         instrument = instruments.for_symbol(getattr(config, "pair", None))
 
         gate = datagate.evaluate(
             candles,
-            now=stamp,
+            now=gate_now,
             max_age_seconds=config.max_candle_age_seconds,
             max_spread_pips=config.max_spread_pips,
             quote=quote,
@@ -464,9 +486,16 @@ class FusionEngine:
             regime_state=regime_state,
             spread_pips=gate.spread_pips,
             mistakes=mistakes,
+            target_entry=floor_minute(stamp),
         )
         return self._seal(
-            verdict, gate=gate, source=source, at=stamp, spread=gate.spread_pips, features=features
+            verdict,
+            gate=gate,
+            source=source,
+            at=stamp,
+            observed_at=observed_at,
+            spread=gate.spread_pips,
+            features=features,
         )
 
     def evaluate_prepared(
@@ -519,6 +548,7 @@ class FusionEngine:
         gate: datagate.GateResult,
         source: str,
         at: datetime,
+        observed_at: datetime | None = None,
         spread: float,
         features: dict[str, float] | None = None,
     ) -> EngineResult:
@@ -535,7 +565,8 @@ class FusionEngine:
             )
 
         entry_time = floor_minute(at)
-        latency = (at - entry_time).total_seconds()
+        seal_clock = observed_at if observed_at is not None else at
+        latency = (seal_clock - entry_time).total_seconds()
         if latency > self.config.max_seal_latency_seconds:
             # The entry is already in the past. A backdated signal would be a lie.
             return EngineResult(
@@ -606,7 +637,7 @@ class FusionEngine:
             strategy="fusion_council",
             reason=verdict.reason,
             source=source,
-            generated_at=at,
+            generated_at=seal_clock,
             horizon_minutes=horizon,
             probability_up=read.probability if read else None,
             probability_raw=read.raw if read else None,

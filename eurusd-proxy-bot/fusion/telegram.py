@@ -39,16 +39,17 @@ HELP_TEXT = (
     "Commands:\n"
     "/start — begin receiving signals\n"
     "/help — this message\n"
-    "/signals — read the market now and answer at once\n"
+    "/signals — evaluate the upcoming next candle (UTC+05:30) and answer at once\n"
     "/status — health, ledger and learning state\n"
     "/pause — stop signals (bot keeps learning)\n"
     "/resume — resume signals\n"
     "\n"
     "Everything else is automatic: ingest, signals, settlement, online learning, "
-    "nightly walk-forward, and a daily digest at 00:05 UTC.\n\n"
+    "nightly walk-forward, and a daily digest at 05:35 UTC+05:30.\n\n"
     "/signals runs the same gates as the scheduled cycle. When they decline it "
     "says so, because a signal produced on demand would not be a prediction.\n"
     "\n"
+    "All entry, expiry, and system timings are reported in UTC+05:30. "
     "This is research output, not investment advice. Signals are cost-charged paper "
     "settlements; no broker order is ever placed."
 )
@@ -301,7 +302,7 @@ RESULT_STYLES = ("standard", "compact", "custom")
 
 DEFAULT_CUSTOM_SIGNAL_TEMPLATE = (
     "{pair} {side} ({horizon}m) #{short_id}\n"
-    "Entry: {entry_hm}Z  ->  Expiry: {expiry_hm}Z\n"
+    "Entry: {entry_hm} UTC+05:30  ->  Expiry: {expiry_hm} UTC+05:30\n"
     "Regime: {regime}  |  Model: {probability} ({calibration_state})\n"
     "Gate: {reason}\n"
     "Spread charged: {spread_pips} pips"
@@ -316,8 +317,9 @@ DEFAULT_CUSTOM_RESULT_TEMPLATE = (
 SIGNAL_PLACEHOLDERS: tuple[dict[str, str], ...] = (
     {"token": "{pair}", "desc": "Instrument symbol (EUR/USD, BTC/USD, ETH/USD)"},
     {"token": "{side}", "desc": "Direction (BUY or SELL)"},
-    {"token": "{entry_hm}", "desc": "UTC entry candle HH:MM"},
-    {"token": "{expiry_hm}", "desc": "UTC expiry candle HH:MM"},
+    {"token": "{entry_hm}", "desc": "Entry candle HH:MM in UTC+05:30"},
+    {"token": "{expiry_hm}", "desc": "Expiry candle HH:MM in UTC+05:30"},
+    {"token": "{tz}", "desc": "System display timezone label (UTC+05:30)"},
     {"token": "{horizon}", "desc": "Hold duration in minutes"},
     {"token": "{regime}", "desc": "Market regime (TREND, RANGE, VOLATILE)"},
     {"token": "{probability}", "desc": "Calibrated/raw upward probability or n/a"},
@@ -410,6 +412,10 @@ class TelegramFormatConfig:
 
 
 def signal_template_values(signal: Signal) -> dict[str, str]:
+    from .timeutil import DISPLAY_TZ_LABEL, format_display_iso, to_display_tz
+
+    entry_disp = to_display_tz(signal.entry_time)
+    expiry_disp = to_display_tz(signal.expiry_time)
     probability = "n/a" if signal.probability_up is None else f"{signal.probability_up:.3f}"
     raw = "n/a" if signal.probability_raw is None else f"{signal.probability_raw:.3f}"
     cal_map = {
@@ -425,10 +431,11 @@ def signal_template_values(signal: Signal) -> dict[str, str]:
     return {
         "pair": signal.pair,
         "side": signal.side,
-        "entry_hm": signal.entry_time.strftime("%H:%M"),
-        "expiry_hm": signal.expiry_time.strftime("%H:%M"),
-        "entry_iso": signal.entry_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "expiry_iso": signal.expiry_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "entry_hm": entry_disp.strftime("%H:%M"),
+        "expiry_hm": expiry_disp.strftime("%H:%M"),
+        "tz": DISPLAY_TZ_LABEL,
+        "entry_iso": format_display_iso(signal.entry_time),
+        "expiry_iso": format_display_iso(signal.expiry_time),
         "horizon": str(signal.horizon_minutes),
         "regime": signal.regime,
         "probability": probability,
@@ -463,8 +470,8 @@ def render_signal_message(
         return "\n".join(
             [
                 f"{vals['pair']} {vals['side']}",
-                f"Entry  open of {vals['entry_hm']}Z candle",
-                f"Expiry {vals['expiry_hm']}Z  ({vals['horizon']} min)",
+                f"Entry  open of {vals['entry_hm']} {vals['tz']} candle",
+                f"Expiry {vals['expiry_hm']} {vals['tz']}  ({vals['horizon']} min)",
                 f"#{vals['short_id']}",
                 "",
                 "Paper — research only, no broker order.",
@@ -475,7 +482,7 @@ def render_signal_message(
         return "\n".join(
             [
                 f"[{vals['side']}] {vals['pair']}  ·  {vals['horizon']}m  ·  #{vals['short_id']}",
-                f"Entry {vals['entry_hm']}Z  ->  Expiry {vals['expiry_hm']}Z",
+                f"Entry {vals['entry_hm']} {vals['tz']}  ->  Expiry {vals['expiry_hm']} {vals['tz']}",
                 f"Regime {vals['regime']}  |  Model {vals['probability']} ({vals['calibration_state']})  |  Spread {vals['spread_pips']}p",
                 f"Gate: {vals['reason']}",
                 "Paper — research only, no broker order.",
@@ -484,7 +491,7 @@ def render_signal_message(
 
     if style == "compact":
         return (
-            f"{vals['pair']} {vals['side']} | in {vals['entry_hm']}Z -> exp {vals['expiry_hm']}Z ({vals['horizon']}m) "
+            f"{vals['pair']} {vals['side']} | in {vals['entry_hm']} {vals['tz']} -> exp {vals['expiry_hm']} {vals['tz']} ({vals['horizon']}m) "
             f"| {vals['regime']} | p={vals['probability']} | cost {vals['spread_pips']}p | #{vals['short_id']} [paper]"
         )
 
@@ -495,12 +502,12 @@ def render_signal_message(
             rendered = f"{rendered}\nPaper — research only, no broker order."
         return rendered[:3800]
 
-    # Default "standard" — byte-identical to original format_signal(signal)
+    # Default "standard" — all timestamps in UTC+05:30
     return "\n".join(
         [
             f"{vals['pair']} {vals['side']}",
-            f"Entry: open of the {vals['entry_hm']}Z candle",
-            f"Expires: {vals['expiry_hm']}Z ({vals['horizon']} min)",
+            f"Entry: open of the {vals['entry_hm']} {vals['tz']} candle",
+            f"Expires: {vals['expiry_hm']} {vals['tz']} ({vals['horizon']} min)",
             f"Regime: {vals['regime']}",
             f"Model: {vals['probability']} — {vals['calibration_desc']} (raw {vals['raw_probability']})",
             f"Why: {vals['reason']}",

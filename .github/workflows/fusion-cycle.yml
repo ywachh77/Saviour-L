@@ -115,7 +115,7 @@ jobs:
           # against a 1.2 pip round turn, which needs a 97% hit rate to break
           # even. Without this the bot takes trades that cannot win by
           # construction, and more accuracy does not fix that.
-          SIGNAL_HORIZON_MINUTES: "15"
+          SIGNAL_HORIZON_MINUTES: "30"
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
           MIN_ATR_TO_SPREAD_RATIO: "1.4"
