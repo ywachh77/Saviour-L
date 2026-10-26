@@ -77,14 +77,18 @@ def main() -> int:
         else None
     )
 
-    stamp = now()
     bot = FusionBot(config=config, store=store, telegram=telegram)
     bot.startup()
     try:
-        report = bot.minute_cycle(at=stamp)
-        bot.settle_due(at=stamp)
+        # Align to the real minute seal window ([1.5s, 4.5s] past the boundary)
+        # AFTER startup state hydration so the previous M1 candle has genuinely
+        # closed on the exchange, entry_time has genuinely opened, and multi-pair
+        # parallel ingest seals against the real post-ingest wall clock.
+        bot.wait_for_seal_window()
+        report = bot.minute_cycle()
+        bot.settle_due()
         bot.flush_outbox()
-        bot.run_scheduled(at=stamp)
+        bot.run_scheduled()
         print(report.to_dict())
 
         # Stay on the line for a while, bounded by remaining container budget.

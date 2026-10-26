@@ -145,7 +145,8 @@ class Config:
     reward_to_cost: float = 3.0
     max_horizon_minutes: int = 120
     max_seal_latency_seconds: int = charter.MAX_SEAL_LATENCY_SECONDS
-    max_candle_age_seconds: int = 180
+    max_candle_age_seconds: int = 130
+    min_atr_to_spread_ratio: float = 0.0
     max_spread_pips: float = 2.5
     spread_pips: float = charter.DEFAULT_SPREAD_PIPS
 
@@ -352,7 +353,8 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         reward_to_cost=_float("REWARD_TO_COST", 3.0),
         max_horizon_minutes=_int("MAX_HORIZON_MINUTES", 120),
         max_seal_latency_seconds=_int("MAX_SEAL_LATENCY_SECONDS", charter.MAX_SEAL_LATENCY_SECONDS),
-        max_candle_age_seconds=_int("MAX_CANDLE_AGE_SECONDS", 180),
+        max_candle_age_seconds=_int("MAX_CANDLE_AGE_SECONDS", 130),
+        min_atr_to_spread_ratio=_float("MIN_ATR_TO_SPREAD_RATIO", 0.0),
         max_spread_pips=max_spread,
         spread_pips=spread,
         max_uncertainty=_float("MAX_UNCERTAINTY", 0.10),

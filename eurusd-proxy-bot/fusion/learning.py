@@ -531,6 +531,36 @@ def run_nightly(
     if not promoted:
         report.promoted = False
         report.reason = gate_reason
+        # When no trained model exists yet and walk-forward produced valid
+        # out-of-sample folds, seed a strictly defensive MODE_VETO baseline
+        # (matching run_backtest's fold VETO model) so live settlements can
+        # apply online updates and confident counter-probability setups are
+        # vetoed while promotion to MODE_ADVISORY remains withheld.
+        if (
+            (champion is None or not champion.trained)
+            and len(samples) >= config.nightly_min_samples
+            and report.folds >= MIN_WALK_FORWARD_FOLDS
+        ):
+            try:
+                veto_model = OnlineLogisticModel(mode=MODE_VETO).fit(
+                    [item.to_pair() for item in samples], epochs=120
+                )
+                veto_model.mode = MODE_VETO
+                veto_model.trained_at = format_datetime(now())
+                veto_model.calibrator = IsotonicCalibrator.fit(
+                    report.oos_points, minimum_points=config.min_calibration_points
+                )
+                report.calibration_points = len(report.oos_points)
+                report.calibration_fitted = veto_model.calibrator.fitted
+                report.calibration_flat = veto_model.calibrator.flat
+                report.mode = MODE_VETO
+                report.reason = f"{gate_reason} Seeded defensive VETO baseline model."
+                veto_ensemble = BootstrapEnsemble.fit(
+                    [item.to_pair() for item in samples], member_count=4, epochs=50
+                )
+                return veto_model, veto_ensemble, report
+            except ValueError:
+                pass
         # The champion keeps its authority level; nothing is promoted.
         return champion, BootstrapEnsemble([]), report
 

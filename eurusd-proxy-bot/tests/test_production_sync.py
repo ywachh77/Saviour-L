@@ -85,12 +85,16 @@ def _fake_twelvedata_opener(end_stamp: datetime):
 class TestWorkflowParity(unittest.TestCase):
     SHARED_FLAGS = (
         "PAIRS",
+        "SIGNAL_HORIZON_MINUTES",
         "ADAPTIVE_HORIZON",
         "MAX_HORIZON_MINUTES",
+        "MIN_ATR_TO_SPREAD_RATIO",
         "CANDLE_HISTORY",
         "MTF_FILTER",
         "MTF_MINUTES",
         "MTF_MIN_GAP_BPS",
+        "MTF_MACRO_FILTER",
+        "MTF_MACRO_MIN_GAP_BPS",
         "NEWS_FILTER",
         "SIGNAL_COOLDOWN_MINUTES",
         "LOSS_GUARD_STREAK",

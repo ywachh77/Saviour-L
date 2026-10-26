@@ -11,6 +11,7 @@ limit — see README, "Key slots".
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -120,6 +121,7 @@ class KeyPool:
         self.cursor = 0
         self._clock = clock
         self.exhausted_events = 0
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------ state
     def __len__(self) -> int:
@@ -160,61 +162,65 @@ class KeyPool:
     # -------------------------------------------------------------- operations
     def reserve(self, cost: int = 1) -> Reservation:
         """Reserve credits on the next usable key. Returns ok=False when spent."""
-        if not self.slots:
-            return Reservation(-1, cost, False, "no API keys configured")
-        now = self._clock()
-        for offset in range(len(self.slots)):
-            index = (self.cursor + offset) % len(self.slots)
-            slot = self.slots[index]
-            allowed, reason = self.usable(slot, now, cost)
-            if allowed:
-                self._roll(slot, now)
-                slot.minute_used += cost
-                slot.day_used += cost
-                slot.total_calls += 1
-                self.cursor = (index + 1) % len(self.slots)
-                return Reservation(index, cost, True)
-        self.exhausted_events += 1
-        return Reservation(-1, cost, False, "all keys exhausted (cooldown or quota)")
+        with self._lock:
+            if not self.slots:
+                return Reservation(-1, cost, False, "no API keys configured")
+            now = self._clock()
+            for offset in range(len(self.slots)):
+                index = (self.cursor + offset) % len(self.slots)
+                slot = self.slots[index]
+                allowed, reason = self.usable(slot, now, cost)
+                if allowed:
+                    self._roll(slot, now)
+                    slot.minute_used += cost
+                    slot.day_used += cost
+                    slot.total_calls += 1
+                    self.cursor = (index + 1) % len(self.slots)
+                    return Reservation(index, cost, True)
+            self.exhausted_events += 1
+            return Reservation(-1, cost, False, "all keys exhausted (cooldown or quota)")
 
     def refund(self, reservation: Reservation) -> None:
         """Give back credits for a call that never reached the provider."""
-        if not reservation.ok or reservation.key_index < 0:
-            return
-        slot = self.slots[reservation.key_index]
-        slot.minute_used = max(0, slot.minute_used - reservation.cost)
-        slot.day_used = max(0, slot.day_used - reservation.cost)
-        slot.total_calls = max(0, slot.total_calls - 1)
+        with self._lock:
+            if not reservation.ok or reservation.key_index < 0:
+                return
+            slot = self.slots[reservation.key_index]
+            slot.minute_used = max(0, slot.minute_used - reservation.cost)
+            slot.day_used = max(0, slot.day_used - reservation.cost)
+            slot.total_calls = max(0, slot.total_calls - 1)
 
     def report_success(self, reservation: Reservation) -> None:
-        if not reservation.ok:
-            return
-        self.slots[reservation.key_index].consecutive_failures = 0
+        with self._lock:
+            if not reservation.ok:
+                return
+            self.slots[reservation.key_index].consecutive_failures = 0
 
     def report_failure(self, reservation: Reservation, status: int | None = None, message: str = "") -> None:
         """Classify a provider failure and react: cooldown, rotate, or disable."""
-        if not reservation.ok:
-            return
-        slot = self.slots[reservation.key_index]
-        slot.total_failures += 1
-        slot.consecutive_failures += 1
-        now = self._clock()
+        with self._lock:
+            if not reservation.ok:
+                return
+            slot = self.slots[reservation.key_index]
+            slot.total_failures += 1
+            slot.consecutive_failures += 1
+            now = self._clock()
 
-        if status in (401, 403):
-            slot.enabled = False
-            slot.disabled_reason = f"provider rejected the key (HTTP {status})"
-            return
-        if status == 429:
-            # Rate limited: back off hard, and grow with each repeat offence.
-            penalty = min(300.0, 60.0 * (2 ** min(3, slot.consecutive_failures - 1)))
-            slot.cooldown_until = now + penalty
-            return
-        if status is not None and 500 <= status < 600:
-            slot.cooldown_until = now + min(120.0, 15.0 * slot.consecutive_failures)
-            return
-        if status is None:
-            # Network-level failure (timeout, DNS). Short cooldown, then retry.
-            slot.cooldown_until = now + min(60.0, 10.0 * slot.consecutive_failures)
+            if status in (401, 403):
+                slot.enabled = False
+                slot.disabled_reason = f"provider rejected the key (HTTP {status})"
+                return
+            if status == 429:
+                # Rate limited: back off hard, and grow with each repeat offence.
+                penalty = min(300.0, 60.0 * (2 ** min(3, slot.consecutive_failures - 1)))
+                slot.cooldown_until = now + penalty
+                return
+            if status is not None and 500 <= status < 600:
+                slot.cooldown_until = now + min(120.0, 15.0 * slot.consecutive_failures)
+                return
+            if status is None:
+                # Network-level failure (timeout, DNS). Short cooldown, then retry.
+                slot.cooldown_until = now + min(60.0, 10.0 * slot.consecutive_failures)
 
     def report_network_error(self, reservation: Reservation) -> None:
         """Record a failure that was not the key's fault, without punishing it.
@@ -229,38 +235,41 @@ class KeyPool:
         Counted in total_failures so it stays visible, deliberately left out of
         consecutive_failures so it cannot escalate into a cooldown.
         """
-        if not reservation.ok:
-            return
-        self.slots[reservation.key_index].total_failures += 1
+        with self._lock:
+            if not reservation.ok:
+                return
+            self.slots[reservation.key_index].total_failures += 1
 
     def key_for(self, index: int, keys: list[str]) -> str:
         return keys[index]
 
     def summary(self) -> dict[str, Any]:
-        now = self._clock()
-        rows = []
-        for slot in self.slots:
-            self._roll(slot, now)
-            rows.append(
-                {
-                    "label": slot.label,
-                    "enabled": slot.enabled,
-                    "cooldown_s": round(max(0.0, slot.cooldown_until - now), 1),
-                    "minute_used": slot.minute_used,
-                    "minute_limit": slot.minute_limit,
-                    "day_used": slot.day_used,
-                    "day_limit": slot.day_limit,
-                    "failures": slot.consecutive_failures,
-                }
-            )
-        return {
-            "slots": rows,
-            "enabled": sum(1 for row in rows if row["enabled"]),
-            "exhausted_events": self.exhausted_events,
-        }
+        with self._lock:
+            now = self._clock()
+            rows = []
+            for slot in self.slots:
+                self._roll(slot, now)
+                rows.append(
+                    {
+                        "label": slot.label,
+                        "enabled": slot.enabled,
+                        "cooldown_s": round(max(0.0, slot.cooldown_until - now), 1),
+                        "minute_used": slot.minute_used,
+                        "minute_limit": slot.minute_limit,
+                        "day_used": slot.day_used,
+                        "day_limit": slot.day_limit,
+                        "failures": slot.consecutive_failures,
+                    }
+                )
+            return {
+                "slots": rows,
+                "enabled": sum(1 for row in rows if row["enabled"]),
+                "exhausted_events": self.exhausted_events,
+            }
 
     def to_dict(self) -> dict:
-        return {"slots": [slot.to_dict() for slot in self.slots], "cursor": self.cursor}
+        with self._lock:
+            return {"slots": [slot.to_dict() for slot in self.slots], "cursor": self.cursor}
 
     @classmethod
     def from_state(cls, keys: list[str], payload: dict | None, **kwargs) -> "KeyPool":

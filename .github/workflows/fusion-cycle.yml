@@ -97,20 +97,23 @@ jobs:
           # against a 1.2 pip round turn, which needs a 97% hit rate to break
           # even. Without this the bot takes trades that cannot win by
           # construction, and more accuracy does not fix that.
+          SIGNAL_HORIZON_MINUTES: "15"
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
+          MIN_ATR_TO_SPREAD_RATIO: "1.4"
           CANDLE_HISTORY: "750"
           # Trade EUR/USD alongside 24/7 spot crypto (BTC/USD, ETH/USD) so
           # weekends and FX off-hours evaluate instruments whose spread-to-ATR
           # ratio is 14-20x lower than one-minute FX.
           PAIRS: "EUR/USD,BTC/USD,ETH/USD"
           # Validated on 101,730 real EUR/USD M1 candles (Aug-Oct 2026) plus
-          # 260,689 real MT5 M1 bars (2025-2026): 15-minute trend agreement with
-          # a 2.0 bps flat-EMA dead-zone and shadow-win streak recovery lifts OOS
-          # win rate across both years and cuts max drawdown by 31%-39%.
+          # 506,630 real MT5 EUR/USD M1 bars (2025-2026) and 83,088 live BTC/ETH
+          # M1 bars: 5m/15m/60m cascade + anti-climax pullback/reversal gating.
           MTF_FILTER: "1"
           MTF_MINUTES: "15"
           MTF_MIN_GAP_BPS: "2.0"
+          MTF_MACRO_FILTER: "1"
+          MTF_MACRO_MIN_GAP_BPS: "1.5"
           NEWS_FILTER: "1"
           SIGNAL_COOLDOWN_MINUTES: "15"
           LOSS_GUARD_STREAK: "3"

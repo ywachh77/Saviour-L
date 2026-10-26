@@ -47,13 +47,17 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_OWNER_CHAT_ID: ${{ secrets.TELEGRAM_OWNER_CHAT_ID }}
+          SIGNAL_HORIZON_MINUTES: "15"
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
+          MIN_ATR_TO_SPREAD_RATIO: "1.4"
           CANDLE_HISTORY: "750"
           PAIRS: "EUR/USD,BTC/USD,ETH/USD"
           MTF_FILTER: "1"
           MTF_MINUTES: "15"
           MTF_MIN_GAP_BPS: "2.0"
+          MTF_MACRO_FILTER: "1"
+          MTF_MACRO_MIN_GAP_BPS: "1.5"
           NEWS_FILTER: "1"
           SIGNAL_COOLDOWN_MINUTES: "15"
           LOSS_GUARD_STREAK: "3"
