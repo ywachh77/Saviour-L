@@ -19,6 +19,7 @@ from typing import Sequence
 
 from . import charter, strategies
 from .domain import Candle, Decision
+from .family_fusion import FamilyFusionEngine, FamilyFusionVerdict
 from .mistakes import MistakeMemory
 from .regime import regime_allows
 from .session import session_allows
@@ -133,13 +134,14 @@ class CouncilResult:
     support: float
     opposition: float
     vetoed: bool
+    family_verdict: FamilyFusionVerdict | None = None
 
     @property
     def actionable(self) -> bool:
         return self.side in ("BUY", "SELL")
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "side": self.side,
             "reason": self.reason,
             "core_score": self.core_score,
@@ -148,6 +150,9 @@ class CouncilResult:
             "opposition": round(self.opposition, 4),
             "vetoed": self.vetoed,
         }
+        if self.family_verdict is not None:
+            out["family_fusion"] = self.family_verdict.to_dict()
+        return out
 
 
 def run_council(
@@ -163,6 +168,7 @@ def run_council(
     spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
     session: str | None = None,
     mistakes: MistakeMemory | None = None,
+    family_fusion: FamilyFusionEngine | None = None,
 ) -> CouncilResult:
     """Run every member and fold them into one honest decision.
 
@@ -215,6 +221,15 @@ def run_council(
         elif core.actionable:
             opposition += weight
 
+    fam_engine = family_fusion or FamilyFusionEngine()
+    member_sides = {v.name: v.side for v in votes if v.side in ("BUY", "SELL")}
+    fam_verdict = fam_engine.evaluate_votes(
+        core.side,
+        member_sides,
+        regime=regime,
+        session=session,
+    )
+
     if not core.actionable:
         return CouncilResult(
             "NO SIGNAL",
@@ -224,6 +239,7 @@ def run_council(
             round(support, 4),
             round(opposition, 4),
             False,
+            fam_verdict,
         )
 
     if opposition - support > VETO_MASS:
@@ -239,6 +255,19 @@ def run_council(
             round(support, 4),
             round(opposition, 4),
             True,
+            fam_verdict,
+        )
+
+    if fam_verdict.vetoed:
+        return CouncilResult(
+            "NO SIGNAL",
+            fam_verdict.reason,
+            core.score,
+            tuple(votes),
+            round(support, 4),
+            round(opposition, 4),
+            True,
+            fam_verdict,
         )
 
     if mistakes is not None:
@@ -253,6 +282,7 @@ def run_council(
                 round(support, 4),
                 round(opposition, 4),
                 False,
+                fam_verdict,
             )
         extra_checks = mistakes.extra_confluence_checks(key)
         required_checks = min(6, min_checks + extra_checks)
@@ -267,10 +297,14 @@ def run_council(
                 round(support, 4),
                 round(opposition, 4),
                 False,
+                fam_verdict,
             )
 
     spoken = ", ".join(vote.name for vote in votes if vote.heard and vote.side == core.side)
     suffix = f" Supporting learned prototypes: {spoken}." if spoken else " No learned prototype is active yet."
+    if fam_verdict.support_mass > 0.0 and fam_verdict.supporting_families:
+        fam_txt = ", ".join(fam_verdict.supporting_families)
+        suffix += f" Merged families ({fam_txt}): {fam_verdict.net_edge:+.2f}."
     return CouncilResult(
         core.side,
         core.reason + suffix,
@@ -279,6 +313,7 @@ def run_council(
         round(support, 4),
         round(opposition, 4),
         False,
+        fam_verdict,
     )
 
 

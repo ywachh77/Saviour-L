@@ -47,6 +47,7 @@ from fusion import (  # noqa: E402
     settle,
     strategies,
 )
+from fusion.cognitive import SaviourCognitivePartner, build_trade_reflection  # noqa: E402
 from fusion.config import Config, load_config  # noqa: E402
 from fusion.domain import Candle, Settlement, Signal, closed_before  # noqa: E402
 from fusion.indicators import atr as calc_atr  # noqa: E402
@@ -81,7 +82,7 @@ from scripts.set_keys import normalise_keys  # noqa: E402
 
 MAX_JSON_BODY = 32_768
 MAX_SYNC_JSON_BODY = 2_097_152
-TESTS_PASSING_BASELINE = 713
+TESTS_PASSING_BASELINE = 717
 
 SIM_DEFAULTS: dict[str, tuple[float, float, int]] = {
     "EUR/USD": (1.08520, 0.00024, 101),
@@ -208,6 +209,13 @@ class OperatorRuntime:
         with self.lock:
             settled = self.bot.settle_due(at=stamp)
             self.bot.reconcile_settled_signals()
+            for member in self._all_members():
+                if self._has_real_candles(member) and len(member.candles) >= 300:
+                    member.maybe_run_auto_backtest(
+                        at=stamp,
+                        trigger="background_auto",
+                        min_interval_minutes=30,
+                    )
             self._auto_settle_runs += 1
             self._auto_settled_total += settled
             self._last_auto_settle_at = stamp
@@ -680,6 +688,7 @@ class OperatorRuntime:
                             at=future_entry,
                             observed_at=base_now,
                             mistakes=member.mistakes,
+                            family_fusion=member.family_fusion,
                         )
                 elif saved_real_candles is not None and (real_is_fresh or mode == "now"):
                     # Evaluate synced real M1 bars strictly against the upcoming future next candle.
@@ -696,6 +705,7 @@ class OperatorRuntime:
                         at=future_entry,
                         observed_at=base_now,
                         mistakes=member.mistakes,
+                        family_fusion=member.family_fusion,
                     )
                 else:
                     # Standalone paper simulation anchored to the real current minute so
@@ -725,6 +735,7 @@ class OperatorRuntime:
                             at=future_entry,
                             observed_at=base_now,
                             mistakes=member.mistakes,
+                            family_fusion=member.family_fusion,
                         )
                         if result.actionable or mode != "scan":
                             break
@@ -840,6 +851,11 @@ class OperatorRuntime:
                         "core_checks": core_score,
                         "min_checks": member.config.min_confluence_checks,
                         "votes": votes_list,
+                        "family_fusion": (
+                            result.council.family_verdict.to_dict()
+                            if (result.council and result.council.family_verdict)
+                            else None
+                        ),
                         "model_read": result.read.to_dict() if result.read else None,
                         "signal": signal_dict,
                         "brief_text": brief_text,
@@ -1112,22 +1128,189 @@ class OperatorRuntime:
 
     def needle_status_payload(self) -> dict[str, Any]:
         with self.lock:
+            partner = self.bot._get_cognitive_partner()
             return {
                 "ok": True,
                 "enabled": self.config.needle_enabled,
+                "cognitive": partner.status_summary(self.bot),
                 **self.needle.status(),
+            }
+
+    def learning_payload(self) -> dict[str, Any]:
+        """Full self-improvement, 6-family fusion, auto-backtest, and cognitive memory snapshot."""
+        with self.lock:
+            partner = self.bot._get_cognitive_partner()
+            markets_learning: dict[str, Any] = {}
+            combined_journal: list[dict[str, Any]] = []
+            combined_backtests: list[dict[str, Any]] = []
+            for m in self._all_members():
+                pair = m.config.pair
+                for ep in m.learning_journal:
+                    combined_journal.append(ep)
+                for bt in m.auto_backtest_history:
+                    combined_backtests.append(bt)
+                markets_learning[pair] = {
+                    "pair": pair,
+                    "model_mode": m.model.mode if m.model else "VETO",
+                    "training_samples": int(m.model.training_samples) if m.model else 0,
+                    "online_updates": int(m.model.online_updates) if m.model else 0,
+                    "calibration_samples": len(m.calibration_points),
+                    "reconciled_trades": len(m.mistakes.reconciled_ids),
+                    "family_fusion": {
+                        "trades_observed": m.family_fusion.trades_observed,
+                        "family_weights": {
+                            k: round(float(v), 4) for k, v in m.family_fusion.family_weights.items()
+                        },
+                        "family_seen": dict(m.family_fusion.family_seen),
+                        "family_net": {
+                            k: round(float(v), 2) for k, v in m.family_fusion.family_net.items()
+                        },
+                        "synergy_weights": {
+                            k: round(float(v), 4) for k, v in m.family_fusion.synergy_weights.items()
+                        },
+                        "synergy_seen": dict(m.family_fusion.synergy_seen),
+                        "active_families": {
+                            k: round(float(v), 4) for k, v in m.family_fusion.active_families().items()
+                        },
+                        "active_synergies": {
+                            k: round(float(v), 4) for k, v in m.family_fusion.active_synergies().items()
+                        },
+                    },
+                    "latest_backtest": m.auto_backtest_history[-1] if m.auto_backtest_history else None,
+                    "recent_lessons": list(reversed(m.learning_journal[-10:])),
+                }
+            combined_journal.sort(key=lambda r: str(r.get("recorded_at", "")), reverse=True)
+            combined_backtests.sort(key=lambda r: str(r.get("ran_at", "")), reverse=True)
+            learning_events = [
+                dict(
+                    ev,
+                    created_display=format_display_datetime(ev["created_at"]) if ev.get("created_at") else None,
+                )
+                for ev in self.store.local.read("learning_events")[-30:]
+                if isinstance(ev, dict)
+            ]
+            learning_events.reverse()
+            return {
+                "ok": True,
+                "timezone": DISPLAY_TZ_LABEL,
+                "cognitive": partner.status_summary(self.bot),
+                "conversation": list(partner.conversation[-12:]),
+                "rectifications": list(reversed(partner.rectifications[-12:])),
+                "markets": markets_learning,
+                "journal": combined_journal[:30],
+                "auto_backtests": combined_backtests[:15],
+                "learning_events": learning_events,
+            }
+
+    def run_backtest_action(self, pair: str = "ALL") -> dict[str, Any]:
+        """Run causal walk-forward backtest across target market(s) and return updated learning snapshot."""
+        with self.lock:
+            target = str(pair or "ALL").strip().upper()
+            members = (
+                self._all_members()
+                if target in ("", "ALL")
+                else [m for m in self._all_members() if m.config.pair == target]
+            )
+            if not members:
+                raise ValueError(f"Unsupported market pair: {pair}")
+            stamp = utcnow()
+            runs: list[dict[str, Any]] = []
+            for m in members:
+                is_real = self._has_real_candles(m)
+                if not is_real and len(m.candles) < 240:
+                    m.candles = _build_scaled_paper_series(
+                        m.config.pair,
+                        count=320,
+                        end_minute=stamp - timedelta(minutes=1),
+                        seed_offset=self._sim_step,
+                    )
+                res = m.run_auto_backtest(
+                    at=stamp,
+                    trigger="console_backtest",
+                    min_bars=180,
+                    persist_version=is_real,
+                    allow_paper_eval=not is_real,
+                )
+                runs.append(res)
+            partner = self.bot._get_cognitive_partner()
+            ok_runs = [r for r in runs if r.get("ok")]
+            if ok_runs:
+                partner.record_experience(
+                    "auto_backtest",
+                    f"Completed walk-forward backtest across {len(ok_runs)} market(s).",
+                    {"runs": [{k: r.get(k) for k in ("pair", "signals", "net_pips", "win_rate", "source")} for r in ok_runs]},
+                )
+                self.bot.cognitive_state = partner.to_dict()
+                self.bot._save_state(force=True)
+            return {
+                "ok": True,
+                "runs": runs,
+                "learning": self.learning_payload(),
+            }
+
+    def self_heal_action(self) -> dict[str, Any]:
+        """Run autonomous cognitive error detection & self-rectification across all subsystems."""
+        with self.lock:
+            partner = self.bot._get_cognitive_partner()
+            heal = partner.detect_and_rectify(self.bot, run_causality=True)
+            self.bot.cognitive_state = partner.to_dict()
+            self.bot._save_state(force=True)
+            return {
+                "ok": True,
+                "heal": heal,
+                "narrative": partner.compose_human_reply(self.bot, "find errors and rectify", heal_report=heal),
+                "learning": self.learning_payload(),
             }
 
     def run_needle_query(self, query: str, *, execute: bool = True) -> dict[str, Any]:
         with self.lock:
+            from fusion import cognitive as cog_mod
+
+            partner = self.bot._get_cognitive_partner()
             decision = self.needle.route(query)
-            if not execute or decision.type != "tool_call" or not decision.function_calls:
+            is_human_dialogue = bool(
+                cog_mod.CONVERSATION_GREETING_RE.search(query or "")
+                or cog_mod.HUMAN_REFLECTION_RE.search(query or "")
+            )
+
+            # If Needle refused because this is pure human strategist conversation (not a Charter violation
+            # and not an off-topic weather/cooking prompt), respond as SAVIOUR's human cognitive partner!
+            if decision.type != "tool_call" or not decision.function_calls:
+                if execute and decision.engine != "charter_shield" and is_human_dialogue:
+                    human_reply = partner.compose_human_reply(self.bot, query)
+                    partner.remember_turn("operator", query)
+                    partner.remember_turn("saviour", human_reply, engine="saviour_cognitive")
+                    self.bot.cognitive_state = partner.to_dict()
+                    self.bot._save_state(force=True)
+                    return {
+                        "ok": True,
+                        "executed": True,
+                        "decision": {
+                            **decision.to_dict(),
+                            "type": "human_dialogue",
+                            "engine": f"{decision.engine}+saviour_cognitive",
+                        },
+                        "reply": human_reply,
+                        "signal_run": None,
+                        "cognitive": partner.status_summary(self.bot),
+                    }
                 return {
                     "ok": True,
                     "executed": False,
                     "decision": decision.to_dict(),
                     "reply": decision.refusal_reason or "No tool executed.",
                     "signal_run": None,
+                    "cognitive": partner.status_summary(self.bot),
+                }
+
+            if not execute:
+                return {
+                    "ok": True,
+                    "executed": False,
+                    "decision": decision.to_dict(),
+                    "reply": "Dry-run routing completed.",
+                    "signal_run": None,
+                    "cognitive": partner.status_summary(self.bot),
                 }
 
             signal_run: dict[str, Any] | None = None
@@ -1141,16 +1324,19 @@ class OperatorRuntime:
                     query,
                     agent=self.needle,
                 )
-                # Filter out duplicate scan_market text when web signal studio also runs below
                 if not scan_calls:
+                    partner.remember_turn("operator", query)
+                    partner.remember_turn("saviour", sub_reply, engine=sub_agent_decision.engine)
+                    self.bot.cognitive_state = partner.to_dict()
+                    self.bot._save_state(force=True)
                     return {
                         "ok": True,
                         "executed": True,
                         "decision": sub_agent_decision.to_dict(),
                         "reply": sub_reply,
                         "signal_run": None,
+                        "cognitive": partner.status_summary(self.bot),
                     }
-                # Re-run only non-scan outputs cleanly for reply banner
                 replies.append(sub_reply.split("\n\n")[0])
 
             for call in scan_calls:
@@ -1164,12 +1350,18 @@ class OperatorRuntime:
                 ]
                 replies.append("\n".join(summary_lines))
 
+            final_reply = "\n\n".join(r for r in replies if r)
+            partner.remember_turn("operator", query)
+            partner.remember_turn("saviour", final_reply, engine=decision.engine)
+            self.bot.cognitive_state = partner.to_dict()
+            self.bot._save_state(force=True)
             return {
                 "ok": True,
                 "executed": True,
                 "decision": decision.to_dict(),
-                "reply": "\n\n".join(r for r in replies if r),
+                "reply": final_reply,
                 "signal_run": signal_run,
+                "cognitive": partner.status_summary(self.bot),
             }
 
     def strategies_payload(self) -> dict[str, Any]:
@@ -1199,6 +1391,20 @@ class OperatorRuntime:
                 "council_total": len(all_ids),
                 "prototype_total": len(strategies.PROTOTYPES),
                 "family_counts": family_counts,
+                "family_fusion": {
+                    m.config.pair: {
+                        "trades_observed": m.family_fusion.trades_observed,
+                        "family_weights": {
+                            k: round(float(v), 4) for k, v in m.family_fusion.family_weights.items()
+                        },
+                        "family_seen": dict(m.family_fusion.family_seen),
+                        "synergy_weights": {
+                            k: round(float(v), 4) for k, v in m.family_fusion.synergy_weights.items()
+                        },
+                        "synergy_seen": dict(m.family_fusion.synergy_seen),
+                    }
+                    for m in self._all_members()
+                },
                 "runtime_config": {
                     "pairs": list(self.config.active_pairs),
                     "mtf_filter": self.config.mtf_filter,
@@ -1486,6 +1692,21 @@ class OperatorRuntime:
                                     row["model"] = prior["model"]
                                 if not row.get("mistakes") and prior.get("mistakes"):
                                     row["mistakes"] = prior["mistakes"]
+                                prior_rt = prior.get("runtime")
+                                cur_rt = row.get("runtime")
+                                if isinstance(prior_rt, dict):
+                                    merged_rt = dict(cur_rt) if isinstance(cur_rt, dict) else {}
+                                    for keep_k in (
+                                        "family_fusion",
+                                        "learning_journal",
+                                        "auto_backtests",
+                                        "last_auto_backtest_at",
+                                        "last_auto_backtest_settled",
+                                        "cognitive_memory",
+                                    ):
+                                        if not merged_rt.get(keep_k) and prior_rt.get(keep_k):
+                                            merged_rt[keep_k] = prior_rt[keep_k]
+                                    row["runtime"] = merged_rt
                     if clean_rows:
                         local.replace(state_tbl, clean_rows)
 
@@ -1558,6 +1779,11 @@ class OperatorRuntime:
             for member in self._all_members():
                 member._load_state()
                 member._load_candles()
+            if isinstance(runtime_blob.get("cognitive_memory"), dict):
+                self.bot.cognitive = SaviourCognitivePartner.from_dict(
+                    runtime_blob.get("cognitive_memory"),
+                    memory_path=self.config.data_dir / "experience_memory.jsonl",
+                )
             self._synced_pairs = {
                 m.config.pair for m in self._all_members() if len(m.candles) >= 60
             }
@@ -1566,6 +1792,12 @@ class OperatorRuntime:
                     member._ensure_baseline_veto_model()
             auto_settled = self.bot.settle_due(at=utcnow())
             replayed = self.bot.reconcile_settled_signals()
+            for member in self._all_members():
+                if self._has_real_candles(member) and not member.auto_backtest_history and len(member.candles) >= 320:
+                    try:
+                        member.maybe_run_auto_backtest(reason="cloud_sync_bootstrap", min_bars=320)
+                    except Exception:
+                        pass
             self.bot.save_all_states(force=True)
             self._ensure_paper_candles_if_offline()
             return {
@@ -1640,6 +1872,10 @@ def make_handler(runtime: OperatorRuntime):
 
             if route == "/api/needle/status":
                 self._send_json(runtime.needle_status_payload())
+                return
+
+            if route == "/api/learning":
+                self._send_json(runtime.learning_payload())
                 return
 
             if route == "/api/risk":
@@ -1738,6 +1974,16 @@ def make_handler(runtime: OperatorRuntime):
                             execute=bool(body.get("execute", True)),
                         )
                     )
+                    return
+
+                if route == "/api/backtest":
+                    self._send_json(
+                        runtime.run_backtest_action(str(body.get("pair", "ALL")))
+                    )
+                    return
+
+                if route in ("/api/self_heal", "/api/self-heal"):
+                    self._send_json(runtime.self_heal_action())
                     return
 
             except (ValueError, KeyError) as exc:

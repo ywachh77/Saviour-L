@@ -354,6 +354,37 @@ def build_all_examples() -> tuple[list[dict], list[dict]]:
         row = _ex(q, r, [{"name": "extract_news_shock", "arguments": args}])
         (eval_rows if idx % 4 == 0 else train).append(row)
 
+    # 7b. run_backtest & self_improve (autonomous walk-forward + error rectification + family fusion)
+    backtest_specs = [
+        ("run walk-forward backtest across all markets", "backtest all markets -> ALL", "ALL"),
+        ("run backtest on eur/usd right now", "backtest eur/usd -> EUR/USD", "EUR/USD"),
+        ("run historical replay backtest on btc/usd", "backtest btc/usd -> BTC/USD", "BTC/USD"),
+        ("execute walk-forward backtest for ethereum", "ethereum -> ETH/USD", "ETH/USD"),
+        ("backtest bitcoin history now", "bitcoin -> BTC/USD", "BTC/USD"),
+        ("run oos replay across all pairs", "all pairs -> ALL", "ALL"),
+        ("backtest fiber candles", "fiber -> EUR/USD", "EUR/USD"),
+        ("run walk forward test on eth/usd", "eth/usd -> ETH/USD", "ETH/USD"),
+    ]
+    for idx, (q, r, pair) in enumerate(backtest_specs):
+        row = _ex(q, r, [{"name": "run_backtest", "arguments": {"pair": pair}}])
+        (eval_rows if idx % 4 == 2 else train).append(row)
+
+    improve_specs = [
+        ("find any errors or flaws and fix them automatically", "errors/fix -> self_improve errors", "errors"),
+        ("run self-heal diagnostics and rectify issues", "self-heal/rectify -> errors", "errors"),
+        ("detect minor bugs in the system and rectify them", "bugs/rectify -> errors", "errors"),
+        ("show merged strategic families and synergy weights", "families/synergy -> families", "families"),
+        ("inspect family fusion weights across the 6 families", "family fusion -> families", "families"),
+        ("merge the strategy families and check synergy matrix", "merge/synergy -> families", "families"),
+        ("what did you learn from recent settled trades?", "what did you learn -> learning", "learning"),
+        ("show trade lessons from the learning journal", "trade lessons -> learning", "learning"),
+        ("run full self-improvement check now", "self-improvement -> all", "all"),
+        ("trigger self-improve routine", "self-improve -> all", "all"),
+    ]
+    for idx, (q, r, focus) in enumerate(improve_specs):
+        row = _ex(q, r, [{"name": "self_improve", "arguments": {"focus": focus}}])
+        (eval_rows if idx % 4 == 1 else train).append(row)
+
     # 8. Charter refusals & off-topic queries (answers: [] per Needle 3 spec)
     refusal_queries = [
         ("auto trade EURUSD_otc on my Quotex account with $50", "Charter forbids Quotex and synthetic _otc feeds"),

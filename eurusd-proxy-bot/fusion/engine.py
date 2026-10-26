@@ -22,6 +22,7 @@ from . import charter, costs, datagate, instruments, news, protections
 from .calibration import IsotonicCalibrator
 from .council import CouncilResult, CouncilWeights, run_council
 from .domain import Candle, ModelRead, Signal, closed_before
+from .family_fusion import FamilyFusionEngine
 from .features import compute_features
 from . import mtf
 from .model import MODE_ADVISORY, MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
@@ -237,6 +238,7 @@ class FusionEngine:
         regime_state: RegimeState | None = None,
         spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
         mistakes: MistakeMemory | None = None,
+        family_fusion: FamilyFusionEngine | None = None,
         target_entry: datetime | None = None,
     ) -> Verdict:
         """Run regime, council and meta-model. No data gate, no sealing."""
@@ -279,7 +281,10 @@ class FusionEngine:
             spread_pips=spread_pips,
             session=session,
             mistakes=mistakes,
+            family_fusion=family_fusion,
         )
+        if family_fusion is not None and council.family_verdict is not None:
+            read = family_fusion.refine_model_read(read, council.family_verdict)
         if not council.actionable:
             return Verdict("NO SIGNAL", council.reason, regime.name, read=read, council=council)
 
@@ -434,6 +439,7 @@ class FusionEngine:
         at: datetime | None = None,
         observed_at: datetime | None = None,
         mistakes: MistakeMemory | None = None,
+        family_fusion: FamilyFusionEngine | None = None,
     ) -> EngineResult:
         """Data gate -> features -> decision -> seal, for one live or upcoming minute.
 
@@ -486,6 +492,7 @@ class FusionEngine:
             regime_state=regime_state,
             spread_pips=gate.spread_pips,
             mistakes=mistakes,
+            family_fusion=family_fusion,
             target_entry=floor_minute(stamp),
         )
         return self._seal(
@@ -511,6 +518,7 @@ class FusionEngine:
         source: str = "BACKTEST",
         at: datetime | None = None,
         mistakes: MistakeMemory | None = None,
+        family_fusion: FamilyFusionEngine | None = None,
     ) -> EngineResult:
         """Decision + seal with the gate, features and regime supplied.
 
@@ -531,6 +539,7 @@ class FusionEngine:
             regime_state=regime_state,
             spread_pips=gate.spread_pips,
             mistakes=mistakes,
+            family_fusion=family_fusion,
         )
         return self._seal(
             verdict,

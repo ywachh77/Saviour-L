@@ -58,6 +58,7 @@ SUPPORTED_SIGNAL_STYLES = ("standard", "brief", "tactical", "compact")
 SUPPORTED_RESULT_STYLES = ("standard", "compact")
 SUPPORTED_MTF_MINUTES = (5, 15, 60)
 SUPPORTED_SEVERITIES = ("NONE", "LOW", "HIGH")
+SUPPORTED_IMPROVE_FOCUS = ("all", "errors", "families", "learning")
 
 # Designed strictly per Needle 3 tool-calling guidelines:
 # - Small toolset with plain, distinct names (no shared prefixes)
@@ -66,7 +67,7 @@ SUPPORTED_SEVERITIES = ("NONE", "LOW", "HIGH")
 SAVIOUR_NEEDLE_TOOLS: list[dict[str, Any]] = [
     {
         "name": "scan_market",
-        "description": "Evaluate M1 market gates and report any signal.",
+        "description": "Scan M1 market gates.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -78,22 +79,22 @@ SAVIOUR_NEEDLE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "bot_status",
-        "description": "Report bot health, heartbeat, ledger, and key pool.",
+        "description": "Report bot health and ledger.",
         "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "pause_signals",
-        "description": "Pause outgoing signal delivery.",
+        "description": "Pause signal delivery.",
         "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "resume_signals",
-        "description": "Resume outgoing signal delivery.",
+        "description": "Resume signal delivery.",
         "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "set_telegram_style",
-        "description": "Set Telegram formatting preset.",
+        "description": "Set Telegram preset.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -105,7 +106,7 @@ SAVIOUR_NEEDLE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "configure_guards",
-        "description": "Update MTF minutes, cooldown, or horizon.",
+        "description": "Update MTF, cooldown, or horizon.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -117,7 +118,7 @@ SAVIOUR_NEEDLE_TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "extract_news_shock",
-        "description": "Extract headline shock severity and blackout minutes.",
+        "description": "Extract news shock blackout.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -127,6 +128,28 @@ SAVIOUR_NEEDLE_TOOLS: list[dict[str, Any]] = [
                 "event": {"type": "string"},
             },
             "required": ["pair", "severity", "blackout_minutes", "event"],
+        },
+    },
+    {
+        "name": "run_backtest",
+        "description": "Run walk-forward backtest.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pair": {"type": "string", "enum": list(SUPPORTED_PAIRS)},
+            },
+            "required": ["pair"],
+        },
+    },
+    {
+        "name": "self_improve",
+        "description": "Fix errors or inspect families.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "focus": {"type": "string", "enum": list(SUPPORTED_IMPROVE_FOCUS)},
+            },
+            "required": ["focus"],
         },
     },
 ]
@@ -294,6 +317,10 @@ def validate_tool_calls(raw_calls: list[Mapping[str, Any]] | None) -> list[dict[
         if name == "scan_market":
             out_args.setdefault("pair", "ALL")
             out_args.setdefault("mode", "now")
+        elif name == "run_backtest":
+            out_args.setdefault("pair", "ALL")
+        elif name == "self_improve":
+            out_args.setdefault("focus", "all")
         elif name == "set_telegram_style":
             if "signal_style" not in out_args:
                 continue
@@ -389,7 +416,7 @@ def _route_single_clause(clause: str) -> list[dict[str, Any]]:
     is_command_verb = bool(
         re.search(
             r"^\s*(scan|check|show|get|give|run|pause|stop|halt|mute|resume|unpause|start|"
-            r"set|switch|change|use|configure|update|what|how)\b",
+            r"set|switch|change|use|configure|update|what|how|find|fix|rectify|merge|inspect|backtest|self)\b",
             lower,
         )
     )
@@ -502,7 +529,32 @@ def _route_single_clause(clause: str) -> list[dict[str, Any]]:
     if guard_args:
         calls.append({"name": "configure_guards", "arguments": guard_args})
 
-    # 5. Bot status / health / ledger
+    # 5. Walk-forward auto-backtest
+    if re.search(
+        r"\b(backtest|back-?test|walk[-\s]?forward|oos\s+replay|historical\s+replay|replay\s+history)\b",
+        lower,
+    ):
+        bt_pair = _detect_pair(text, default="ALL")
+        calls.append({"name": "run_backtest", "arguments": {"pair": bt_pair}})
+
+    # 6. Autonomous error detection, self-healing, family fusion & trade learning inspection
+    if re.search(
+        r"\b(find\s+(?:any\s+)?(?:errors?|flaws?|bugs?|mistakes?)|rectify|self[-\s]?heal|fix\s+(?:any\s+)?(?:errors?|flaws?|issues?)|"
+        r"self[-\s]?improv\w*|merge(?:d)?\s+(?:the\s+)?(?:strategic\s+|strategy\s+)?famil(?:y|ies)|family\s+fusion|"
+        r"synerg(?:y|ies)\s+matrix|what\s+did\s+you\s+learn|trade\s+lessons?|learning\s+journal)\b",
+        lower,
+    ):
+        if re.search(r"\b(errors?|flaws?|bugs?|rectify|self[-\s]?heal|fix)\b", lower):
+            focus = "errors"
+        elif re.search(r"\b(famil(?:y|ies)|synerg(?:y|ies)|merge)\b", lower):
+            focus = "families"
+        elif re.search(r"\b(learn|lessons?|journal)\b", lower):
+            focus = "learning"
+        else:
+            focus = "all"
+        calls.append({"name": "self_improve", "arguments": {"focus": focus}})
+
+    # 7. Bot status / health / ledger
     if re.search(
         r"\b(status|health|heartbeat|win\s*rate|ledger|scorecard|model\s+mode|key\s*pool|"
         r"how\s+is\s+(the\s+)?(bot|saviour|fusion)|stats|performance)\b",
@@ -510,9 +562,9 @@ def _route_single_clause(clause: str) -> list[dict[str, Any]]:
     ):
         calls.append({"name": "bot_status", "arguments": {}})
 
-    # 6. Market scan / signal check (only if this clause was not already a pause/resume/style/guard action mentioning 'signal')
+    # 8. Market scan / signal check (only if this clause was not already a pause/resume/style/guard/backtest/improve action mentioning 'signal')
     already_control_or_style = any(
-        c["name"] in ("pause_signals", "resume_signals", "set_telegram_style", "configure_guards")
+        c["name"] in ("pause_signals", "resume_signals", "set_telegram_style", "configure_guards", "run_backtest", "self_improve")
         for c in calls
     )
     if not already_control_or_style and re.search(
@@ -535,13 +587,16 @@ def deterministic_route(query: str) -> list[dict[str, Any]]:
     is_command_verb = bool(
         re.search(
             r"^\s*(scan|check|show|get|give|run|pause|stop|halt|mute|resume|unpause|start|"
-            r"set|switch|change|use|configure|update|what|how)\b",
+            r"set|switch|change|use|configure|update|what|how|find|fix|rectify|merge|inspect|backtest|self)\b",
             clean_query.lower(),
         )
     )
     if not is_command_verb and (_HEADLINE_CONTEXT_RE.search(clean_query) or re.search(r"\b(extract|classify)\b", clean_query.lower())):
         return validate_tool_calls(_route_single_clause(clean_query))
-    if re.search(r"\bresults?\s+(?:to\s+)?compact\b", clean_query.lower()) and re.search(r"\btactical\b", clean_query.lower()):
+    if (
+        (re.search(r"\bresults?\s+(?:to\s+)?compact\b", clean_query.lower()) and re.search(r"\btactical\b", clean_query.lower()))
+        or re.search(r"\b(find|detect)\b.*\b(errors?|flaws?|bugs?|mistakes?)\b.*\b(fix|rectify|improve)\b", clean_query.lower())
+    ):
         clauses = [clean_query]
     else:
         clauses = re.split(r"\s*,?\s+(?:and\s+then|then|and\s+also|and)\s+|;\s*", clean_query, flags=re.IGNORECASE)
@@ -892,5 +947,47 @@ def execute_on_bot(
                     f"Headline classified ({args['event']} on {args['pair']}): "
                     f"severity={args['severity']}, no blackout needed."
                 )
+
+        elif name == "run_backtest":
+            pair = str(args.get("pair") or "ALL").upper()
+            targets = (
+                [bot, *bot.peer_bots.values()]
+                if pair == "ALL"
+                else [m for m in (bot, *bot.peer_bots.values()) if m.config.pair == pair]
+            )
+            bt_lines: list[str] = []
+            for m in targets:
+                res = m.run_auto_backtest(
+                    at=at,
+                    trigger="needle_backtest",
+                    min_bars=180,
+                    persist_version=True,
+                )
+                if res.get("ok"):
+                    bt_lines.append(
+                        f"{res['pair']}: {res['signals']} OOS signals "
+                        f"({res['wins']}W/{res['losses']}L, net {res['net_pips']:+.2f}p, "
+                        f"mode={res['model_mode']}, active_families={len(res.get('learned_families', {}))})"
+                    )
+                else:
+                    bt_lines.append(f"{m.config.pair}: {res.get('reason', 'insufficient bars')}")
+            outputs.append("Walk-forward backtest completed:\n" + "\n".join(bt_lines))
+
+        elif name == "self_improve":
+            focus = str(args.get("focus") or "all").lower()
+            partner = bot._get_cognitive_partner() if hasattr(bot, "_get_cognitive_partner") else None
+            if partner is not None:
+                heal = partner.detect_and_rectify(bot, run_causality=(focus in ("all", "errors")))
+                bot.cognitive_state = partner.to_dict()
+                bot._save_state(force=True)
+                outputs.append(
+                    partner.compose_human_reply(
+                        bot,
+                        query,
+                        heal_report=heal if focus in ("all", "errors") else None,
+                    )
+                )
+            else:
+                outputs.append("Self-improvement diagnostics active.")
 
     return decision, "\n\n".join(outputs)

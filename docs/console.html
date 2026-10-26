@@ -19,6 +19,9 @@
 </head>
 <body class="console-body">
 
+<!-- Ambient Reiatsu Spiritual-Pressure Particle Canvas -->
+<canvas class="reiatsu-canvas" id="reiatsu-canvas" aria-hidden="true"></canvas>
+
 <div class="app-shell">
   <!-- ─────────────────────── DESKTOP COMMAND RAIL ─────────────────────── -->
   <aside class="side-rail" aria-label="Console navigation">
@@ -43,6 +46,12 @@
         <span class="mono" id="rail-bot-state">ACTIVE</span>
       </div>
       <div class="mono rail-feed-tag" id="rail-feed-mode">PAPER ENGINE</div>
+      <div class="mono rail-cog-tag" id="rail-cognitive-stage">SAVIOUR // SENTINEL</div>
+    </div>
+
+    <div class="rail-manga-emblem" aria-hidden="true">
+      <img src="assets/manga/gotei-captains.webp" alt="" class="rail-manga-img" loading="lazy">
+      <span class="rail-manga-caption mono">GOTEI XIII // COUNCIL 22</span>
     </div>
 
     <nav class="rail-nav" aria-label="Control pages">
@@ -117,6 +126,23 @@
       <div class="page-fx-primary"></div>
       <div class="page-fx-secondary"></div>
       <div class="page-fx-stamp" id="page-fx-stamp" lang="ja">信号</div>
+    </div>
+
+    <!-- Dynamic Seireitei Division Manga Chronicle Header -->
+    <div class="division-manga-banner" id="division-manga-banner">
+      <div class="division-manga-art">
+        <img src="assets/manga/zangetsu-cleave.jpg" alt="Shinigami Division Chronicle Art" id="division-manga-img">
+        <div class="division-manga-scrim"></div>
+      </div>
+      <div class="division-manga-meta">
+        <div class="division-manga-left">
+          <span class="mono division-manga-plate" id="division-manga-plate">CHRONICLE PLATE 01 // ZANGETSU CLEAVE</span>
+          <p class="division-manga-quote" id="division-manga-quote">Completed-bar precision only — cut at the exact opening second of the next future candle.</p>
+        </div>
+        <div class="division-manga-right mono">
+          <span class="pill" id="cog-xp-pill" title="SAVIOUR Cognitive Experience &amp; Trade Learning">SAVIOUR AI · 0 XP</span>
+        </div>
+      </div>
     </div>
 
     <!-- =================================================================
@@ -273,28 +299,34 @@
       <div class="panel" id="needle-router-panel">
         <div class="panel-head">
           <div>
-            <p class="eyebrow mono">CACTUS COMPUTE NEEDLE 3 // APACHE-2.0 TOOL &amp; HEADLINE ROUTER</p>
-            <h2 class="panel-title">Natural-Language Command &amp; News Shock Desk</h2>
+            <p class="eyebrow mono">SAVIOUR &times; CACTUS NEEDLE 3 // HUMAN COGNITIVE STRATEGIST &amp; SELF-HEALING AI</p>
+            <h2 class="panel-title">Autonomous Partner, Tool Router &amp; Error Rectifier</h2>
           </div>
-          <span class="pill pill-live" id="needle-engine-pill">READY</span>
+          <div class="btn-row">
+            <span class="pill" id="cog-stage-pill">SENTINEL</span>
+            <span class="pill pill-live" id="needle-engine-pill">READY</span>
+          </div>
         </div>
-        <p class="panel-desc">Route plain-English operator instructions or breaking macro/crypto headlines through SAVIOUR's fine-tuned Needle 3 schema router (<span class="mono">NEEDLE_TELEMETRY=0</span>). Off-topic prompts and Charter-prohibited actions (live orders, OTC feeds, Martingale) return an empty call list and refuse cleanly.</p>
+        <p class="panel-desc">Converse naturally with SAVIOUR like a human quant researcher, route plain-English commands across all 9 fine-tuned Needle 3 tools (<span class="mono">NEEDLE_TELEMETRY=0</span>), trigger walk-forward backtests, or run autonomous error detection &amp; self-rectification. Every settled trade updates SAVIOUR's post-mortem memory.</p>
 
         <div class="config-grid">
           <label class="field" style="grid-column: 1 / -1;">
-            <span class="field-label">Plain-English Command or Breaking Headline</span>
-            <input type="text" id="needle-query-input" class="input mono" placeholder="e.g. scan btc/usd right now  |  Breaking: US CPI comes in hot at 3.8%, USD spikes">
+            <span class="field-label">Talk to SAVIOUR, Issue a Command, or Paste a Macro Headline</span>
+            <input type="text" id="needle-query-input" class="input mono" placeholder="e.g. Hey SAVIOUR, how are our trades?  |  find any errors and fix them  |  run walk-forward backtest">
           </label>
         </div>
 
         <div class="action-bar mt-sm">
-          <button type="button" class="btn btn-primary" id="btn-needle-run">Route &amp; Execute</button>
+          <button type="button" class="btn btn-primary" id="btn-needle-run">Send to SAVIOUR</button>
+          <button type="button" class="btn btn-ghost" id="btn-self-heal">Self-Heal &amp; Rectify</button>
+          <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="Hey SAVIOUR, how are our trades looking and what did you learn recently?">Ask Human Reflection</button>
+          <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="run walk-forward backtest across all markets">Run Auto-Backtest</button>
+          <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="find any errors or flaws and fix them automatically">Detect &amp; Fix Flaws</button>
           <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="scan btc/usd right now">Scan BTC/USD</button>
-          <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="switch telegram format to tactical and show bot status">Tactical + Status</button>
           <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="Breaking headline: US CPI inflation comes in hot at 3.8%, USD spikes across majors">Test CPI Shock</button>
         </div>
 
-        <pre class="terminal-box mono mt-sm" id="needle-terminal-output">Needle 3 router ready. Enter a plain-English instruction or macro headline above.</pre>
+        <pre class="terminal-box mono mt-sm" id="needle-terminal-output">SAVIOUR × Needle 3 Cognitive Partner ready. Ask how trades are performing, run a backtest, or command any subsystem above.</pre>
       </div>
 
       <div class="panel" id="tg-format-studio-panel">
@@ -411,7 +443,7 @@
       <div class="grid-3">
         <div class="stat-card">
           <span class="stat-label mono">UNIT SUITE</span>
-          <strong class="stat-val mono" id="hl-tests">713</strong>
+          <strong class="stat-val mono" id="hl-tests">717</strong>
           <span class="stat-sub">Passing verification checks</span>
         </div>
         <div class="stat-card">
@@ -527,6 +559,75 @@
               <label class="check-field"><input type="checkbox" id="cfg-shadow-recovery" checked><span>Shadow-Win Streak Recovery</span></label>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="panel" id="family-fusion-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">HIERARCHICAL ENSEMBLE // 6 MERGED FAMILIES + 10 PAIRWISE SYNERGIES</p>
+            <h2 class="panel-title">Merged Strategic Family Fusion Matrix</h2>
+          </div>
+          <div class="seg-group" id="fam-pair-tabs" role="group" aria-label="Select family fusion market">
+            <button type="button" class="seg is-active" data-fam-pair="EUR/USD">EUR/USD</button>
+            <button type="button" class="seg" data-fam-pair="BTC/USD">BTC/USD</button>
+            <button type="button" class="seg" data-fam-pair="ETH/USD">ETH/USD</button>
+          </div>
+        </div>
+        <p class="panel-desc">Fuses <span class="mono">CORE_GATE</span>, <span class="mono">CLASSIC_COUNCIL</span>, <span class="mono">MICRO_SCALPING</span>, <span class="mono">SMC_ICT</span>, <span class="mono">VIRAL_MOMENTUM</span>, and <span class="mono">QUANT_SCALP</span> via empirical-Bayes shrinkage, cross-family confluence synergy, and multi-family veto protection when opposing families exceed <span class="mono">0.30</span> mass.</p>
+        <div class="family-matrix-grid" id="family-matrix-grid"></div>
+        <div class="synergy-strip mt-sm" id="synergy-strip"></div>
+      </div>
+
+      <div class="panel" id="auto-backtest-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">PURGED WALK-FORWARD ENGINE // EVERY-TRADE POST-MORTEM MEMORY</p>
+            <h2 class="panel-title">Automatic Backtesting &amp; Self-Improvement Ledger</h2>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-sm btn-ghost" id="btn-refresh-learning">Refresh Memory</button>
+            <button type="button" class="btn btn-sm btn-primary" id="btn-run-backtest">Run Walk-Forward Backtest</button>
+          </div>
+        </div>
+        <p class="panel-desc">Executes purged 4-fold walk-forward backtests automatically as candles and settlements arrive, deducts full round-turn spread on every trade, tunes merged family weights on real market candles, and records SAVIOUR's trade-by-trade learning journal.</p>
+
+        <div class="grid-3" id="backtest-summary-cards"></div>
+
+        <div class="mt-md">
+          <span class="field-label mono">TRADE-BY-TRADE LEARNING JOURNAL &amp; RECTIFICATION LOG</span>
+          <div class="learning-journal-list mt-sm" id="learning-journal-list">
+            <p class="dim mono">Loading trade reflections and walk-forward telemetry...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Archival Bleach Manga Chronicle Gallery -->
+      <div class="panel" id="manga-gallery-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">SEIREITEI ARCHIVE // THOUSAND-YEAR BLOOD WAR PLATES</p>
+            <h2 class="panel-title">Shinigami Tactical Chronicle</h2>
+          </div>
+          <span class="mono dim">SUMI-INK &amp; CINNABAR REGISTER</span>
+        </div>
+        <div class="console-manga-gallery">
+          <figure class="console-manga-item">
+            <img src="assets/manga/gotei-captains.webp" alt="Gotei 13 Captains Council" loading="lazy">
+            <figcaption class="mono">GOTEI XIII // 22-MEMBER COUNCIL</figcaption>
+          </figure>
+          <figure class="console-manga-item">
+            <img src="assets/manga/vasto-ulquiorra.jpg" alt="Resurreccion Cold Discipline" loading="lazy">
+            <figcaption class="mono">COLD VETO // ZERO EMOTION</figcaption>
+          </figure>
+          <figure class="console-manga-item">
+            <img src="assets/manga/shunsui-bankai.jpg" alt="Katen Kyokotsu Karamatsu Shinju" loading="lazy">
+            <figcaption class="mono">CAPTAIN-COMMANDER // RISK SEAL</figcaption>
+          </figure>
+          <figure class="console-manga-item">
+            <img src="assets/manga/bankai-clash.jpg" alt="Bankai Horizon Strike" loading="lazy">
+            <figcaption class="mono">BANKAI // CONFLUENCE STRIKE</figcaption>
+          </figure>
         </div>
       </div>
 

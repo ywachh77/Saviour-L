@@ -23,11 +23,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Sequence
 
-from . import charter, instruments, digest, heartbeat, learning, needle_agent, protections, settle, stats
+from . import backtest, charter, cognitive, instruments, digest, heartbeat, learning, needle_agent, protections, settle, stats
 from .config import Config
 from .council import CouncilWeights, Vote
 from .domain import Candle, Signal, closed_before
 from .engine import FusionEngine
+from .family_fusion import FamilyFusionEngine
 from .keypool import KeyPool
 from .model import MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
 from .mistakes import MistakeMemory
@@ -114,6 +115,10 @@ class FusionBot:
     nightly_report: dict | None = None
     calibration_points: list[tuple[float, int]] = field(default_factory=list)
     mistakes: MistakeMemory = field(default_factory=MistakeMemory)
+    family_fusion: FamilyFusionEngine = field(default_factory=FamilyFusionEngine)
+    learning_journal: list[dict[str, Any]] = field(default_factory=list)
+    auto_backtest_history: list[dict[str, Any]] = field(default_factory=list)
+    cognitive_state: dict[str, Any] = field(default_factory=dict)
     telegram_format: TelegramFormatConfig = field(default_factory=TelegramFormatConfig)
     shadow_recovery: dict[str, Any] = field(default_factory=lambda: {"pending": None, "cleared_at": None})
     _saved_telegram_offset: int | None = None
@@ -218,6 +223,21 @@ class FusionBot:
             }
         else:
             self.shadow_recovery = {"pending": None, "cleared_at": None}
+        self.family_fusion = FamilyFusionEngine.from_dict(own_runtime.get("family_fusion"))
+        raw_journal = own_runtime.get("learning_journal")
+        self.learning_journal = (
+            [dict(item) for item in raw_journal[-60:] if isinstance(item, dict)]
+            if isinstance(raw_journal, list)
+            else []
+        )
+        raw_bt = own_runtime.get("auto_backtests")
+        self.auto_backtest_history = (
+            [dict(item) for item in raw_bt[-15:] if isinstance(item, dict)]
+            if isinstance(raw_bt, list)
+            else []
+        )
+        raw_cog = runtime.get("cognitive_memory")
+        self.cognitive_state = dict(raw_cog) if isinstance(raw_cog, dict) else {}
         self.mistakes = MistakeMemory.from_dict(row.get("mistakes"))
         points = row.get("calibration_points") or []
         self.calibration_points = [
@@ -447,13 +467,43 @@ class FusionBot:
             self._needle_agent = agent
         return agent
 
+    def _get_cognitive_partner(self) -> cognitive.SaviourCognitivePartner:
+        partner = getattr(self, "_cognitive_partner", None)
+        if partner is None:
+            partner = cognitive.SaviourCognitivePartner.from_dict(
+                self.config.local_state_dir,
+                self.cognitive_state,
+            )
+            self._cognitive_partner = partner
+        return partner
+
     def handle_natural_language(self, query: str) -> str:
-        """Route a plain-English owner message via Cactus Compute Needle 3."""
-        _decision, reply = needle_agent.execute_on_bot(
+        """Route a plain-English owner message via SAVIOUR x Needle 3 cognitive partner."""
+        decision, reply = needle_agent.execute_on_bot(
             self,
             query,
             agent=self._get_needle_agent(),
         )
+        partner = self._get_cognitive_partner()
+        if decision.type == "tool_call" and decision.function_calls:
+            reply = partner.compose_human_reply(
+                self,
+                query,
+                tool_reply=reply,
+                decision_dict=decision.to_dict(),
+            )
+            self.cognitive_state = partner.to_dict()
+            self._save_state(force=True)
+        elif (
+            decision.engine != "charter_shield"
+            and (
+                cognitive.CONVERSATION_GREETING_RE.search(query or "")
+                or cognitive.HUMAN_REFLECTION_RE.search(query or "")
+            )
+        ):
+            reply = partner.compose_human_reply(self, query)
+            self.cognitive_state = partner.to_dict()
+            self._save_state(force=True)
         if self.telegram is not None:
             self._report_command_reply("needle", self.telegram.send(reply))
         return reply
@@ -558,6 +608,7 @@ class FusionBot:
                 at=stamp,
                 observed_at=obs_now,
                 mistakes=self.mistakes,
+                family_fusion=self.family_fusion,
             )
             if not result.actionable or result.signal is None:
                 return (
@@ -605,6 +656,7 @@ class FusionBot:
                 at=stamp,
                 observed_at=obs_now,
                 mistakes=member.mistakes,
+                family_fusion=member.family_fusion,
             )
             if not result.actionable or result.signal is None:
                 refusals.append(f"{member.config.pair}: {result.reason}")
@@ -1008,19 +1060,18 @@ class FusionBot:
             self.store.log_event(
                 {
                     "kind": "shadow_recovery_win",
-                    "pair": self.config.pair,
                     "signal_id": sig.signal_id,
-                    "net_pips": round(net_val, 3),
+                    "outcome": charter.WIN,
+                    "reason": f"{self.config.pair} shadow recovery cleared ({net_val:+.3f}p)",
                 }
             )
         else:
             self.store.log_event(
                 {
                     "kind": "shadow_recovery_miss",
-                    "pair": self.config.pair,
                     "signal_id": sig.signal_id,
                     "outcome": settlement.outcome,
-                    "net_pips": round(net_val, 3),
+                    "reason": f"{self.config.pair} shadow recovery missed ({net_val:+.3f}p)",
                 }
             )
         self._save_state(force=True)
@@ -1079,16 +1130,18 @@ class FusionBot:
                     source="LIVE",
                     at=stamp,
                     mistakes=self.mistakes,
+                    family_fusion=self.family_fusion,
                 )
                 if shadow_res.actionable and shadow_res.signal is not None:
                     self.shadow_recovery["pending"] = shadow_res.signal.to_dict()
                     self.store.log_event(
                         {
                             "kind": "shadow_recovery_open",
-                            "pair": self.config.pair,
                             "signal_id": shadow_res.signal.signal_id,
-                            "side": shadow_res.signal.side,
-                            "horizon_minutes": shadow_res.signal.horizon_minutes,
+                            "reason": (
+                                f"{self.config.pair} {shadow_res.signal.side} "
+                                f"({shadow_res.signal.horizon_minutes}m) shadow recovery opened"
+                            ),
                         }
                     )
                     self._save_state(force=True)
@@ -1103,6 +1156,7 @@ class FusionBot:
             source="LIVE" if not getattr(self.provider, "synthetic", False) else "SYNTHETIC",
             at=stamp,
             mistakes=self.mistakes,
+            family_fusion=self.family_fusion,
         )
 
         if result.gate is not None and result.gate.quality == "GAPPY":
@@ -1377,25 +1431,37 @@ class FusionBot:
             )
             return
 
-        # Council learning: only prototypes that actually spoke get credit.
+        # Council & Strategic Family learning: credit/blame individual rules
+        # and merged specialist families + pairwise family synergies.
+        votes = _votes_from_signal(signal)
+        sess_name = (
+            session_of(signal.entry_time, instruments.for_symbol(self.config.pair))
+            if self.config.session_filter
+            else None
+        )
+        fam_eval_before = self.family_fusion.evaluate_votes(
+            signal.side,
+            votes,
+            regime=signal.regime,
+            session=sess_name,
+        )
         if winning is not None:
-            votes = _votes_from_signal(signal)
             self.weights.observe(votes, winning)
+            self.family_fusion.observe_outcome(
+                votes,
+                winning,
+                regime=signal.regime,
+                session=sess_name,
+                signal_side=signal.side,
+                was_loss=(settlement.outcome == charter.LOSS),
+            )
 
         # Post-mortem: remember what this setup cost, so a pattern that keeps
         # losing can be refused instead of re-tried. Rebuilt from what the
         # signal stored, so the same bar always lands in the same cell.
+        slice_key = MistakeMemory.fingerprint(signal.regime, sess_name, signal.side)
         self.mistakes.mark_reconciled(signal.signal_id)
-        self.mistakes.record(
-            settlement.outcome,
-            MistakeMemory.fingerprint(
-                signal.regime,
-                session_of(signal.entry_time, instruments.for_symbol(self.config.pair))
-                if self.config.session_filter
-                else None,
-                signal.side,
-            ),
-        )
+        self.mistakes.record(settlement.outcome, slice_key)
 
         # Ensure a causal MODE_VETO baseline model exists (fit strictly on bars
         # closed before signal.entry_time, or cold-start neutral VETO) so every
@@ -1417,12 +1483,60 @@ class FusionBot:
             learning_rate=effective_lr,
             allow_synthetic=self.config.allow_synthetic_learning,
         )
-        self.store.log_event(dict(step.to_dict(), kind="online_step", signal_id=signal.signal_id))
+        if step.applied and signal.features and label in (0, 1):
+            self.ensemble.learn_one(
+                signal.features,
+                label,
+                learning_rate=effective_lr,
+                sample_key=signal.signal_id,
+            )
+        post_prob = (
+            self.model.predict_up(signal.features)
+            if (self.model is not None and self.model.trained and signal.features)
+            else None
+        )
+        self.store.log_event(
+            dict(
+                step.to_dict(),
+                kind="online_step",
+                signal_id=signal.signal_id,
+                outcome=settlement.outcome,
+            )
+        )
 
         if step.raw is not None and label is not None:
             self.calibration_points.append((float(step.raw), int(label)))
             self.calibration_points = self.calibration_points[-4000:]
             self._refit_calibration()
+
+        if settlement.outcome in (charter.WIN, charter.LOSS):
+            episode = cognitive.build_trade_reflection(
+                pair=self.config.pair,
+                signal_id=signal.signal_id,
+                side=signal.side,
+                regime=signal.regime,
+                outcome=settlement.outcome,
+                net_pips=float(settlement.net_pips or 0.0),
+                spread_pips=float(settlement.spread_pips or self.config.spread_pips),
+                pre_prob=step.predicted if step.predicted is not None else signal.probability_up,
+                post_prob=post_prob,
+                brier_error=step.squared_error,
+                supporting_families=list(fam_eval_before.supporting_families),
+                opposing_families=list(fam_eval_before.opposing_families),
+                synergy_pairs=list(fam_eval_before.synergy_pairs),
+                loss_streak=self.mistakes.loss_streak(slice_key),
+            )
+            self.learning_journal.append(episode)
+            self.learning_journal = self.learning_journal[-60:]
+            self._get_cognitive_partner().record_experience(
+                "trade_settlement",
+                episode["narrative"],
+                episode,
+            )
+            self.maybe_run_auto_backtest(
+                at=settlement.settled_at,
+                trigger=f"settlement:{signal.signal_id[:8]}",
+            )
 
         self.settled_since_save += 1
         self._save_state(force=True)
@@ -1550,10 +1664,14 @@ class FusionBot:
         if (
             not getattr(self.provider, "synthetic", False)
             and report.system is not None
-            and getattr(report.system, "council_state", None)
-            and not self.weights.active()
         ):
-            self.weights = CouncilWeights.from_dict(report.system.council_state)
+            if getattr(report.system, "council_state", None) and not self.weights.active():
+                self.weights = CouncilWeights.from_dict(report.system.council_state)
+            if (
+                getattr(report.system, "family_state", None)
+                and self.family_fusion.trades_observed == 0
+            ):
+                self.family_fusion = FamilyFusionEngine.from_dict(report.system.family_state)
         self.nightly_report = report.to_dict()
         self.store.save_model_version(
             {
@@ -1671,6 +1789,113 @@ class FusionBot:
                     pass
         self.model = OnlineLogisticModel.cold_start_veto()
 
+    def run_auto_backtest(
+        self,
+        *,
+        at: datetime | None = None,
+        trigger: str = "auto",
+        min_bars: int = 240,
+        max_bars: int = 1800,
+        persist_version: bool = False,
+        allow_paper_eval: bool = False,
+    ) -> dict[str, Any]:
+        """Run a causal purged walk-forward backtest, tune merged families on real bars, and store telemetry."""
+        stamp = parse_datetime(at) if at is not None else now()
+        is_synth = bool(getattr(self.provider, "synthetic", False))
+        history = self._training_candles()[-max_bars:]
+        if not history:
+            history = list(self.candles)[-max_bars:]
+        if len(history) < min_bars:
+            return {
+                "ok": False,
+                "pair": self.config.pair,
+                "trigger": trigger,
+                "bars": len(history),
+                "reason": f"Need at least {min_bars} M1 bars for walk-forward backtest (have {len(history)}).",
+            }
+
+        bt = backtest.run_backtest(
+            history,
+            self.config,
+            folds=4,
+            min_bars=min_bars,
+        )
+        can_learn_from_bars = (not is_synth) and (not allow_paper_eval)
+        if can_learn_from_bars:
+            if bt.council_state and not self.weights.active():
+                self.weights = CouncilWeights.from_dict(bt.council_state)
+            if bt.family_state and self.family_fusion.trades_observed < int(
+                bt.family_state.get("trades_observed", 0) or 0
+            ):
+                self.family_fusion = FamilyFusionEngine.from_dict(bt.family_state)
+
+        summary = {
+            "ok": True,
+            "pair": self.config.pair,
+            "trigger": trigger,
+            "ran_at": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "bars": bt.bars,
+            "folds": bt.folds,
+            "signals": bt.signals,
+            "wins": bt.wins,
+            "losses": bt.losses,
+            "ties": bt.ties,
+            "win_rate": None if bt.win_rate is None else round(bt.win_rate * 100.0, 2),
+            "net_pips": round(bt.net_pips, 2),
+            "expectancy_pips": None if bt.expectancy_pips is None else round(bt.expectancy_pips, 3),
+            "mean_horizon": round(bt.mean_horizon, 1),
+            "edge_status": bt.edge_status,
+            "model_mode": self.model.mode if self.model else MODE_VETO,
+            "learned_families": {k: round(v, 4) for k, v in self.family_fusion.active_families().items()},
+            "active_synergies": {k: round(v, 4) for k, v in self.family_fusion.active_synergies().items()},
+            "per_fold": bt.per_fold,
+            "source": "PAPER_SIMULATION" if (is_synth or allow_paper_eval) else "REAL_CANDLES",
+        }
+        self.auto_backtest_history.append(summary)
+        self.auto_backtest_history = self.auto_backtest_history[-15:]
+        if persist_version and can_learn_from_bars:
+            ver_id = f"auto:{self.config.pair}:{stamp.strftime('%Y-%m-%dT%H:%MZ')}"
+            self.store.save_model_version(
+                {
+                    "version_id": ver_id,
+                    "report": {"auto_backtest": summary, "system": bt.to_dict()},
+                    "created_at": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }
+            )
+        if can_learn_from_bars:
+            self._save_state(force=True)
+        return summary
+
+    def maybe_run_auto_backtest(
+        self,
+        *,
+        at: datetime | None = None,
+        trigger: str = "settlement",
+        min_interval_minutes: int = 15,
+    ) -> dict[str, Any] | None:
+        """Throttle automatic post-trade walk-forward backtests on real market candles."""
+        if getattr(self.provider, "synthetic", False):
+            return None
+        if len(self.candles) < 300:
+            return None
+        stamp = parse_datetime(at) if at is not None else now()
+        if self.auto_backtest_history:
+            last_str = str(self.auto_backtest_history[-1].get("ran_at", ""))
+            if last_str:
+                try:
+                    last_dt = parse_datetime(last_str)
+                    if 0.0 <= (stamp - last_dt).total_seconds() < (min_interval_minutes * 60.0):
+                        return None
+                except (ValueError, TypeError):
+                    pass
+        return self.run_auto_backtest(
+            at=stamp,
+            trigger=trigger,
+            min_bars=240,
+            max_bars=1500,
+            persist_version=True,
+        )
+
     def reconcile_settled_signals(self, *, _as_peer: bool = False) -> int:
         """Idempotently replay historical settled real outcomes not yet recorded in memory."""
         replayed = 0
@@ -1700,20 +1925,35 @@ class FusionBot:
                     continue
                 if stl.outcome in (charter.TIED, charter.UNRESOLVED):
                     continue
+                votes = _votes_from_signal(sig)
+                sess_name = (
+                    session_of(sig.entry_time, instruments.for_symbol(self.config.pair))
+                    if self.config.session_filter
+                    else None
+                )
+                fam_eval_before = self.family_fusion.evaluate_votes(
+                    sig.side,
+                    votes,
+                    regime=sig.regime,
+                    session=sess_name,
+                )
                 winning = settle.winning_side(stl)
                 if winning is not None:
-                    self.weights.observe(_votes_from_signal(sig), winning)
-                self.mistakes.record(
-                    stl.outcome,
-                    MistakeMemory.fingerprint(
-                        sig.regime,
-                        session_of(sig.entry_time, instruments.for_symbol(self.config.pair))
-                        if self.config.session_filter
-                        else None,
-                        sig.side,
-                    ),
-                )
+                    self.weights.observe(votes, winning)
+                    self.family_fusion.observe_outcome(
+                        votes,
+                        winning,
+                        regime=sig.regime,
+                        session=sess_name,
+                        signal_side=sig.side,
+                        was_loss=(stl.outcome == charter.LOSS),
+                    )
+                slice_key = MistakeMemory.fingerprint(sig.regime, sess_name, sig.side)
+                self.mistakes.record(stl.outcome, slice_key)
                 label = settle.learning_label(sig, stl)
+                step_pred = sig.probability_up
+                step_err = None
+                post_prob = None
                 if label in (0, 1) and sig.features:
                     self._ensure_baseline_veto_model(before=sig.entry_time)
                     eff_lr = float(self.config.online_learning_rate)
@@ -1726,8 +1966,41 @@ class FusionBot:
                         source=sig.source,
                         learning_rate=eff_lr,
                     )
+                    if step.applied:
+                        self.ensemble.learn_one(
+                            sig.features,
+                            label,
+                            learning_rate=eff_lr,
+                            sample_key=sig.signal_id,
+                        )
+                    step_pred = step.predicted if step.predicted is not None else sig.probability_up
+                    step_err = step.squared_error
+                    post_prob = (
+                        self.model.predict_up(sig.features)
+                        if (self.model is not None and self.model.trained)
+                        else None
+                    )
                     if step.raw is not None:
                         self.calibration_points.append((float(step.raw), int(label)))
+                if stl.outcome in (charter.WIN, charter.LOSS):
+                    episode = cognitive.build_trade_reflection(
+                        pair=self.config.pair,
+                        signal_id=sig.signal_id,
+                        side=sig.side,
+                        regime=sig.regime,
+                        outcome=stl.outcome,
+                        net_pips=float(stl.net_pips or 0.0),
+                        spread_pips=float(stl.spread_pips or self.config.spread_pips),
+                        pre_prob=step_pred,
+                        post_prob=post_prob,
+                        brier_error=step_err,
+                        supporting_families=list(fam_eval_before.supporting_families),
+                        opposing_families=list(fam_eval_before.opposing_families),
+                        synergy_pairs=list(fam_eval_before.synergy_pairs),
+                        loss_streak=self.mistakes.loss_streak(slice_key),
+                    )
+                    self.learning_journal.append(episode)
+                    self.learning_journal = self.learning_journal[-60:]
                 replayed += 1
             if replayed > 0:
                 self.calibration_points = self.calibration_points[-4000:]
@@ -1749,18 +2022,24 @@ class FusionBot:
     def _save_state(self, *, force: bool = False) -> None:
         if not force and self.settled_since_save < SAVE_STATE_EVERY:
             return
+        runtime_blob: dict[str, Any] = {
+            "paused": self.paused,
+            "telegram_offset": (
+                self.telegram.offset if self.telegram is not None else self._saved_telegram_offset
+            ),
+            "stale_feed_minutes": self.stale_feed_minutes,
+            "telegram_format": self.telegram_format.to_dict(),
+            "shadow_recovery": dict(self.shadow_recovery),
+            "family_fusion": self.family_fusion.to_dict(),
+            "learning_journal": self.learning_journal[-60:],
+            "auto_backtests": self.auto_backtest_history[-15:],
+        }
+        if self.cognitive_state:
+            runtime_blob["cognitive_memory"] = dict(self.cognitive_state)
         payload: dict[str, Any] = {
             "model": self.model.to_dict() if self.model else None,
             "ensemble": self.ensemble.to_dict(),
-            "runtime": {
-                "paused": self.paused,
-                "telegram_offset": (
-                    self.telegram.offset if self.telegram is not None else self._saved_telegram_offset
-                ),
-                "stale_feed_minutes": self.stale_feed_minutes,
-                "telegram_format": self.telegram_format.to_dict(),
-                "shadow_recovery": dict(self.shadow_recovery),
-            },
+            "runtime": runtime_blob,
             "calibration_points": [[point[0], point[1]] for point in self.calibration_points[-2000:]],
             "mistakes": self.mistakes.to_dict(),
         }
@@ -1785,6 +2064,8 @@ class FusionBot:
                 else "RAW"
             ),
             "council_weights": self.weights.weights,
+            "family_weights": self.family_fusion.family_weights,
+            "auto_backtests": len(self.auto_backtest_history),
             "last_cycle": self.last_cycle.to_dict() if self.last_cycle else None,
             "nightly": self.nightly_report,
         }

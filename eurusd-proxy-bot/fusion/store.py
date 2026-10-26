@@ -457,8 +457,30 @@ class Store:
         return None
 
     # --------------------------------------------------------- learning events
+    _LEARNING_EVENT_COLUMNS = frozenset(
+        {
+            "id",
+            "kind",
+            "signal_id",
+            "applied",
+            "reason",
+            "predicted",
+            "raw",
+            "label",
+            "squared_error",
+            "created_at",
+            "outcome",
+        }
+    )
+
     def log_event(self, event: dict) -> None:
-        row = dict(event)
+        raw_row = dict(event)
+        extras = {k: v for k, v in raw_row.items() if k not in self._LEARNING_EVENT_COLUMNS}
+        row = {k: v for k, v in raw_row.items() if k in self._LEARNING_EVENT_COLUMNS}
+        if extras:
+            extra_txt = ", ".join(f"{k}={v}" for k, v in sorted(extras.items()))
+            base_reason = str(row.get("reason") or "").strip()
+            row["reason"] = f"{base_reason} ({extra_txt})" if base_reason else extra_txt
         row.setdefault("created_at", format_datetime(_utcnow()))
         self._write("learning_events", [row])
 

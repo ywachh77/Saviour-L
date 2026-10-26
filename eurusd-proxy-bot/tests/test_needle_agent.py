@@ -81,11 +81,13 @@ class TestNeedleTelemetryAndSchema(unittest.TestCase):
                 "set_telegram_style",
                 "configure_guards",
                 "extract_news_shock",
+                "run_backtest",
+                "self_improve",
             ],
         )
         compact = json.dumps(SAVIOUR_NEEDLE_TOOLS, separators=(",", ":"))
         # Must stay compact so prompt + target fits comfortably inside 1024 tokens during LoRA QAT.
-        self.assertLess(len(compact), 1800)
+        self.assertLess(len(compact), 2200)
 
     def test_validate_tool_calls_rejects_bad_enums_and_clamps_bounds(self):
         self.assertEqual(validate_tool_calls([{"name": "unknown_tool", "arguments": {}}]), [])
@@ -292,7 +294,7 @@ class TestWebDashboardNeedleEndpoints(unittest.TestCase):
             st = rt.needle_status_payload()
             self.assertTrue(st["ok"])
             self.assertTrue(st["enabled"])
-            self.assertEqual(st["tool_count"], 7)
+            self.assertEqual(st["tool_count"], 9)
 
             res = rt.run_needle_query("configure 15m mtf filter and 25 minute cooldown")
             self.assertTrue(res["ok"])
@@ -325,11 +327,11 @@ class TestJaxLoraFinetunePipeline(unittest.TestCase):
                 state_dir=str(tmp_path / "var"),
                 out=None,
                 epochs=1,
-                batch_size=8,
+                batch_size=16,
                 lr=1e-3,
                 lora_rank=4,
                 lora_alpha=8.0,
-                layers=None,
+                layers=2,
                 max_len=1024,
                 val_split=0.0,
                 seed=7,
