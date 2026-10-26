@@ -11,6 +11,7 @@ from .env or os.environ.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -474,12 +475,20 @@ class OperatorRuntime:
 
             is_live = self.live_feed_configured
             base_now = utcnow()
-            eval_stamp = floor_minute(base_now) + timedelta(minutes=1, seconds=1)
 
             if is_live:
-                for member in targets:
-                    member.ingest(at=eval_stamp)
+                live_targets = [
+                    m for m in targets if m.provider is not None and getattr(m.provider, "configured", False)
+                ]
+                if len(live_targets) == 1:
+                    live_targets[0].ingest(at=base_now)
+                elif len(live_targets) > 1:
+                    with ThreadPoolExecutor(max_workers=len(live_targets)) as pool:
+                        list(pool.map(lambda m: m.ingest(at=base_now), live_targets))
                 self.bot.flush_key_pool()
+                base_now = utcnow()
+
+            eval_stamp = self.bot._sealable_stamp(base_now)
 
             cards: list[dict[str, Any]] = []
             emitted_count = 0
@@ -489,8 +498,10 @@ class OperatorRuntime:
                 saved_real_candles = list(member.candles) if (not is_live and self._has_real_candles(member)) else None
 
                 if is_live:
-                    chosen_stamp = eval_stamp
-                    eval_candles = member.candles
+                    chosen_stamp = member._sealable_stamp(base_now)
+                    # Strip any forming current-minute bar against real wall clock base_now
+                    # so rolling chosen_stamp to next_minute can never leak an open bar.
+                    eval_candles = closed_before(member.candles, base_now)
                     member_source_tag = "LIVE"
                     feed_label = "LIVE"
                     steps_scanned = 1

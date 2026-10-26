@@ -226,7 +226,9 @@ class TestPromotionUsesTheReplay(unittest.TestCase):
     def test_a_negative_replay_demotes_a_promoted_model(self):
         from fusion.model import MODE_VETO
 
-        candles = synthetic_series(3200, seed=83)
+        # 5200 bars so the replay clears MIN_SIGNALS_FOR_A_VIEW (200) even with
+        # the tighter anti-climax / non-chasing confluence gate active.
+        candles = synthetic_series(5200, seed=83)
         cfg = config(nightly_min_samples=200)
         champion = self._promoted_champion()
         model, _ensemble, report = run_nightly(candles, [], config=cfg, champion=champion)

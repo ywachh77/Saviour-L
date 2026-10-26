@@ -282,37 +282,99 @@ class FusionEngine:
         if not council.actionable:
             return Verdict("NO SIGNAL", council.reason, regime.name, read=read, council=council)
 
+        min_atr_ratio = float(getattr(config, "min_atr_to_spread_ratio", 0.0) or 0.0)
+        if min_atr_ratio > 0.0 and spread_pips > 0.0 and isinstance(features, dict):
+            inst = instruments.for_symbol(getattr(config, "pair", None))
+            atr_pips_now = abs(float(features.get("atr", 0.0) or 0.0)) / inst.pip
+            if atr_pips_now < spread_pips * min_atr_ratio:
+                return Verdict(
+                    "NO SIGNAL",
+                    f"Spread-to-ATR guard: 1m ATR ({atr_pips_now:.2f}p) is below "
+                    f"{min_atr_ratio:.2f}x spread ({spread_pips:.2f}p).",
+                    regime.name,
+                    read=read,
+                    council=council,
+                )
+
+        is_exhaustion_reversal = "exhaustion reversal" in (council.reason or "")
+
         # Higher-timeframe agreement. A one-minute chart is mostly noise, and
         # the commonest way a scalp fails is by being a pullback inside a larger
         # move going the other way. The tilt was computed alongside the
         # features, so this costs nothing extra.
         if config.mtf_filter:
-            tilt = _mtf_tilt(features, config.mtf_minutes)
-            wanted = mtf.UP if council.side == "BUY" else mtf.DOWN
-            if tilt is not None and tilt != mtf.FLAT and tilt != wanted:
-                leaning = "up" if tilt == mtf.UP else "down"
-                return Verdict(
-                    "NO SIGNAL",
-                    f"Higher-timeframe filter: {config.mtf_minutes}-minute bias is {leaning}"
-                    f" and the trade is {council.side}.",
-                    regime.name,
-                    read=read,
-                    council=council,
-                )
-            min_gap_bps = float(getattr(config, "mtf_min_gap_bps", 0.0) or 0.0)
-            if min_gap_bps > 0.0:
-                gap_bps, mtf_ready = _mtf_gap_bps(features, config.mtf_minutes)
-                if mtf_ready and gap_bps is not None:
-                    signed_gap = gap_bps if council.side == "BUY" else -gap_bps
-                    if signed_gap < min_gap_bps:
+            if is_exhaustion_reversal:
+                gap_htf, ready_htf = _mtf_gap_bps(features, config.mtf_minutes)
+                if ready_htf and gap_htf is not None:
+                    slope_key = f"mtf_slope_{int(config.mtf_minutes)}"
+                    slope_htf = float(features.get(slope_key, 0.0) or 0.0) if isinstance(features, dict) else 0.0
+                    signed_gap_htf = gap_htf if council.side == "BUY" else -gap_htf
+                    signed_slope_htf = slope_htf if council.side == "BUY" else -slope_htf
+                    if signed_gap_htf < -6.0 and signed_slope_htf < -1.0:
                         return Verdict(
                             "NO SIGNAL",
-                            f"Higher-timeframe dead-zone: {config.mtf_minutes}-minute EMA gap "
-                            f"({gap_bps:+.2f} bps) is below the {min_gap_bps:.2f} bps clear-trend threshold for {council.side}.",
+                            f"Higher-timeframe filter: runaway {config.mtf_minutes}-minute trend "
+                            f"({gap_htf:+.2f} bps, slope {slope_htf:+.2f} bps) opposes {council.side} reversal.",
                             regime.name,
                             read=read,
                             council=council,
                         )
+            else:
+                tilt = _mtf_tilt(features, config.mtf_minutes)
+                wanted = mtf.UP if council.side == "BUY" else mtf.DOWN
+                if tilt is not None and tilt != mtf.FLAT and tilt != wanted:
+                    leaning = "up" if tilt == mtf.UP else "down"
+                    return Verdict(
+                        "NO SIGNAL",
+                        f"Higher-timeframe filter: {config.mtf_minutes}-minute bias is {leaning}"
+                        f" and the trade is {council.side}.",
+                        regime.name,
+                        read=read,
+                        council=council,
+                    )
+                min_gap_bps = float(getattr(config, "mtf_min_gap_bps", 0.0) or 0.0)
+                if min_gap_bps > 0.0:
+                    gap_bps, mtf_ready = _mtf_gap_bps(features, config.mtf_minutes)
+                    if mtf_ready and gap_bps is not None:
+                        signed_gap = gap_bps if council.side == "BUY" else -gap_bps
+                        if signed_gap < min_gap_bps:
+                            return Verdict(
+                                "NO SIGNAL",
+                                f"Higher-timeframe dead-zone: {config.mtf_minutes}-minute EMA gap "
+                                f"({gap_bps:+.2f} bps) is below the {min_gap_bps:.2f} bps clear-trend threshold for {council.side}.",
+                                regime.name,
+                                read=read,
+                                council=council,
+                            )
+                        slope_key = f"mtf_slope_{int(config.mtf_minutes)}"
+                        slope_htf = float(features.get(slope_key, 0.0) or 0.0) if isinstance(features, dict) else 0.0
+                        signed_slope = slope_htf if council.side == "BUY" else -slope_htf
+                        if signed_slope < -0.15:
+                            return Verdict(
+                                "NO SIGNAL",
+                                f"Higher-timeframe slope guard: {config.mtf_minutes}-minute EMA slope "
+                                f"({slope_htf:+.2f} bps) is rolling over against {council.side}.",
+                                regime.name,
+                                read=read,
+                                council=council,
+                            )
+                # 5-minute intermediate cascade guard: never sell directly into a
+                # strongly accelerating 5m counter-rally (or buy into a 5m waterfall).
+                if int(config.mtf_minutes) != 5 and isinstance(features, dict):
+                    gap_5, ready_5 = _mtf_gap_bps(features, 5)
+                    if ready_5 and gap_5 is not None:
+                        slope_5 = float(features.get("mtf_slope_5", 0.0) or 0.0)
+                        signed_gap_5 = gap_5 if council.side == "BUY" else -gap_5
+                        signed_slope_5 = slope_5 if council.side == "BUY" else -slope_5
+                        if signed_gap_5 <= -3.0 and signed_slope_5 < -0.25:
+                            return Verdict(
+                                "NO SIGNAL",
+                                f"Higher-timeframe 5m cascade: 5-minute EMA gap ({gap_5:+.2f} bps, "
+                                f"slope {slope_5:+.2f} bps) strongly opposes {council.side}.",
+                                regime.name,
+                                read=read,
+                                council=council,
+                            )
 
         if getattr(config, "mtf_macro_filter", False):
             gap_60, ready_60 = _mtf_gap_bps(features, 60)
@@ -321,7 +383,17 @@ class FusionEngine:
                 slope_60 = float(features.get("mtf_slope_60", 0.0) or 0.0) if isinstance(features, dict) else 0.0
                 signed_gap_60 = gap_60 if council.side == "BUY" else -gap_60
                 signed_slope_60 = slope_60 if council.side == "BUY" else -slope_60
-                if signed_gap_60 < macro_min or signed_slope_60 <= 0.0:
+                if is_exhaustion_reversal:
+                    if signed_gap_60 < -8.0 and signed_slope_60 < -1.0:
+                        return Verdict(
+                            "NO SIGNAL",
+                            f"Macro 60m HTF filter: runaway macro trend ({gap_60:+.2f} bps / slope {slope_60:+.2f} bps) "
+                            f"opposes {council.side} reversal.",
+                            regime.name,
+                            read=read,
+                            council=council,
+                        )
+                elif signed_gap_60 < macro_min or signed_slope_60 <= 0.0:
                     return Verdict(
                         "NO SIGNAL",
                         f"Macro 60m HTF filter: gap {gap_60:+.2f} bps / slope {slope_60:+.2f} bps "

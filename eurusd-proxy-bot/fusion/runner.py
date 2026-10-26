@@ -14,6 +14,7 @@ or an Actions overlap cannot run the same minute twice.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import signal
 import time
@@ -25,7 +26,7 @@ from typing import Any, Sequence
 from . import charter, instruments, digest, heartbeat, learning, protections, settle, stats
 from .config import Config
 from .council import CouncilWeights, Vote
-from .domain import Candle, Signal
+from .domain import Candle, Signal, closed_before
 from .engine import FusionEngine
 from .keypool import KeyPool
 from .model import MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
@@ -477,28 +478,18 @@ class FusionBot:
         Silence would be easier to mistake for a working system than a
         refusal, which is exactly why the refusal is spelled out.
         """
-        stamp = at or now()
+        raw_now = at or now()
         if self.paused:
             return "Signals are paused. Send /resume to start again."
 
-        # Target the minute that is about to open, not the one running.
-        #
-        # The charter discards any signal sealed more than ten seconds after a
-        # minute opened, because backdating an entry that already happened is a
-        # lie. Asked at :37 past the minute, a prediction about *this* minute
-        # could therefore never be sealed. A prediction about the next minute
-        # is not backdated at all -- its entry price does not exist yet -- and
-        # it is what someone hitting /signals actually wants: a call made
-        # before the bar, which is the only kind that can be traded.
-        if at is None:
-            next_minute = floor_minute(stamp) + timedelta(minutes=1)
-            stamp = next_minute + timedelta(seconds=1)
-
         if not self.peer_bots:
             if self.provider is not None and getattr(self.provider, "configured", False):
-                self.ingest(at=stamp)
+                self.ingest(at=raw_now)
                 self.flush_key_pool()
-            if not self.candles:
+            real_now = at or now()
+            stamp = self._sealable_stamp(real_now) if at is None else at
+            causal_candles = closed_before(self.candles, real_now)
+            if not causal_candles:
                 return "No price data available. The provider may be unreachable; try again shortly."
 
             guard = self._check_runtime_protections(stamp)
@@ -511,7 +502,7 @@ class FusionBot:
                 )
 
             result = self.engine.evaluate(
-                self.candles,
+                causal_candles,
                 model=self.model,
                 ensemble=self.ensemble,
                 weights=self.weights,
@@ -533,17 +524,21 @@ class FusionBot:
                      bucket=minute_bucket(stamp))
             )
             self.deliver(signal, brief=True)
-            self.settle_due(at=stamp)
+            self.settle_due(at=real_now)
             return format_brief_signal(signal, self.telegram_format)
 
-        # Multi-market evaluation across every configured instrument.
+        # Multi-market evaluation across every configured instrument (concurrent ingest).
+        self.ingest_all(at=raw_now)
+        self.flush_key_pool()
+        real_now = at or now()
+        stamp = self._sealable_stamp(real_now) if at is None else at
+
         emitted: list[str] = []
         refusals: list[str] = []
         any_candles = False
         for member in (self, *self.peer_bots.values()):
-            if member.provider is not None and getattr(member.provider, "configured", False):
-                member.ingest(at=stamp)
-            if not member.candles:
+            causal_candles = closed_before(member.candles, real_now)
+            if not causal_candles:
                 refusals.append(f"{member.config.pair}: no price data available.")
                 continue
             any_candles = True
@@ -552,7 +547,7 @@ class FusionBot:
                 refusals.append(f"{member.config.pair}: {guard.reason}")
                 continue
             result = member.engine.evaluate(
-                member.candles,
+                causal_candles,
                 model=member.model,
                 ensemble=member.ensemble,
                 weights=member.weights,
@@ -571,8 +566,7 @@ class FusionBot:
             member.deliver(signal, brief=True)
             emitted.append(format_brief_signal(signal, self.telegram_format))
 
-        self.flush_key_pool()
-        self.settle_due(at=stamp)
+        self.settle_due(at=real_now)
         if emitted:
             return "\n\n".join(emitted)
         if not any_candles:
@@ -641,9 +635,83 @@ class FusionBot:
             return stamp
         return opened + timedelta(minutes=1, seconds=1)
 
-    def minute_cycle(self, at: datetime | None = None, *, _as_peer: bool = False) -> CycleReport:
-        stamp = self._sealable_stamp(at or now())
-        bucket = minute_bucket(stamp)
+    def wait_for_seal_window(
+        self,
+        *,
+        min_offset_seconds: float = 1.5,
+        max_entry_seconds: float = 4.5,
+        sleep_fn=time.sleep,
+    ) -> datetime:
+        """Align a live scheduled runner to the opening seal window of a real minute.
+
+        Waking mid-minute (e.g. :24s or :48s) and fabricating ``next_minute + 1s``
+        without waiting caused two live timing defects:
+        1. Twelve Data's unfinished forming bar for the current minute was
+           accepted by ``closed_before(..., next_minute)`` as if it had closed;
+        2. Signals were dispatched up to 36s BEFORE ``entry_time`` opened.
+
+        Waiting at most ~57s for ``next_minute + 1.5s`` guarantees the previous
+        M1 candle has genuinely closed on the exchange AND ``entry_time`` has
+        already opened on the real wall clock, with ~8.5s of seal headroom left.
+        """
+        current = now()
+        opened = floor_minute(current)
+        elapsed = (current - opened).total_seconds()
+        if elapsed < min_offset_seconds:
+            sleep_fn(max(0.0, min_offset_seconds - elapsed))
+            return now()
+        if elapsed <= max_entry_seconds:
+            return current
+
+        # Free time before the next minute opens: settle any already-expired
+        # signals and flush pending outbox deliveries first.
+        self.settle_due()
+        self.flush_outbox()
+
+        current = now()
+        opened = floor_minute(current)
+        elapsed = (current - opened).total_seconds()
+        if min_offset_seconds <= elapsed <= max_entry_seconds:
+            return current
+        target = (
+            opened + timedelta(seconds=min_offset_seconds)
+            if elapsed < min_offset_seconds
+            else opened + timedelta(minutes=1, seconds=min_offset_seconds)
+        )
+        wait_seconds = (target - current).total_seconds()
+        if wait_seconds > 0:
+            sleep_fn(wait_seconds)
+        return now()
+
+    def ingest_all(self, at: datetime | None = None) -> int:
+        """Fetch latest candles across all configured instruments concurrently."""
+        members = [
+            m
+            for m in (self, *self.peer_bots.values())
+            if m.provider is not None and getattr(m.provider, "configured", False)
+        ]
+        if not members:
+            return 0
+        if len(members) == 1:
+            return members[0].ingest(at=at)
+        with ThreadPoolExecutor(max_workers=len(members)) as pool:
+            futures = [pool.submit(m.ingest, at=at) for m in members]
+            return sum(int(f.result() or 0) for f in futures)
+
+    def minute_cycle(
+        self,
+        at: datetime | None = None,
+        *,
+        _as_peer: bool = False,
+        _already_ingested: bool = False,
+        _causal_cutoff: datetime | None = None,
+    ) -> CycleReport:
+        real_clock_mode = at is None
+        woke_at = now() if real_clock_mode else at
+        assert woke_at is not None
+        planned_stamp = self._sealable_stamp(woke_at)
+        planned_minute = floor_minute(planned_stamp)
+        bucket = minute_bucket(planned_stamp)
         job_bucket = bucket if self.config.pair == "EUR/USD" else f"{self.config.pair}|{bucket}"
         self.cycles += 1
 
@@ -651,12 +719,46 @@ class FusionBot:
             # Another runner already owns this minute. Nothing to do, no harm done.
             return CycleReport(bucket, "SKIPPED", "Another runner already claimed this minute.")
 
-        self.ingest(at=stamp)
-        report = self.evaluate_minute(bucket=bucket, at=stamp)
+        if not _already_ingested:
+            if not _as_peer and self.peer_bots:
+                self.ingest_all(at=woke_at)
+            else:
+                self.ingest(at=woke_at)
+
+        if real_clock_mode:
+            post_ingest_now = now()
+            causal_cutoff = post_ingest_now
+            # If we woke inside planned_minute's seal window, measure seal latency
+            # against the TRUE post-ingest wall clock so a slow HTTP fetch (>10s)
+            # is honestly caught as DISCARDED_LATE instead of masked by pre-ingest stamp.
+            eval_stamp = (
+                post_ingest_now
+                if floor_minute(woke_at) == planned_minute
+                else planned_stamp
+            )
+        else:
+            causal_cutoff = _causal_cutoff or woke_at
+            eval_stamp = planned_stamp
+
+        report = self.evaluate_minute(bucket=bucket, at=eval_stamp, causal_cutoff=causal_cutoff)
         if self.peer_bots:
             per_pair: list[tuple[str, CycleReport]] = [(self.config.pair, report)]
             for symbol, peer in self.peer_bots.items():
-                peer_report = peer.minute_cycle(at=stamp, _as_peer=True)
+                if real_clock_mode:
+                    peer_now = now()
+                    peer_stamp = peer_now if floor_minute(woke_at) == planned_minute else planned_stamp
+                    peer_report = peer._run_peer_minute_cycle(
+                        bucket=bucket,
+                        eval_stamp=peer_stamp,
+                        causal_cutoff=peer_now,
+                    )
+                else:
+                    peer_report = peer.minute_cycle(
+                        at=planned_stamp,
+                        _as_peer=True,
+                        _already_ingested=True,
+                        _causal_cutoff=causal_cutoff,
+                    )
                 per_pair.append((symbol, peer_report))
             report = _summarise_market_reports(bucket, per_pair)
 
@@ -675,6 +777,33 @@ class FusionBot:
         )
         if not _as_peer:
             self.flush_key_pool()
+        return report
+
+    def _run_peer_minute_cycle(
+        self,
+        *,
+        bucket: str,
+        eval_stamp: datetime,
+        causal_cutoff: datetime,
+    ) -> CycleReport:
+        """Execute a peer instrument's already-ingested minute evaluation with real post-ingest clock."""
+        job_bucket = f"{self.config.pair}|{bucket}"
+        self.cycles += 1
+        if not self.store.claim_job("minute", job_bucket, runner=self.config.runner):
+            return CycleReport(bucket, "SKIPPED", "Another runner already claimed this minute.")
+        report = self.evaluate_minute(bucket=bucket, at=eval_stamp, causal_cutoff=causal_cutoff)
+        self.last_cycle = report
+        hb_extra = report.to_dict()
+        hb_extra["bucket"] = job_bucket
+        if not str(hb_extra.get("reason", "")).startswith(f"{self.config.pair}:"):
+            hb_extra["reason"] = f"{self.config.pair}: {hb_extra.get('reason', '')}"
+        self.store.heartbeat(
+            heartbeat.build_heartbeat(
+                runner=self.config.runner,
+                phase="minute",
+                extra=hb_extra,
+            )
+        )
         return report
 
     def ingest(self, at: datetime | None = None) -> int:
@@ -796,10 +925,41 @@ class FusionBot:
         self._save_state(force=True)
         return won
 
-    def evaluate_minute(self, *, bucket: str, at: datetime | None = None) -> CycleReport:
+    def evaluate_minute(
+        self,
+        *,
+        bucket: str,
+        at: datetime | None = None,
+        causal_cutoff: datetime | None = None,
+    ) -> CycleReport:
         stamp = at or now()
-        if not self.candles:
+        eval_candles = (
+            closed_before(self.candles, causal_cutoff)
+            if causal_cutoff is not None
+            else self.candles
+        )
+        if not eval_candles:
             return CycleReport(bucket, charter.SEAL_ABSTAIN, "No candles available yet.")
+
+        # On a real-clock boundary seal (causal_cutoff inside the same minute as
+        # stamp), require the immediately preceding M-1 bar to be present so a
+        # delayed provider cannot silently trade off a 2-minute-old M-2 bar.
+        if (
+            causal_cutoff is not None
+            and self.provider is not None
+            and getattr(self.provider, "configured", False)
+            and not getattr(self.provider, "synthetic", False)
+            and floor_minute(causal_cutoff) == floor_minute(stamp)
+        ):
+            expected_prev = floor_minute(stamp) - timedelta(minutes=1)
+            if eval_candles[-1].timestamp < expected_prev:
+                age_s = (stamp - eval_candles[-1].timestamp).total_seconds()
+                return CycleReport(
+                    bucket,
+                    charter.SEAL_ABSTAIN,
+                    f"Data gate: previous minute bar ({expected_prev.strftime('%H:%M')}Z) not published yet "
+                    f"(latest {eval_candles[-1].timestamp.strftime('%H:%M')}Z, {age_s:.0f}s old).",
+                )
 
         self._resolve_shadow_recovery(stamp)
         guard = self._check_runtime_protections(stamp)
@@ -811,7 +971,7 @@ class FusionBot:
                 and not getattr(self.provider, "synthetic", False)
             ):
                 shadow_res = self.engine.evaluate(
-                    self.candles,
+                    eval_candles,
                     model=self.model,
                     ensemble=self.ensemble,
                     weights=self.weights,
@@ -835,7 +995,7 @@ class FusionBot:
             return CycleReport(bucket, charter.SEAL_ABSTAIN, guard.reason)
 
         result = self.engine.evaluate(
-            self.candles,
+            eval_candles,
             model=self.model,
             ensemble=self.ensemble,
             weights=self.weights,
@@ -1014,8 +1174,46 @@ class FusionBot:
         return key.split("|", 1)[-1] if key.startswith("signal|") else None
 
     # ------------------------------------------------------------ settlement
-    def settle_due(self, at: datetime | None = None) -> int:
+    def _needs_settlement_ingest(self, stamp: datetime) -> bool:
+        """True only when a due signal's exit bar has closed on the clock and is missing in memory."""
+        if self.provider is None or not getattr(self.provider, "configured", False):
+            return False
+        last_refresh = float(getattr(self, "_last_settle_refresh_mono", 0.0) or 0.0)
+        if last_refresh > 0.0 and (time.monotonic() - last_refresh) < 30.0:
+            return False
+        candidates: list[dict] = list(self.store.pending_signals(self.config.pair))
+        pending_shadow = self.shadow_recovery.get("pending")
+        if isinstance(pending_shadow, dict):
+            candidates.append(pending_shadow)
+        for row in candidates:
+            try:
+                sig = Signal.from_dict(row)
+            except (KeyError, ValueError, TypeError):
+                continue
+            exit_bar = _exit_stamp(sig)
+            # An M1 bar stamped exit_bar closes at exit_bar + 1 minute (+2s publish buffer).
+            if stamp >= exit_bar + timedelta(minutes=1, seconds=2):
+                if not (self._has_candle(sig.entry_time) and self._has_candle(exit_bar)):
+                    return True
+        return False
+
+    def settle_due(self, at: datetime | None = None, *, _as_peer: bool = False) -> int:
         stamp = at or now()
+        if not _as_peer:
+            due_members = [
+                m for m in (self, *self.peer_bots.values()) if m._needs_settlement_ingest(stamp)
+            ]
+            if due_members:
+                now_mono = time.monotonic()
+                for m in due_members:
+                    m._last_settle_refresh_mono = now_mono
+                if len(due_members) == 1:
+                    due_members[0].ingest(at=stamp)
+                else:
+                    with ThreadPoolExecutor(max_workers=len(due_members)) as pool:
+                        list(pool.map(lambda m: m.ingest(at=stamp), due_members))
+                self.flush_key_pool()
+
         self._resolve_shadow_recovery(stamp)
         count = 0
         for row in self.store.pending_signals(self.config.pair):
@@ -1050,7 +1248,7 @@ class FusionBot:
             self._settle_one(signal)
             count += 1
         for peer in self.peer_bots.values():
-            count += peer.settle_due(at=stamp)
+            count += peer.settle_due(at=stamp, _as_peer=True)
         return count
 
     def _settle_one(self, signal: Signal) -> None:
@@ -1208,13 +1406,16 @@ class FusionBot:
             rows = self.store.load_candles(self.config.pair, limit=limit)
         except Exception:  # noqa: BLE001 - a training run must not kill the cycle
             return list(self.candles)
-        candles = []
+        by_ts: dict[datetime, Candle] = {}
         for row in rows:
             try:
-                candles.append(Candle.from_mapping(row))
+                candle = Candle.from_mapping(row)
+                by_ts[candle.timestamp] = candle
             except (ValueError, KeyError, TypeError):
                 continue
-        return candles or list(self.candles)
+        if not by_ts:
+            return list(self.candles)
+        return sorted(by_ts.values(), key=lambda item: item.timestamp)
 
     def nightly_job(self, at: datetime | None = None) -> dict:
         stamp = at or now()
