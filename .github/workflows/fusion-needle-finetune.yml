@@ -1,0 +1,83 @@
+name: fusion-needle-finetune
+
+# Fine-tunes Cactus Compute Needle 3 (Apache-2.0, $0 local LoRA QAT) on
+# SAVIOUR's curated operator-command & news-shock JSONL dataset, exports a
+# merged W4A8 .cact archive (saviour_needle3.cact), verifies 100% refusal &
+# held-out accuracy, and caches the tuned weights for fusion-cycle.
+
+on:
+  workflow_dispatch:
+    inputs:
+      epochs:
+        description: "LoRA QAT training epochs"
+        required: false
+        default: "4"
+      layers:
+        description: "Exported ladder depth (2..20 layers)"
+        required: false
+        default: "8"
+  push:
+    branches: ["main"]
+    paths:
+      - "eurusd-proxy-bot/data/needle_saviour_*.jsonl"
+      - "eurusd-proxy-bot/scripts/needle_finetune.py"
+      - "eurusd-proxy-bot/fusion/needle_agent.py"
+      - ".github/workflows/fusion-needle-finetune.yml"
+
+concurrency:
+  group: fusion-needle-finetune
+  cancel-in-progress: true
+
+jobs:
+  finetune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: eurusd-proxy-bot
+    env:
+      NEEDLE_TELEMETRY: "0"
+      DO_NOT_TRACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: eurusd-proxy-bot/requirements-needle-train.txt
+
+      - name: Install Needle 3 training stack
+        run: pip install -r requirements-needle-train.txt
+
+      - name: Fetch Needle 3 C++ engine for runtime verification
+        run: needle fetch --generation 3
+
+      - name: Run SAVIOUR Needle 3 LoRA QAT fine-tune & .cact export
+        run: |
+          python3 scripts/needle_finetune.py \
+            --epochs "${{ inputs.epochs || '4' }}" \
+            --batch-size 8 \
+            --lr 3e-4 \
+            --lora-rank 16 \
+            --lora-alpha 32 \
+            --layers "${{ inputs.layers || '8' }}"
+
+      - name: Save tuned Needle 3 .cact & engine cache for fusion-cycle
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            eurusd-proxy-bot/var/needle/saviour_needle3.cact
+            eurusd-proxy-bot/var/needle/finetune_report.json
+            ~/.cache/needle
+          key: saviour-needle3-${{ runner.os }}-${{ hashFiles('eurusd-proxy-bot/data/needle_saviour_train.jsonl', 'eurusd-proxy-bot/fusion/needle_agent.py') }}
+
+      - name: Upload tuned SAVIOUR Needle 3 .cact artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: saviour-needle3-cact
+          path: |
+            eurusd-proxy-bot/var/needle/saviour_needle3.cact
+            eurusd-proxy-bot/var/needle/saviour_lora.safetensors
+            eurusd-proxy-bot/var/needle/finetune_report.json
+          retention-days: 30

@@ -3,9 +3,13 @@
 .env.*
 !.env.example
 
-# Local runtime state (candles, signals, model state)
+# Local runtime state (candles, signals, model state, fine-tuned weights)
 var/
+checkpoints/
+*.safetensors
+*.cact
 *.jsonl
+!data/*.jsonl
 
 # Python
 __pycache__/

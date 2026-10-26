@@ -1,5 +1,8 @@
 # Portable copies of the bot (kept on disk, not in git)
 *.zip
 
-# Local runtime state
+# Local runtime state & fine-tuned model artifacts
 var/
+checkpoints/
+*.safetensors
+*.cact

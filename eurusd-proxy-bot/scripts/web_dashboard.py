@@ -39,6 +39,7 @@ from fusion import (  # noqa: E402
     instruments,
     lookahead,
     mtf,
+    needle_agent,
     protections,
     regime as regime_mod,
     risk,
@@ -69,7 +70,7 @@ from fusion.timeutil import floor_minute, format_datetime, minute_bucket, now as
 from scripts.set_keys import normalise_keys  # noqa: E402
 
 MAX_JSON_BODY = 32_768
-TESTS_PASSING_BASELINE = 669
+TESTS_PASSING_BASELINE = 691
 
 SIM_DEFAULTS: dict[str, tuple[float, float, int]] = {
     "EUR/USD": (1.08520, 0.00024, 101),
@@ -206,6 +207,8 @@ class OperatorRuntime:
             cfg.loss_guard_shadow_recovery = True
         if not envfile.get_value(env_lines, "FX_ROLLOVER_GUARD"):
             cfg.fx_rollover_guard = True
+        if not envfile.get_value(env_lines, "NEEDLE_ENABLED"):
+            cfg.needle_enabled = True
 
         if self._override_state_dir is not None:
             cfg.local_state_dir = str(self._override_state_dir)
@@ -227,6 +230,11 @@ class OperatorRuntime:
         self._cloud_telegram_offset = int(runtime_blob.get("telegram_offset", 0) or 0)
         self.bot = FusionBot(config=cfg, store=self.store)
         self.bot.startup()
+        self.needle = needle_agent.SaviourNeedleAgent(
+            state_dir=cfg.local_state_dir,
+            weights_path=(cfg.needle_weights_path or None),
+            min_confidence=cfg.needle_min_confidence,
+        )
         self._synced_pairs = {
             m.config.pair for m in self._all_members() if len(m.candles) >= 60
         }
@@ -452,6 +460,7 @@ class OperatorRuntime:
                     "store_errors": self.store.errors[-5:],
                     "alerts": self.store.recent_alerts(limit=8),
                 },
+                "needle": self.needle.status(),
             }
 
     def generate_signals(
@@ -927,6 +936,68 @@ class OperatorRuntime:
                 "store_errors": self.store.errors[-8:],
             }
 
+    def needle_status_payload(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "ok": True,
+                "enabled": self.config.needle_enabled,
+                **self.needle.status(),
+            }
+
+    def run_needle_query(self, query: str, *, execute: bool = True) -> dict[str, Any]:
+        with self.lock:
+            decision = self.needle.route(query)
+            if not execute or decision.type != "tool_call" or not decision.function_calls:
+                return {
+                    "ok": True,
+                    "executed": False,
+                    "decision": decision.to_dict(),
+                    "reply": decision.refusal_reason or "No tool executed.",
+                    "signal_run": None,
+                }
+
+            signal_run: dict[str, Any] | None = None
+            non_scan_calls = [c for c in decision.function_calls if c["name"] != "scan_market"]
+            scan_calls = [c for c in decision.function_calls if c["name"] == "scan_market"]
+
+            replies: list[str] = []
+            if non_scan_calls:
+                sub_agent_decision, sub_reply = needle_agent.execute_on_bot(
+                    self.bot,
+                    query,
+                    agent=self.needle,
+                )
+                # Filter out duplicate scan_market text when web signal studio also runs below
+                if not scan_calls:
+                    return {
+                        "ok": True,
+                        "executed": True,
+                        "decision": sub_agent_decision.to_dict(),
+                        "reply": sub_reply,
+                        "signal_run": None,
+                    }
+                # Re-run only non-scan outputs cleanly for reply banner
+                replies.append(sub_reply.split("\n\n")[0])
+
+            for call in scan_calls:
+                pair = str(call["arguments"].get("pair") or "ALL")
+                mode = str(call["arguments"].get("mode") or "now")
+                signal_run = self.generate_signals(pair=pair, mode=mode, dispatch_telegram=False)
+                cards = signal_run.get("cards") or []
+                summary_lines = [
+                    f"{c['pair']}: {c['side']} ({c['seal_state']}) — {c['reason']}"
+                    for c in cards
+                ]
+                replies.append("\n".join(summary_lines))
+
+            return {
+                "ok": True,
+                "executed": True,
+                "decision": decision.to_dict(),
+                "reply": "\n\n".join(r for r in replies if r),
+                "signal_run": signal_run,
+            }
+
     def strategies_payload(self) -> dict[str, Any]:
         with self.lock:
             weights = self.bot.weights.weights
@@ -1261,6 +1332,10 @@ def make_handler(runtime: OperatorRuntime):
                 self._send_json(runtime.credentials_payload())
                 return
 
+            if route == "/api/needle/status":
+                self._send_json(runtime.needle_status_payload())
+                return
+
             if route == "/api/risk":
                 qs = parse_qs(parsed.query)
                 try:
@@ -1343,6 +1418,15 @@ def make_handler(runtime: OperatorRuntime):
 
                 if route == "/api/credentials":
                     self._send_json(runtime.save_credentials(body))
+                    return
+
+                if route == "/api/needle/run":
+                    self._send_json(
+                        runtime.run_needle_query(
+                            str(body.get("query", "")),
+                            execute=bool(body.get("execute", True)),
+                        )
+                    )
                     return
 
             except (ValueError, KeyError) as exc:

@@ -231,6 +231,12 @@ class Config:
     # --- switches ---
     allow_synthetic_learning: bool = False  # charter: never flip this on
     require_owner_commands: bool = True
+    # Cactus Compute Needle 3 (Apache-2.0) natural-language tool & headline router.
+    # Opt-in on bare Config() so unit tests for strict slash-only Telegram stay
+    # unchanged; enabled in live workflows & Web Operator Console via NEEDLE_ENABLED=1.
+    needle_enabled: bool = False
+    needle_weights_path: str = ""
+    needle_min_confidence: float = 0.55
 
     @property
     def telegram_ready(self) -> bool:
@@ -266,6 +272,7 @@ class Config:
             "fx_rollover_guard": self.fx_rollover_guard,
             "telegram_signal_style": self.telegram_signal_style,
             "telegram_result_style": self.telegram_result_style,
+            "needle_enabled": self.needle_enabled,
             "synthetic_learning_allowed": self.allow_synthetic_learning,
         }
 
@@ -380,6 +387,9 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         runner=os.environ.get("RUNNER", "github-actions").strip() or "github-actions",
         allow_synthetic_learning=False,
         require_owner_commands=_bool("REQUIRE_OWNER_COMMANDS", True),
+        needle_enabled=_bool("NEEDLE_ENABLED", False),
+        needle_weights_path=os.environ.get("NEEDLE_WEIGHTS_PATH", "").strip(),
+        needle_min_confidence=_float("NEEDLE_MIN_CONFIDENCE", 0.55),
     )
 
 

@@ -1,0 +1,65 @@
+name: needle-finetune
+
+on:
+  workflow_dispatch:
+    inputs:
+      epochs:
+        description: "LoRA QAT training epochs"
+        required: false
+        default: "4"
+      layers:
+        description: "Exported ladder depth (2..20 layers)"
+        required: false
+        default: "8"
+  push:
+    branches: ["main"]
+    paths:
+      - "data/needle_saviour_*.jsonl"
+      - "scripts/needle_finetune.py"
+      - "fusion/needle_agent.py"
+
+concurrency:
+  group: fusion-needle-finetune
+  cancel-in-progress: true
+
+jobs:
+  finetune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      NEEDLE_TELEMETRY: "0"
+      DO_NOT_TRACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Locate the bot directory
+        id: locate
+        run: |
+          if [ -d eurusd-proxy-bot/fusion ]; then
+            echo "dir=eurusd-proxy-bot" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Needle 3 training stack
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: pip install -r requirements-needle-train.txt
+
+      - name: Fetch Needle 3 C++ engine
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: needle fetch --generation 3
+
+      - name: Run SAVIOUR Needle 3 LoRA QAT fine-tune & .cact export
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: |
+          python3 scripts/needle_finetune.py \
+            --epochs "${{ inputs.epochs || '4' }}" \
+            --batch-size 8 \
+            --lr 3e-4 \
+            --lora-rank 16 \
+            --lora-alpha 32 \
+            --layers "${{ inputs.layers || '8' }}"

@@ -100,6 +100,9 @@ class TestWorkflowParity(unittest.TestCase):
         "LOSS_GUARD_STREAK",
         "LOSS_GUARD_SHADOW_RECOVERY",
         "FX_ROLLOVER_GUARD",
+        "NEEDLE_ENABLED",
+        "NEEDLE_TELEMETRY",
+        "DO_NOT_TRACK",
     )
 
     def test_cycle_and_nightly_workflows_share_identical_strategy_flags(self):

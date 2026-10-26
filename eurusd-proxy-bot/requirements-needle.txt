@@ -1,0 +1,3 @@
+# Optional lightweight runtime client for Cactus Compute Needle 3 (Apache-2.0, $0 local)
+# Always run with NEEDLE_TELEMETRY=0 and DO_NOT_TRACK=1 (enforced automatically in fusion/needle_agent.py).
+cactus-needle>=3.2.8

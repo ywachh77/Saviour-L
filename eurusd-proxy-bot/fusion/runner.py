@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Sequence
 
-from . import charter, instruments, digest, heartbeat, learning, protections, settle, stats
+from . import charter, instruments, digest, heartbeat, learning, needle_agent, protections, settle, stats
 from .config import Config
 from .council import CouncilWeights, Vote
 from .domain import Candle, Signal, closed_before
@@ -308,11 +308,16 @@ class FusionBot:
             poll_error = False
             try:
                 before = self.telegram.offset
-                for command in self.telegram.poll_commands(timeout_seconds=timeout):
+                for command in self.telegram.poll_commands(
+                    timeout_seconds=timeout,
+                    include_plain_text=self.config.needle_enabled,
+                ):
                     if not command.from_owner:
                         # Silent by design: the bot does not talk to strangers.
                         continue
-                    self.handle_command(command.command)
+                    self.handle_command(
+                        command.text if command.command == "__needle__" else command.command
+                    )
                     handled += 1
                 poll_error = bool(self.telegram.last_poll_error)
                 self._report_telegram_visibility()
@@ -397,11 +402,16 @@ class FusionBot:
         if self.telegram is None or not self.telegram.configured:
             return
         before = self.telegram.offset
-        for command in self.telegram.poll_commands(timeout_seconds=timeout_seconds):
+        for command in self.telegram.poll_commands(
+            timeout_seconds=timeout_seconds,
+            include_plain_text=self.config.needle_enabled,
+        ):
             if not command.from_owner:
                 # Silent by design: the bot does not talk to strangers.
                 continue
-            self.handle_command(command.command)
+            self.handle_command(
+                command.text if command.command == "__needle__" else command.command
+            )
         self._report_telegram_visibility()
         if self.telegram.offset != before:
             # Acknowledge the updates. This container exits in a few minutes, so
@@ -414,30 +424,55 @@ class FusionBot:
         for peer in self.peer_bots.values():
             peer.paused = value
 
+    def _get_needle_agent(self) -> needle_agent.SaviourNeedleAgent:
+        agent = getattr(self, "_needle_agent", None)
+        if agent is None:
+            agent = needle_agent.SaviourNeedleAgent(
+                state_dir=self.config.local_state_dir,
+                weights_path=(self.config.needle_weights_path or None),
+                min_confidence=self.config.needle_min_confidence,
+            )
+            self._needle_agent = agent
+        return agent
+
+    def handle_natural_language(self, query: str) -> str:
+        """Route a plain-English owner message via Cactus Compute Needle 3."""
+        _decision, reply = needle_agent.execute_on_bot(
+            self,
+            query,
+            agent=self._get_needle_agent(),
+        )
+        if self.telegram is not None:
+            self._report_command_reply("needle", self.telegram.send(reply))
+        return reply
+
     def handle_command(self, command: str) -> str:
-        if command == "/start":
+        clean = (command or "").strip()
+        if clean == "/start":
             self._set_paused(False)
             self._save_state(force=True)
             markets = ", ".join(self.config.active_pairs)
             text = f"FUSION BOT is live for {markets} M1 research signals.\n\n" + HELP_TEXT
-        elif command == "/help":
+        elif clean == "/help":
             text = HELP_TEXT
-        elif command == "/status":
+        elif clean == "/status":
             text = self.status_text()
-        elif command == "/pause":
+        elif clean == "/pause":
             self._set_paused(True)
             self._save_state(force=True)
             text = "Signals paused. Settlement and learning continue."
-        elif command == "/resume":
+        elif clean == "/resume":
             self._set_paused(False)
             self._save_state(force=True)
             text = "Signals resumed."
-        elif command == "/signals":
+        elif clean == "/signals":
             text = self.on_demand_signal()
+        elif self.config.needle_enabled and clean and not clean.startswith("/"):
+            return self.handle_natural_language(clean)
         else:
             text = "Unknown command.\n\n" + HELP_TEXT
         if self.telegram is not None:
-            self._report_command_reply(command, self.telegram.send(text))
+            self._report_command_reply(clean or command, self.telegram.send(text))
         return text
 
     def _report_command_reply(self, command: str, result) -> None:

@@ -157,7 +157,12 @@ class TelegramClient:
         return SendResult(True, charter.DELIVERY_SENT, message_id=str(message_id))
 
     # -------------------------------------------------------------- receiving
-    def poll_commands(self, timeout_seconds: int = 0) -> list[IncomingCommand]:
+    def poll_commands(
+        self,
+        timeout_seconds: int = 0,
+        *,
+        include_plain_text: bool = False,
+    ) -> list[IncomingCommand]:
         """Fetch pending updates and return the commands in them.
 
         Every caller filters on ``from_owner``; this returns everything so the
@@ -206,10 +211,12 @@ class TelegramClient:
             self.offset = max(self.offset or 0, update_id + 1)
             message = update.get("message") or update.get("edited_message") or {}
             text = str(message.get("text", "")).strip()
-            if not text.startswith("/"):
+            if not text:
+                continue
+            if not text.startswith("/") and not include_plain_text:
                 continue
             chat_id = str(((message.get("chat") or {}).get("id")) or "")
-            command = text.split()[0].split("@")[0].lower()
+            command = text.split()[0].split("@")[0].lower() if text.startswith("/") else "__needle__"
             incoming = IncomingCommand(
                 update_id=update_id,
                 chat_id=chat_id,

@@ -775,7 +775,7 @@
 
   /* Page 03 : Health & Causality Audit ----------------------------------- */
   function renderHealth(h) {
-    document.getElementById("hl-tests").textContent = String(h.tests_passing || 669);
+    document.getElementById("hl-tests").textContent = String(h.tests_passing || 691);
     var la = h.lookahead || {};
     var checks = la.checks || [];
     var passCount = checks.filter(function (c) { return c.ok; }).length;
@@ -1054,7 +1054,70 @@
     updateWorkbench();
   }
 
+  /* Needle 3 Command & Headline Router ----------------------------------- */
+  function refreshNeedleStatus() {
+    apiGet("api/needle/status")
+      .then(function (st) {
+        var pill = document.getElementById("needle-engine-pill");
+        if (!pill) return;
+        var pkg = st.package || {};
+        var rep = st.finetune_report || null;
+        if (pkg.installed && rep) {
+          pill.textContent = "NEEDLE " + (pkg.version || "3") + " // LORA TUNED";
+        } else if (pkg.installed) {
+          pill.textContent = "NEEDLE " + (pkg.version || "3") + " // READY";
+        } else {
+          pill.textContent = "SCHEMA ROUTER // READY";
+        }
+      })
+      .catch(function () {});
+  }
+
+  function executeNeedleQuery(rawQuery) {
+    var input = document.getElementById("needle-query-input");
+    var term = document.getElementById("needle-terminal-output");
+    var q = String(rawQuery !== undefined ? rawQuery : (input ? input.value : "")).trim();
+    if (!q) return;
+    if (input && rawQuery !== undefined) input.value = q;
+    if (term) term.textContent = "> " + q + "\nRouting via Needle 3...";
+    apiPost("api/needle/run", { query: q, execute: true })
+      .then(function (res) {
+        var dec = res.decision || {};
+        var callsJson = JSON.stringify(dec.function_calls || []);
+        var header =
+          "> " + q + "\n" +
+          "Engine : " + (dec.engine || "unknown") + "  |  Decision : " + (dec.type || "refusal") + "\n" +
+          "Calls  : " + callsJson + "\n\n";
+        if (term) term.textContent = header + (res.reply || "");
+        refreshStatus();
+        refreshTelegram();
+      })
+      .catch(function (err) {
+        if (term) term.textContent = "> " + q + "\nError: " + err.message;
+      });
+  }
+
+  var btnNeedleRun = document.getElementById("btn-needle-run");
+  var needleInput = document.getElementById("needle-query-input");
+  if (btnNeedleRun) {
+    btnNeedleRun.addEventListener("click", function () { executeNeedleQuery(); });
+  }
+  if (needleInput) {
+    needleInput.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        executeNeedleQuery();
+      }
+    });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll(".needle-sample-btn"), function (btn) {
+    btn.addEventListener("click", function () {
+      executeNeedleQuery(btn.getAttribute("data-query") || "");
+    });
+  });
+
   /* Initial Boot --------------------------------------------------------- */
+  refreshNeedleStatus();
   var initPage = (window.location.hash || "").replace(/^#/, "") || "signals";
   activatePage(initPage, false, false);
 })();
