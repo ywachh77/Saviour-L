@@ -333,6 +333,29 @@ class BootstrapEnsemble:
         scores = [member.predict_up(features) for member in self.members]
         return mean_of(scores), std_of(scores)
 
+    def learn_one(
+        self,
+        features: dict[str, float] | None,
+        label: int | None,
+        *,
+        learning_rate: float = 0.02,
+        sample_key: str = "",
+    ) -> int:
+        """Online Oza-Russell bootstrap update so uncertainty adapts on every real trade."""
+        if not self.ready or not features or label not in (0, 1):
+            return 0
+        updated = 0
+        seed_base = sum((idx + 1) * ord(ch) for idx, ch in enumerate(str(sample_key or "saviour")))
+        for idx, member in enumerate(self.members):
+            rng = random.Random(seed_base + (idx + 1) * 7919 + int(member.online_updates) * 31)
+            # Deterministic Poisson(1)-like draw in {0, 1, 2} with mean 1.0
+            draw = rng.random()
+            repeats = 0 if draw < 0.3679 else (1 if draw < 0.7358 else 2)
+            for _ in range(repeats):
+                member.learn_one(features, int(label), learning_rate=learning_rate)
+                updated += 1
+        return updated
+
     def to_dict(self) -> dict:
         return {"members": [member.to_dict() for member in self.members]}
 

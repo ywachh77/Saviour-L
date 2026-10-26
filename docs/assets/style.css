@@ -1906,6 +1906,485 @@ body.is-unleashing .fuin-flash {
   white-space: pre-wrap;
 }
 
+/* ==========================================================================
+   8. BLEACH MANGA / ANIME PLATES, KINETIC REIATSU & FAMILY FUSION UI
+   ========================================================================== */
+
+.reiatsu-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.72;
+}
+
+.gate-stage,
+.app-shell {
+  position: relative;
+  z-index: 3;
+}
+
+/* Subtle sumi-ink manga backdrop behind the Open Gate */
+.gate-manga-backdrop {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.gate-manga-bg-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: grayscale(100%) contrast(1.42) brightness(0.18) sepia(12%);
+  transform: scale(1.06);
+  animation: slowMangaBreath 18s ease-in-out infinite alternate;
+}
+
+@keyframes slowMangaBreath {
+  0%   { transform: scale(1.04) translate3d(0, 0, 0); opacity: 0.55; }
+  100% { transform: scale(1.10) translate3d(-1.2%, -0.8%, 0); opacity: 0.78; }
+}
+
+/* Archival 3-Plate Manga Strip on index.html */
+.gate-manga-triptych {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+  width: min(760px, 92vw);
+  margin: 1.55rem auto 0.25rem;
+}
+
+.manga-plate-card {
+  margin: 0;
+  background: rgba(16, 16, 19, 0.86);
+  border: 1px solid var(--line-hi);
+  padding: 0.38rem;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.35s var(--ease-out), border-color 0.28s ease, box-shadow 0.35s ease;
+}
+
+.manga-plate-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--seal);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(158, 31, 31, 0.35);
+}
+
+.manga-plate-media {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: var(--ink);
+}
+
+.manga-plate-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  filter: grayscale(92%) contrast(1.32) brightness(0.84) sepia(14%);
+  transition: transform 0.55s var(--ease-out), filter 0.4s ease;
+}
+
+.manga-plate-card:hover .manga-plate-media img {
+  transform: scale(1.08);
+  filter: grayscale(48%) contrast(1.26) brightness(0.96) sepia(10%);
+}
+
+.manga-plate-stamp {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 0.1rem 0.42rem;
+  font-family: var(--font-jp);
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--bone);
+  background: rgba(9, 9, 10, 0.86);
+  border: 1px solid var(--seal);
+  letter-spacing: 0.12em;
+}
+
+.manga-plate-card figcaption {
+  margin-top: 0.36rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.15em;
+  color: var(--bone-3);
+  text-align: left;
+}
+
+/* Bankai Manga Cut-In during Unleash the Death sequence */
+.fuin-manga-cutin {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.fuin-manga-cutin img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: grayscale(100%) contrast(1.65) brightness(0.35);
+  transform: scale(1.16);
+}
+
+.gate-body.is-unleashing .fuin-manga-cutin {
+  animation: bankaiMangaCutIn 1.42s var(--ease-out) forwards;
+}
+
+@keyframes bankaiMangaCutIn {
+  0%   { opacity: 0; clip-path: polygon(0 48%, 100% 42%, 100% 52%, 0 58%); }
+  24%  { opacity: 0.85; clip-path: polygon(0 18%, 100% 8%, 100% 92%, 0 82%); }
+  68%  { opacity: 0.42; clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%); }
+  100% { opacity: 0; }
+}
+
+/* Interactive Katana Cleave Ripple */
+.katana-slash-fx {
+  position: fixed;
+  width: 190px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, var(--bone) 45%, var(--seal) 78%, transparent 100%);
+  pointer-events: none;
+  z-index: 9999;
+  transform-origin: center center;
+  animation: katanaSlashStrike 0.48s var(--ease-out) forwards;
+}
+
+@keyframes katanaSlashStrike {
+  0%   { opacity: 0.98; transform: translate(-50%, -50%) rotate(var(--slash-angle, -28deg)) scaleX(0.12); }
+  55%  { opacity: 0.92; transform: translate(-50%, -50%) rotate(var(--slash-angle, -28deg)) scaleX(1.15); }
+  100% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--slash-angle, -28deg)) scaleX(1.42); }
+}
+
+/* Console Rail Manga Emblem & Cognitive Tag */
+.rail-cog-tag {
+  margin-top: 0.25rem;
+  font-size: 0.64rem;
+  letter-spacing: 0.14em;
+  color: #dfc08f;
+}
+
+.rail-manga-emblem {
+  margin: 0 1rem 0.9rem;
+  border: 1px solid var(--line);
+  background: var(--ink-2);
+  overflow: hidden;
+  position: relative;
+}
+
+.rail-manga-img {
+  width: 100%;
+  height: 82px;
+  object-fit: cover;
+  display: block;
+  filter: grayscale(95%) contrast(1.35) brightness(0.76) sepia(12%);
+  transition: filter 0.35s ease, transform 0.45s var(--ease-out);
+}
+
+.rail-manga-emblem:hover .rail-manga-img {
+  filter: grayscale(55%) contrast(1.25) brightness(0.92);
+  transform: scale(1.05);
+}
+
+.rail-manga-caption {
+  display: block;
+  padding: 0.26rem 0.5rem;
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  color: var(--bone-3);
+  border-top: 1px solid var(--line);
+}
+
+/* Dynamic Division Manga Banner at top of Workspace */
+.division-manga-banner {
+  position: relative;
+  margin-bottom: 1.15rem;
+  border: 1px solid var(--line-hi);
+  background: var(--ink-2);
+  overflow: hidden;
+  min-height: 108px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.division-manga-art {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.division-manga-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 28%;
+  filter: grayscale(92%) contrast(1.38) brightness(0.45) sepia(14%);
+  transition: transform 0.7s var(--ease-out), opacity 0.35s ease;
+}
+
+.division-manga-banner.is-swapping .division-manga-art img {
+  transform: scale(1.06);
+}
+
+.division-manga-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(9, 9, 10, 0.93) 0%, rgba(9, 9, 10, 0.68) 56%, rgba(9, 9, 10, 0.88) 100%);
+}
+
+.division-manga-meta {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  padding: 0.85rem 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.division-manga-plate {
+  display: inline-block;
+  font-size: 0.65rem;
+  letter-spacing: 0.18em;
+  color: #e39898;
+  margin-bottom: 0.2rem;
+}
+
+.division-manga-quote {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.04rem;
+  color: var(--bone);
+  letter-spacing: 0.02em;
+}
+
+/* Getsuga Sweep Animation on Signal Generation */
+.signal-cards-grid.is-cleaving {
+  position: relative;
+}
+
+.signal-cards-grid.is-cleaving::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 20%, rgba(236, 232, 223, 0.12) 48%, rgba(158, 31, 31, 0.24) 52%, transparent 78%);
+  animation: getsugaGridSweep 0.62s var(--ease-out) forwards;
+}
+
+@keyframes getsugaGridSweep {
+  0%   { transform: translateX(-100%); opacity: 1; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+
+/* 6-Family Convergence Strip inside Signal Cards */
+.sig-family-box {
+  margin: 0.65rem 0;
+  padding: 0.55rem 0.7rem;
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--ochre);
+}
+
+.sig-family-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  color: var(--bone-2);
+  margin-bottom: 0.3rem;
+}
+
+.sig-family-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+}
+
+.fam-chip {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--line-hi);
+  background: var(--ink-3);
+  color: var(--bone-2);
+}
+
+.fam-chip.is-sup {
+  border-color: var(--moss);
+  color: #a9d5bc;
+}
+
+.fam-chip.is-opp {
+  border-color: var(--seal);
+  color: #e39898;
+}
+
+.fam-chip.is-syn {
+  border-color: var(--ochre);
+  color: #dfc08f;
+}
+
+/* Strategy Lab: 6-Family Matrix & Synergy Strip */
+.family-matrix-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.family-card {
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  padding: 0.8rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.42rem;
+}
+
+.family-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.family-name {
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--bone);
+}
+
+.family-weight {
+  font-size: 0.82rem;
+  color: #dfc08f;
+}
+
+.family-bar-track {
+  height: 5px;
+  background: var(--ink-4);
+  overflow: hidden;
+}
+
+.family-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--ochre), var(--seal));
+  transition: width 0.45s var(--ease-out);
+}
+
+.synergy-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-top: 0.35rem;
+}
+
+/* Learning Journal List */
+.learning-journal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.journal-entry {
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-hi);
+  padding: 0.65rem 0.85rem;
+}
+
+.journal-entry.is-win {
+  border-left-color: var(--moss);
+}
+
+.journal-entry.is-loss {
+  border-left-color: var(--seal);
+}
+
+.journal-entry.is-heal {
+  border-left-color: var(--ochre);
+}
+
+.journal-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.68rem;
+  color: var(--bone-3);
+  margin-bottom: 0.25rem;
+}
+
+.journal-body {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--bone-2);
+  line-height: 1.5;
+}
+
+/* Console Manga Gallery */
+.console-manga-gallery {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.console-manga-item {
+  margin: 0;
+  border: 1px solid var(--line);
+  background: var(--ink-2);
+  padding: 0.35rem;
+  overflow: hidden;
+  transition: border-color 0.25s ease, transform 0.35s var(--ease-out);
+}
+
+.console-manga-item:hover {
+  border-color: var(--seal);
+  transform: translateY(-3px);
+}
+
+.console-manga-item img {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  display: block;
+  filter: grayscale(92%) contrast(1.34) brightness(0.84) sepia(12%);
+  transition: filter 0.35s ease, transform 0.5s var(--ease-out);
+}
+
+.console-manga-item:hover img {
+  filter: grayscale(42%) contrast(1.24) brightness(0.95);
+  transform: scale(1.06);
+}
+
+.console-manga-item figcaption {
+  margin-top: 0.35rem;
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  color: var(--bone-3);
+}
+
+@media (max-width: 860px) {
+  .gate-manga-triptych {
+    grid-template-columns: 1fr;
+    max-width: 360px;
+  }
+  .console-manga-gallery {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

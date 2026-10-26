@@ -37,6 +37,7 @@ from .config import Config
 from .council import CouncilWeights, spoken_votes
 from .domain import Candle
 from .engine import FusionEngine
+from .family_fusion import FamilyFusionEngine
 from .features import compute_features
 from .indicators import atr, mean
 from .model import OnlineLogisticModel
@@ -85,7 +86,9 @@ class BacktestReport:
     model_accuracy: float | None = None
     model_points: int = 0
     learned_weights: dict[str, float] = field(default_factory=dict)
+    learned_families: dict[str, float] = field(default_factory=dict)
     council_state: dict = field(default_factory=dict)
+    family_state: dict = field(default_factory=dict)
     per_fold: list[dict] = field(default_factory=list)
     note: str = ""
 
@@ -132,6 +135,7 @@ class BacktestReport:
             "model_accuracy": self.model_accuracy,
             "model_points": self.model_points,
             "learned_weights": {k: round(v, 4) for k, v in self.learned_weights.items()},
+            "learned_families": {k: round(v, 4) for k, v in self.learned_families.items()},
             "enough_for_a_view": self.enough_for_a_view,
             "per_fold": self.per_fold,
             "note": self.note,
@@ -194,6 +198,7 @@ def run_backtest(
     weights: CouncilWeights | None = None,
     min_bars: int = MIN_BARS_FOR_BACKTEST,
     mistakes: MistakeMemory | None = None,
+    family_fusion: FamilyFusionEngine | None = None,
 ) -> BacktestReport:
     """Replay the full pipeline over history and settle every signal with costs."""
     candles = sorted(candles, key=lambda candle: candle.timestamp)
@@ -244,6 +249,7 @@ def run_backtest(
 
     engine = FusionEngine(config)
     weights = weights or CouncilWeights()
+    family_tracker = family_fusion or FamilyFusionEngine()
     model_points: list[tuple[float, int]] = []
     cooldown_mins = max(0, int(getattr(config, "signal_cooldown_minutes", 0) or 0))
     loss_streak_cap = max(0, int(getattr(config, "loss_guard_streak", 0) or 0))
@@ -311,6 +317,7 @@ def run_backtest(
                 weights=weights,
                 source="BACKTEST",
                 at=entry_stamp,
+                family_fusion=family_tracker,
             )
 
             # With adaptive horizon the hold length is chosen per bar, so the
@@ -410,7 +417,20 @@ def run_backtest(
             # family would be invisible here while fully live in production.
             winning_side = "BUY" if move > 0 else "SELL" if move < 0 else None
             if result.council is not None and winning_side is not None:
-                weights.observe(spoken_votes(result.council.votes), winning_side)
+                member_votes = spoken_votes(result.council.votes)
+                weights.observe(member_votes, winning_side)
+                family_tracker.observe_outcome(
+                    member_votes,
+                    winning_side,
+                    regime=result.regime or "UNKNOWN",
+                    session=(
+                        session_of(candles[index].timestamp, instrument)
+                        if config.session_filter
+                        else None
+                    ),
+                    signal_side=result.signal.side,
+                    was_loss=(net_pips < 0.0),
+                )
 
             # Post-mortem, opt-in. Passing a memory is the caller asserting the
             # replay is over real bars: synthetic data trains nothing, and this
@@ -470,7 +490,9 @@ def run_backtest(
 
     report.coverage = (report.signals / len(usable)) if usable else 0.0
     report.learned_weights = dict(weights.active())
+    report.learned_families = dict(family_tracker.active_families())
     report.council_state = weights.to_dict()
+    report.family_state = family_tracker.to_dict()
     if model_points:
         report.model_points = len(model_points)
         report.model_accuracy = (

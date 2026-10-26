@@ -9,6 +9,82 @@
 
   var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  /* Ambient Reiatsu Particle Field & Katana Slash FX (index + console) --- */
+  function initReiatsuCanvas() {
+    if (reduceMotion) return;
+    var canvas = document.getElementById("reiatsu-canvas");
+    if (!canvas || !canvas.getContext) return;
+    var ctx = canvas.getContext("2d");
+    var w = 0;
+    var h = 0;
+    var particles = [];
+    var count = 38;
+
+    function resize() {
+      w = canvas.width = window.innerWidth || 1280;
+      h = canvas.height = window.innerHeight || 800;
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    for (var i = 0; i < count; i++) {
+      particles.push({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        r: 0.7 + Math.random() * 1.9,
+        vx: (Math.random() - 0.5) * 0.28,
+        vy: -(0.22 + Math.random() * 0.62),
+        alpha: 0.14 + Math.random() * 0.42,
+        crimson: Math.random() < 0.28
+      });
+    }
+
+    function step() {
+      ctx.clearRect(0, 0, w, h);
+      for (var j = 0; j < particles.length; j++) {
+        var p = particles[j];
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.y < -10) {
+          p.y = h + 10;
+          p.x = Math.random() * w;
+        }
+        if (p.x < -10) p.x = w + 10;
+        if (p.x > w + 10) p.x = -10;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = p.crimson
+          ? ("rgba(158, 31, 31, " + p.alpha.toFixed(2) + ")")
+          : ("rgba(236, 232, 223, " + (p.alpha * 0.65).toFixed(2) + ")");
+        ctx.fill();
+      }
+      window.requestAnimationFrame(step);
+    }
+    window.requestAnimationFrame(step);
+  }
+
+  function spawnKatanaSlash(x, y) {
+    if (reduceMotion || !document.body) return;
+    var slash = document.createElement("span");
+    slash.className = "katana-slash-fx";
+    var angle = (-34 + Math.round(Math.random() * 24)) + "deg";
+    slash.style.left = x + "px";
+    slash.style.top = y + "px";
+    slash.style.setProperty("--slash-angle", angle);
+    document.body.appendChild(slash);
+    setTimeout(function () {
+      if (slash.parentNode) slash.parentNode.removeChild(slash);
+    }, 520);
+  }
+
+  initReiatsuCanvas();
+  document.addEventListener("pointerdown", function (ev) {
+    var tgt = ev.target;
+    if (tgt && tgt.closest && tgt.closest(".btn, .unleash-btn, .nav-item, .tab-btn, .manga-plate-card, .console-manga-item")) {
+      spawnKatanaSlash(ev.clientX || (window.innerWidth / 2), ev.clientY || (window.innerHeight / 2));
+    }
+  });
+
   function esc(val) {
     return String(val == null ? "" : val)
       .replace(/&/g, "&amp;")
@@ -68,7 +144,7 @@
         if (mkEl && st.active_pairs) mkEl.textContent = st.active_pairs.join(" · ");
         if (enEl) {
           var feedTag = st.feed_mode === "LIVE" ? "LIVE SPOT FEED" : (st.feed_mode === "SUPABASE_SYNC" ? "SUPABASE CREDENTIALS CONNECTED" : "PAPER ENGINE READY");
-          enEl.textContent = st.council_members + " COUNCIL GATES · " + feedTag;
+          enEl.textContent = st.council_members + " COUNCIL GATES · 6 MERGED FAMILIES · " + feedTag;
         }
       })
       .catch(function () {});
@@ -100,12 +176,12 @@
   if (!document.querySelector(".console-body")) return;
 
   var PAGE_META = {
-    signals:     { code: "DIVISION 01 // SIGNALS",     title: "Signal Execution",    jp: "信号", sig: "一閃 · BLADE CLEAVE",    fx: "fx-signals",     stamp: "一閃 · 信号" },
-    telegram:    { code: "DIVISION 02 // TELEGRAM",    title: "Telegram Dispatch",   jp: "電信", sig: "巻物 · SCROLL UNFURL",   fx: "fx-telegram",    stamp: "巻物 · 電信" },
-    health:      { code: "DIVISION 03 // HEALTH",      title: "Health & Causality",  jp: "健全", sig: "検診 · DIAGNOSTIC SCAN", fx: "fx-health",      stamp: "検診 · 健全" },
-    strategies:  { code: "DIVISION 04 // STRATEGIES",  title: "Council & Filters",   jp: "戦術", sig: "陣形 · TACTICAL FLANK",  fx: "fx-strategies",  stamp: "陣形 · 戦術" },
-    credentials: { code: "DIVISION 05 // CREDENTIALS", title: "Credentials Vault",   jp: "機密", sig: "解錠 · VAULT UNSEAL",    fx: "fx-credentials", stamp: "解錠 · 機密" },
-    risk:        { code: "DIVISION 06 // DISCIPLINE",  title: "Risk & Charter",      jp: "規律", sig: "鉄則 · MONOLITH DESCENT", fx: "fx-risk",        stamp: "鉄則 · 規律" }
+    signals:     { code: "DIVISION 01 // SIGNALS",     title: "Signal Execution",    jp: "信号", sig: "一閃 · BLADE CLEAVE",    fx: "fx-signals",     stamp: "一閃 · 信号", manga: "assets/manga/zangetsu-cleave.jpg",     plate: "CHRONICLE PLATE 01 // ZANGETSU CLEAVE",     quote: "Completed-bar precision only — cut at the exact opening second of the next future candle." },
+    telegram:    { code: "DIVISION 02 // TELEGRAM",    title: "Telegram & SAVIOUR AI", jp: "電信", sig: "巻物 · SCROLL UNFURL", fx: "fx-telegram",    stamp: "巻物 · 電信", manga: "assets/manga/vasto-ulquiorra.jpg",     plate: "CHRONICLE PLATE 02 // COGNITIVE COMMAND",   quote: "Human-like post-trade reflection fused with Cactus Needle 3 structured tool execution." },
+    health:      { code: "DIVISION 03 // HEALTH",      title: "Health & Causality",  jp: "健全", sig: "検診 · DIAGNOSTIC SCAN", fx: "fx-health",      stamp: "検診 · 健全", manga: "assets/manga/bankai-clash.jpg",        plate: "CHRONICLE PLATE 03 // ZERO-LEAKAGE SEAL",  quote: "Five independent future-shock causality checks guard every indicator and MTF resampler." },
+    strategies:  { code: "DIVISION 04 // STRATEGIES",  title: "6-Family Fusion Lab", jp: "戦術", sig: "陣形 · TACTICAL FLANK",  fx: "fx-strategies",  stamp: "陣形 · 戦術", manga: "assets/manga/ichigo-yhwach-tybw.jpg",  plate: "CHRONICLE PLATE 04 // SIX FAMILIES MERGED", quote: "22 council rules fused across 6 specialist families with automatic walk-forward backtests." },
+    credentials: { code: "DIVISION 05 // CREDENTIALS", title: "Credentials Vault",   jp: "機密", sig: "解錠 · VAULT UNSEAL",    fx: "fx-credentials", stamp: "解錠 · 機密", manga: "assets/manga/yhwach-sovereign.jpg",    plate: "CHRONICLE PLATE 05 // SEALED VAULT",       quote: "Owner-only chmod 600 secret storage and 13-table Row-Level Security persistence." },
+    risk:        { code: "DIVISION 06 // DISCIPLINE",  title: "Risk & Charter",      jp: "規律", sig: "鉄則 · MONOLITH DESCENT", fx: "fx-risk",        stamp: "鉄則 · 規律", manga: "assets/manga/shunsui-bankai.jpg",      plate: "CHRONICLE PLATE 06 // IRON CHARTER",       quote: "Full spread deducted on every trade — zero broker orders, zero OTC feeds, zero fabrication." }
   };
 
   var MARKETS_STATIC = {
@@ -174,6 +250,20 @@
     if (titleEl) titleEl.textContent = meta.title;
     if (jpEl) jpEl.textContent = meta.jp;
 
+    var bannerEl = document.getElementById("division-manga-banner");
+    var mangaImgEl = document.getElementById("division-manga-img");
+    var plateEl = document.getElementById("division-manga-plate");
+    var quoteEl = document.getElementById("division-manga-quote");
+    if (mangaImgEl && meta.manga) {
+      if (bannerEl) bannerEl.classList.add("is-swapping");
+      mangaImgEl.src = meta.manga;
+      if (plateEl) plateEl.textContent = meta.plate || "";
+      if (quoteEl) quoteEl.textContent = meta.quote || "";
+      setTimeout(function () {
+        if (bannerEl) bannerEl.classList.remove("is-swapping");
+      }, 420);
+    }
+
     if (playTransition !== false) {
       triggerPageFx(meta);
     }
@@ -184,9 +274,9 @@
     window.scrollTo(0, 0);
 
     if (pageId === "signals") refreshStatus();
-    if (pageId === "telegram") refreshTelegram();
+    if (pageId === "telegram") { refreshTelegram(); refreshNeedleStatus(); }
     if (pageId === "health") refreshHealth(false);
-    if (pageId === "strategies") refreshStrategies();
+    if (pageId === "strategies") { refreshStrategies(); refreshLearning(); }
     if (pageId === "credentials") refreshCredentials();
   }
 
@@ -498,6 +588,19 @@
         regime: "TREND",
         core_checks: 5,
         votes: [],
+        family_fusion: {
+          vetoed: false,
+          net_score: 0.24,
+          synergy_pairs: ["CLASSIC_COUNCIL+SMC_ICT", "SMC_ICT+VIRAL_MOMENTUM"],
+          family_votes: [
+            { family: "CORE_GATE", side: "BUY" },
+            { family: "CLASSIC_COUNCIL", side: "BUY" },
+            { family: "SMC_ICT", side: "BUY" },
+            { family: "VIRAL_MOMENTUM", side: "BUY" },
+            { family: "MICRO_SCALPING", side: "NO SIGNAL" },
+            { family: "QUANT_SCALP", side: "NO SIGNAL" }
+          ]
+        },
         signal: {
           signal_id: "static01",
           entry_time: nextMin.toISOString(),
@@ -527,6 +630,12 @@
 
     if (genBtn) genBtn.disabled = true;
     if (insBtn) insBtn.disabled = true;
+    var resGrid = document.getElementById("signal-results");
+    if (resGrid && !reduceMotion) {
+      resGrid.classList.remove("is-cleaving");
+      void resGrid.offsetWidth;
+      resGrid.classList.add("is-cleaving");
+    }
 
     apiPost("api/signals", {
       pair: selectedPair,
@@ -980,6 +1089,177 @@
     apiGet("api/strategies").then(renderStrategies).catch(function () {});
   }
 
+  /* Merged 6-Family Fusion, Auto-Backtest & Trade Learning Desk ---------- */
+  var selectedFamPair = "EUR/USD";
+  var cachedLearning = null;
+
+  function syncCognitiveBadges(cog) {
+    if (!cog) return;
+    var stage = String(cog.stage || "SENTINEL");
+    var xp = Number(cog.experience_score != null ? cog.experience_score : (cog.xp || 0));
+    var xpPill = document.getElementById("cog-xp-pill");
+    var stagePill = document.getElementById("cog-stage-pill");
+    var railCog = document.getElementById("rail-cognitive-stage");
+    if (xpPill) xpPill.textContent = "SAVIOUR AI · " + stage + " · " + xp + " XP";
+    if (stagePill) stagePill.textContent = stage + " (" + xp + " XP)";
+    if (railCog) railCog.textContent = "SAVIOUR // " + stage;
+  }
+
+  function renderFamilyMatrix(learning) {
+    var grid = document.getElementById("family-matrix-grid");
+    var synBox = document.getElementById("synergy-strip");
+    if (!grid) return;
+    var mkts = (learning && learning.markets) || {};
+    var m = mkts[selectedFamPair] || mkts["EUR/USD"] || {};
+    var ff = m.family_fusion || {};
+    var weights = ff.family_weights || {
+      CORE_GATE: 0.24,
+      CLASSIC_COUNCIL: 0.16,
+      MICRO_SCALPING: 0.14,
+      SMC_ICT: 0.17,
+      VIRAL_MOMENTUM: 0.15,
+      QUANT_SCALP: 0.14
+    };
+    var seen = ff.family_seen || {};
+    var net = ff.family_net || {};
+    var fams = ["CORE_GATE", "CLASSIC_COUNCIL", "SMC_ICT", "VIRAL_MOMENTUM", "QUANT_SCALP", "MICRO_SCALPING"];
+    grid.innerHTML = fams.map(function (f) {
+      var w = Number(weights[f] != null ? weights[f] : 0.15);
+      var pct = Math.max(8, Math.min(100, Math.round(w * 260)));
+      var n = Number(seen[f] || 0);
+      var netVal = Number(net[f] || 0);
+      return (
+        '<div class="family-card">' +
+          '<div class="family-card-top">' +
+            '<span class="family-name mono">' + esc(f) + "</span>" +
+            '<span class="family-weight mono">' + (w * 100).toFixed(1) + "%</span>" +
+          "</div>" +
+          '<div class="family-bar-track"><div class="family-bar-fill" style="width:' + pct + '%"></div></div>' +
+          '<div class="mono dim" style="font-size:0.68rem">' +
+            "Seen " + n + " · Net " + (netVal >= 0 ? "+" : "") + netVal.toFixed(1) +
+          "</div>" +
+        "</div>"
+      );
+    }).join("");
+
+    if (synBox) {
+      var syns = ff.synergy_weights || {};
+      var synKeys = Object.keys(syns);
+      if (synKeys.length) {
+        synBox.innerHTML = synKeys.map(function (k) {
+          var sw = Number(syns[k] || 0);
+          var cls = sw > 0.005 ? "is-syn" : (sw < -0.005 ? "is-opp" : "");
+          return '<span class="fam-chip ' + cls + '">' + esc(k) + " " + (sw >= 0 ? "+" : "") + sw.toFixed(3) + "</span>";
+        }).join("");
+      } else {
+        synBox.innerHTML = '<span class="fam-chip">10 Pairwise Cross-Family Synergies Active</span>';
+      }
+    }
+  }
+
+  function renderLearningPayload(data) {
+    if (!data) return;
+    cachedLearning = data;
+    syncCognitiveBadges(data.cognitive);
+    renderFamilyMatrix(data);
+
+    var btCards = document.getElementById("backtest-summary-cards");
+    if (btCards && data.markets) {
+      var pairs = ["EUR/USD", "BTC/USD", "ETH/USD"];
+      btCards.innerHTML = pairs.map(function (sym) {
+        var mk = data.markets[sym] || {};
+        var bt = mk.latest_backtest || null;
+        if (bt && bt.ok) {
+          var netStr = (bt.net_pips >= 0 ? "+" : "") + Number(bt.net_pips).toFixed(2) + "p";
+          var wrStr = bt.win_rate != null ? (Number(bt.win_rate).toFixed(1) + "% WR") : "0 signals";
+          return (
+            '<div class="stat-card">' +
+              '<span class="stat-label mono">' + esc(sym) + " // " + esc(mk.model_mode || "VETO") + "</span>" +
+              '<strong class="stat-val mono ' + (bt.net_pips >= 0 ? "pos" : "neg") + '">' + esc(netStr) + "</strong>" +
+              '<span class="stat-sub mono">' + esc(wrStr) + " · " + esc(bt.signals) + " OOS sigs · " + esc(mk.reconciled_trades || 0) + " learned</span>" +
+            "</div>"
+          );
+        }
+        return (
+          '<div class="stat-card">' +
+            '<span class="stat-label mono">' + esc(sym) + " // " + esc(mk.model_mode || "VETO") + "</span>" +
+            '<strong class="stat-val mono">' + esc(mk.online_updates || 0) + " updates</strong>" +
+            '<span class="stat-sub mono">' + esc(mk.training_samples || 0) + " train samples · " + esc(mk.reconciled_trades || 0) + " settled</span>" +
+          "</div>"
+        );
+      }).join("");
+    }
+
+    var jList = document.getElementById("learning-journal-list");
+    if (jList) {
+      var entries = [];
+      (data.rectifications || []).slice(0, 4).forEach(function (r) {
+        entries.push({
+          cls: "is-heal",
+          head: "SELF-HEAL // " + (r.at || TZ_LABEL),
+          body: (r.actions && r.actions.length) ? r.actions.join(" · ") : (r.summary || "All subsystems verified healthy.")
+        });
+      });
+      (data.journal || []).slice(0, 14).forEach(function (ep) {
+        entries.push({
+          cls: ep.outcome === "WIN" ? "is-win" : "is-loss",
+          head: (ep.pair || "MKT") + " " + (ep.side || "") + " -> " + (ep.outcome || "") + " (" + (ep.recorded_display || ep.recorded_at || "") + ")",
+          body: ep.narrative || ep.lesson || ""
+        });
+      });
+      if (!entries.length) {
+        jList.innerHTML = '<div class="journal-entry"><p class="journal-body dim">No post-mortem lessons yet — run a walk-forward backtest or settle due paper signals to record live trade reflections.</p></div>';
+      } else {
+        jList.innerHTML = entries.map(function (it) {
+          return (
+            '<div class="journal-entry ' + it.cls + '">' +
+              '<div class="journal-head mono"><span>' + esc(it.head) + "</span></div>" +
+              '<p class="journal-body">' + esc(it.body) + "</p>" +
+            "</div>"
+          );
+        }).join("");
+      }
+    }
+  }
+
+  function refreshLearning() {
+    apiGet("api/learning")
+      .then(renderLearningPayload)
+      .catch(function () {
+        renderFamilyMatrix(null);
+      });
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll("#fam-pair-tabs .seg"), function (btn) {
+    btn.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll("#fam-pair-tabs .seg"), function (b) {
+        b.classList.remove("is-active");
+      });
+      btn.classList.add("is-active");
+      selectedFamPair = btn.getAttribute("data-fam-pair") || "EUR/USD";
+      renderFamilyMatrix(cachedLearning);
+    });
+  });
+
+  var btnRunBt = document.getElementById("btn-run-backtest");
+  var btnRefLearn = document.getElementById("btn-refresh-learning");
+  if (btnRefLearn) btnRefLearn.addEventListener("click", refreshLearning);
+  if (btnRunBt) {
+    btnRunBt.addEventListener("click", function () {
+      btnRunBt.disabled = true;
+      showToast("Running purged 4-fold walk-forward backtest across all markets...");
+      apiPost("api/backtest", { pair: "ALL" })
+        .then(function (res) {
+          if (res.learning) renderLearningPayload(res.learning);
+          refreshStrategies();
+          var okCount = (res.runs || []).filter(function (r) { return r.ok; }).length;
+          showToast("Walk-forward backtest completed across " + okCount + " market(s).");
+        })
+        .catch(function (err) { showToast(err.message); })
+        .finally(function () { btnRunBt.disabled = false; });
+    });
+  }
+
   var btnSaveCfg = document.getElementById("btn-save-config");
   if (btnSaveCfg) {
     btnSaveCfg.addEventListener("click", function () {
@@ -1161,10 +1441,11 @@
     updateWorkbench();
   }
 
-  /* Needle 3 Command & Headline Router ----------------------------------- */
+  /* Needle 3 & SAVIOUR Human Cognitive Partner --------------------------- */
   function refreshNeedleStatus() {
     apiGet("api/needle/status")
       .then(function (st) {
+        if (st.cognitive) syncCognitiveBadges(st.cognitive);
         var pill = document.getElementById("needle-engine-pill");
         if (!pill) return;
         var pkg = st.package || {};
@@ -1174,10 +1455,34 @@
         } else if (pkg.installed) {
           pill.textContent = "NEEDLE " + (pkg.version || "3") + " // READY";
         } else {
-          pill.textContent = "SCHEMA ROUTER // READY";
+          pill.textContent = "SAVIOUR × NEEDLE // READY";
         }
       })
       .catch(function () {});
+  }
+
+  var btnSelfHeal = document.getElementById("btn-self-heal");
+  if (btnSelfHeal) {
+    btnSelfHeal.addEventListener("click", function () {
+      var term = document.getElementById("needle-terminal-output");
+      btnSelfHeal.disabled = true;
+      if (term) term.textContent = "> Self-Heal & Rectify\nScanning causality, stale signals, unreconciled settlements, and cold VETO models...";
+      apiPost("api/self_heal", {})
+        .then(function (res) {
+          if (res.learning) renderLearningPayload(res.learning);
+          var heal = res.heal || {};
+          var header =
+            "> Autonomous Error Detection & Self-Rectification\n" +
+            "Issues Found : " + (heal.issues_count || 0) + "  |  Rectified : " + (heal.rectified_count || 0) + "\n\n";
+          if (term) term.textContent = header + (res.narrative || "All subsystems verified healthy.");
+          refreshStatus();
+          showToast("SAVIOUR self-heal completed (" + (heal.rectified_count || 0) + " rectified).");
+        })
+        .catch(function (err) {
+          if (term) term.textContent = "Self-heal error: " + err.message;
+        })
+        .finally(function () { btnSelfHeal.disabled = false; });
+    });
   }
 
   function executeNeedleQuery(rawQuery) {
@@ -1186,21 +1491,23 @@
     var q = String(rawQuery !== undefined ? rawQuery : (input ? input.value : "")).trim();
     if (!q) return;
     if (input && rawQuery !== undefined) input.value = q;
-    if (term) term.textContent = "> " + q + "\nRouting via Needle 3...";
+    if (term) term.textContent = "> " + q + "\nSAVIOUR × Needle 3 thinking...";
     apiPost("api/needle/run", { query: q, execute: true })
       .then(function (res) {
+        if (res.cognitive) syncCognitiveBadges(res.cognitive);
         var dec = res.decision || {};
         var callsJson = JSON.stringify(dec.function_calls || []);
         var header =
           "> " + q + "\n" +
-          "Engine : " + (dec.engine || "unknown") + "  |  Decision : " + (dec.type || "refusal") + "\n" +
-          "Calls  : " + callsJson + "\n\n";
+          "Engine : " + (dec.engine || "saviour_cognitive") + "  |  Mode : " + (dec.type || "dialogue") + "\n" +
+          (dec.function_calls && dec.function_calls.length ? ("Tools  : " + callsJson + "\n\n") : "\n");
         if (term) term.textContent = header + (res.reply || "");
         if (res.signal_run && Array.isArray(res.signal_run.evaluations)) {
           renderSignalEvaluations(res.signal_run.evaluations);
         }
         refreshStatus();
         refreshTelegram();
+        refreshLearning();
       })
       .catch(function (err) {
         if (term) term.textContent = "> " + q + "\nError: " + err.message;
@@ -1387,6 +1694,7 @@
 
   /* Initial Boot --------------------------------------------------------- */
   refreshNeedleStatus();
+  refreshLearning();
   var initPage = (window.location.hash || "").replace(/^#/, "") || "signals";
   activatePage(initPage, false, false);
   syncCloudDatabaseSnapshot();
