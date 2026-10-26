@@ -78,6 +78,24 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Restore tuned Needle 3 .cact cache (optional)
+        id: needle-cache
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            eurusd-proxy-bot/var/needle/saviour_needle3.cact
+            eurusd-proxy-bot/var/needle/finetune_report.json
+            ~/.cache/needle
+          key: saviour-needle3-${{ runner.os }}-${{ hashFiles('eurusd-proxy-bot/data/needle_saviour_train.jsonl', 'eurusd-proxy-bot/fusion/needle_agent.py') }}
+          restore-keys: |
+            saviour-needle3-${{ runner.os }}-
+
+      - name: Install lightweight Needle 3 runtime client when .cact is cached
+        if: steps.needle-cache.outputs.cache-hit != ''
+        continue-on-error: true
+        run: pip install -q -r requirements-needle.txt
+
       - name: Run one cycle
         env:
           RUNNER: github-actions
@@ -119,6 +137,9 @@ jobs:
           LOSS_GUARD_STREAK: "3"
           LOSS_GUARD_SHADOW_RECOVERY: "1"
           FX_ROLLOVER_GUARD: "1"
+          NEEDLE_ENABLED: "1"
+          NEEDLE_TELEMETRY: "0"
+          DO_NOT_TRACK: "1"
           # Hold the Telegram connection open after the cycle so commands are
           # answered while the container still exists. Twelve minutes of a
           # fifteen-minute interval leaves a gap of about two minutes, which is

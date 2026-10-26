@@ -80,11 +80,11 @@ def main() -> int:
     bot = FusionBot(config=config, store=store, telegram=telegram)
     bot.startup()
     try:
-        # Align to the real minute seal window ([1.5s, 4.5s] past the boundary)
-        # AFTER startup state hydration so the previous M1 candle has genuinely
-        # closed on the exchange, entry_time has genuinely opened, and multi-pair
-        # parallel ingest seals against the real post-ingest wall clock.
-        bot.wait_for_seal_window()
+        # Align to the real minute seal window ([4.2s, 6.8s] past the boundary)
+        # AFTER startup state hydration: Twelve Data publishes the just-closed
+        # M1 bar ~3-3.5s after :00s, and parallel 3-pair ingest finishes in ~1.3s,
+        # sealing around :05.5s (well inside the 10s Charter ceiling).
+        bot.wait_for_seal_window(min_offset_seconds=4.2, max_entry_seconds=6.8)
         report = bot.minute_cycle()
         bot.settle_due()
         bot.flush_outbox()
