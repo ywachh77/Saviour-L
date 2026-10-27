@@ -1781,8 +1781,8 @@ class OperatorRuntime:
                 member._load_candles()
             if isinstance(runtime_blob.get("cognitive_memory"), dict):
                 self.bot.cognitive = SaviourCognitivePartner.from_dict(
+                    self.config.local_state_dir,
                     runtime_blob.get("cognitive_memory"),
-                    memory_path=self.config.data_dir / "experience_memory.jsonl",
                 )
             self._synced_pairs = {
                 m.config.pair for m in self._all_members() if len(m.candles) >= 60

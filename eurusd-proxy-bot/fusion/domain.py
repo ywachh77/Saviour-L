@@ -144,6 +144,8 @@ class Signal:
     delivery_state: str = "PENDING"
     message_id: str | None = None
     entry_price: float | None = None
+    sureshot: bool = False
+    present_conditions: dict = field(default_factory=dict)
 
     @property
     def horizon(self) -> int:
@@ -169,6 +171,8 @@ class Signal:
         council: tuple[dict, ...] = (),
         features: dict[str, float] | None = None,
         spread_pips: float = 1.2,
+        sureshot: bool = False,
+        present_conditions: dict | None = None,
     ) -> "Signal":
         entry = parse_datetime(entry_time)
         return cls(
@@ -190,6 +194,8 @@ class Signal:
             features=dict(features or {}),
             horizon_minutes=int(horizon_minutes),
             spread_pips=float(spread_pips),
+            sureshot=bool(sureshot),
+            present_conditions=dict(present_conditions or {}),
         )
 
     def with_entry_price(self, price: float) -> "Signal":

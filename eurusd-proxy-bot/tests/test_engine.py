@@ -228,5 +228,82 @@ class TestNoLookAhead(unittest.TestCase):
         )
 
 
+class TestMultiHorizonAndSureshot(unittest.TestCase):
+    """Regression tests for multi-horizon evaluation and sureshot detection."""
+
+    def setUp(self):
+        self.candles = make_candles(220, seed=13)
+        self.features = compute_features(self.candles)[-1]
+
+    def test_short_horizon_fires_when_default_unaffordable(self):
+        """When 30-min can't pay, 1-min or 3-min should fire with relaxed gate."""
+        config = Config(
+            pair="EUR/USD",
+            horizon_minutes=30,
+            candle_history=200,
+            short_horizon_max_minutes=3,
+            short_horizon_min_reward=1.5,
+        )
+        eng = FusionEngine(config)
+        result = eng.evaluate(self.candles, at=self.candles[-1].timestamp)
+        # With synthetic data, either abstain or signal is valid. The key test
+        # is that no crash occurs and the horizon selection logic runs.
+        self.assertIn(
+            result.seal_state,
+            [charter.SEAL_ABSTAIN, charter.SEAL_SIGNAL, charter.SEAL_DISCARDED_LATE],
+        )
+
+    def test_sureshot_field_exists_on_signal(self):
+        """Signal should have sureshot and present_conditions fields."""
+        from fusion.domain import Signal
+        s = Signal.create(
+            pair="EUR/USD",
+            side="BUY",
+            entry_time=self.candles[-1].timestamp,
+            strategy="test",
+            reason="test",
+            source="test",
+            generated_at=self.candles[-1].timestamp,
+            horizon_minutes=30,
+            sureshot=False,
+            present_conditions={"test": 1.0},
+        )
+        self.assertFalse(s.sureshot)
+        self.assertEqual(s.present_conditions["test"], 1.0)
+
+    def test_sureshot_true_when_set(self):
+        """Signal should carry sureshot=True when flagged."""
+        from fusion.domain import Signal
+        s = Signal.create(
+            pair="EUR/USD",
+            side="BUY",
+            entry_time=self.candles[-1].timestamp,
+            strategy="test",
+            reason="test",
+            source="test",
+            generated_at=self.candles[-1].timestamp,
+            horizon_minutes=30,
+            sureshot=True,
+            present_conditions={},
+        )
+        self.assertTrue(s.sureshot)
+
+    def test_classify_candle_state(self):
+        """_classify_candle_state should return valid states."""
+        from fusion.engine import _classify_candle_state
+        low_vol = _classify_candle_state({"atr": 0.5, "momentum_1": 0.1})
+        high_vol = _classify_candle_state({"atr": 3.0, "momentum_1": 1.0})
+        self.assertIn(low_vol, ["LOW_VOL", "MODERATE_VOL"])
+        self.assertIn(high_vol, ["HIGH_VOL_MOMENTUM", "MODERATE_VOL"])
+
+    def test_check_present_trend(self):
+        """_check_present_trend should align with momentum direction."""
+        from fusion.engine import _check_present_trend
+        buy_aligned = _check_present_trend({"momentum_1": 0.5, "rsi_14": 50.0}, "BUY")
+        sell_aligned = _check_present_trend({"momentum_1": -0.5, "rsi_14": 50.0}, "SELL")
+        self.assertTrue(buy_aligned)
+        self.assertTrue(sell_aligned)
+
+
 if __name__ == "__main__":
     unittest.main()

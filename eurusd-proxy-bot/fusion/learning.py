@@ -28,6 +28,7 @@ from .calibration import (
 )
 from .domain import Candle
 from .features import compute_features
+from .gbdt import GradientBoostingModel
 from .model import (
     MODE_ADVISORY,
     MODE_VETO,
@@ -203,17 +204,41 @@ class WalkForwardReport:
         }
 
 
-def _folds(samples: Sequence[Sample], folds: int, purge: int = 0) -> list[tuple[list[Sample], list[Sample]]]:
+def _folds(
+    samples: Sequence[Sample],
+    folds: int,
+    purge: int = 1,
+    embargo: int = 0,
+) -> list[tuple[list[Sample], list[Sample]]]:
+    """Expanding-window folds with a purge before each test window.
+
+    A sample at bar *i* is labelled by the close of bar *i + horizon*, so
+    training on any sample whose label lands inside the test window is
+    leakage. The purge drops ``purge`` samples from the tail of the training
+    set before each test window starts. When ``embargo > 0`` an additional
+    gap is left between consecutive test folds so autocorrelated outcomes
+    in one fold cannot inflate the aggregate score.
+
+    The default ``purge=1`` is the minimum that prevents the last training
+    sample's label from overlapping the first test sample's label. Callers
+    that know the label horizon should pass ``purge=horizon`` (as
+    ``run_nightly`` does) for a wider safety margin.
+    """
     size = len(samples)
     folds = max(MIN_WALK_FORWARD_FOLDS, min(folds, 6))
     if size < folds * 40:
         return []
     boundaries = [int(round(size * (index + 1) / (folds + 1))) for index in range(folds)]
     result = []
-    purge_bars = max(0, int(purge))
+    purge_bars = max(1, int(purge))
+    embargo_bars = max(0, int(embargo))
+    fold_size = size // (folds + 1)
     for end in boundaries:
         train_end = max(0, end - purge_bars)
-        result.append((list(samples[:train_end]), list(samples[end : min(size, end + (size // (folds + 1)))])))
+        test_start = min(size, end + embargo_bars)
+        result.append(
+            (list(samples[:train_end]), list(samples[test_start : min(size, test_start + fold_size)]))
+        )
     return [(train, test) for train, test in result if train and test]
 
 
@@ -224,9 +249,22 @@ def walk_forward(
     folds: int = 5,
     champion: OnlineLogisticModel | None = None,
     min_samples: int = 400,
-    purge: int = 0,
+    purge: int = 1,
+    embargo: int = 0,
 ) -> WalkForwardReport:
-    """Expanding-window walk-forward. Every evaluation point is out-of-sample."""
+    """Expanding-window walk-forward. Every evaluation point is out-of-sample.
+
+    ``purge`` is the number of samples dropped from the end of each training
+    window before the test window starts. It must be at least the label
+    horizon: a sample at bar *i* is labelled by the close of bar *i+horizon*,
+    so a training sample whose label reaches into the test window is leakage.
+    ``run_nightly`` passes ``purge=rep_horizon``; the default ``1`` is the
+    minimum that prevents the last training label from overlapping the first
+    test label.
+
+    ``embargo`` adds a further gap between consecutive test folds, so
+    autocorrelated outcomes in one fold cannot inflate the aggregate score.
+    """
     report = WalkForwardReport(samples=len(samples))
     if len(samples) < min_samples:
         report.reason = (
@@ -235,7 +273,7 @@ def walk_forward(
         )
         return report
 
-    splits = _folds(samples, folds, purge=purge)
+    splits = _folds(samples, folds, purge=purge, embargo=embargo)
     if not splits:
         report.reason = "Not enough labelled bars to build walk-forward folds."
         return report
@@ -249,7 +287,10 @@ def walk_forward(
     for train, test in splits:
         fit_slice = train[-MAX_WALK_FORWARD_TRAIN:] if len(train) > MAX_WALK_FORWARD_TRAIN else train
         try:
-            model = OnlineLogisticModel().fit([item.to_pair() for item in fit_slice], epochs=90, validation_fraction=0.0)
+            model = GradientBoostingModel().fit(
+                [item.to_pair() for item in fit_slice],
+                min_samples=80,
+            )
         except ValueError:
             continue
         for sample in test:
@@ -476,8 +517,8 @@ def run_nightly(
     settlements: Sequence[dict],
     *,
     config,
-    champion: OnlineLogisticModel | None,
-) -> tuple[OnlineLogisticModel | None, BootstrapEnsemble, WalkForwardReport]:
+    champion: OnlineLogisticModel | GradientBoostingModel | None,
+) -> tuple[OnlineLogisticModel | GradientBoostingModel | None, BootstrapEnsemble, WalkForwardReport]:
     """Full nightly job: walk-forward, promote or keep, refit calibration."""
     instrument = instruments.for_symbol(getattr(config, "pair", None))
     rep_horizon = _representative_horizon(candles, config)
@@ -492,6 +533,7 @@ def run_nightly(
         champion=champion,
         min_samples=config.nightly_min_samples,
         purge=rep_horizon,
+        embargo=rep_horizon,
     )
 
     should_rollback, rollback_reason = rollback_check(
@@ -542,8 +584,9 @@ def run_nightly(
             and report.folds >= MIN_WALK_FORWARD_FOLDS
         ):
             try:
-                veto_model = OnlineLogisticModel(mode=MODE_VETO).fit(
-                    [item.to_pair() for item in samples], epochs=120
+                veto_model = GradientBoostingModel(mode=MODE_VETO).fit(
+                    [item.to_pair() for item in samples],
+                    min_samples=80,
                 )
                 veto_model.mode = MODE_VETO
                 veto_model.trained_at = format_datetime(now())
@@ -565,7 +608,7 @@ def run_nightly(
         return champion, BootstrapEnsemble([]), report
 
     try:
-        model = OnlineLogisticModel().fit([item.to_pair() for item in samples], epochs=120)
+        model = GradientBoostingModel().fit([item.to_pair() for item in samples], min_samples=80)
     except ValueError as error:
         report.reason = str(error)
         return champion, BootstrapEnsemble([]), report

@@ -105,7 +105,15 @@ class Config:
     training_history: int = 200_000
 
     # --- signal shape ---
-    horizon_minutes: int = 5
+    horizon_minutes: int = 30
+    # Short-horizon aggressive mode: when horizon <= 3, use a relaxed cost gate
+    # so 1-min and 3-min signals can fire. The relaxation is bounded — it never
+    # drops below 1.5x spread, so the trade still pays for itself.
+    short_horizon_max_minutes: int = 3
+    short_horizon_min_reward: float = 1.5
+    # Sureshot detection: when model confidence exceeds this AND present
+    # conditions align AND the cost gate passes, the signal is flagged SURESHOT.
+    sureshot_confidence_threshold: float = 0.72
     # Hold long enough to pay for the trip. Off by default because it changes
     # which bars produce signals, and the default path stays the one that is
     # already measured. See fusion/costs.py for why 5 minutes at 1.2 pips is
@@ -347,7 +355,10 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         timeframe=os.environ.get("TIMEFRAME", charter.ALLOWED_TIMEFRAME).strip(),
         candle_history=_int("CANDLE_HISTORY", 320),
         training_history=_int("TRAINING_HISTORY", 200_000),
-        horizon_minutes=_int("SIGNAL_HORIZON_MINUTES", 5),
+        horizon_minutes=_int("SIGNAL_HORIZON_MINUTES", 30),
+        short_horizon_max_minutes=_int("SHORT_HORIZON_MAX_MINUTES", 3),
+        short_horizon_min_reward=_float("SHORT_HORIZON_MIN_REWARD", 1.5),
+        sureshot_confidence_threshold=_float("SURESHOT_CONFIDENCE_THRESHOLD", 0.72),
         adaptive_horizon=_bool("ADAPTIVE_HORIZON", False),
         session_filter=_bool("SESSION_FILTER", True),
         mtf_filter=_bool("MTF_FILTER", False),

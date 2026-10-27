@@ -601,6 +601,14 @@ class FusionEngine:
             atr_pips = abs(float(features.get("atr", 0.0))) / instruments.pip_for(
                 getattr(self.config, "pair", None)
             )
+
+        # --- Multi-horizon evaluation ---
+        # Try the default horizon first. If it can't pay, try short horizons
+        # (1-min, 3-min) with a relaxed cost gate. This lets aggressive
+        # scalping signals fire when the default hold is too long.
+        short_horizons = (1, 3) if getattr(self.config, "short_horizon_max_minutes", 0) >= 3 else ()
+        short_reward = getattr(self.config, "short_horizon_min_reward", 1.5)
+
         horizon = costs.resolve_horizon(
             atr_pips,
             spread,
@@ -609,6 +617,23 @@ class FusionEngine:
             reward_to_cost=self.config.reward_to_cost,
             max_horizon=self.config.max_horizon_minutes,
         )
+
+        # If default horizon can't pay, try short horizons with relaxed gate
+        if horizon is None and short_horizons:
+            for short_h in short_horizons:
+                if short_h <= self.config.short_horizon_max_minutes:
+                    short_horizon = costs.resolve_horizon(
+                        atr_pips,
+                        spread,
+                        short_h,
+                        adaptive=False,
+                        reward_to_cost=short_reward,
+                        max_horizon=short_h,
+                    )
+                    if short_horizon is not None:
+                        horizon = short_h
+                        break
+
         if horizon is None:
             verdict_obj = costs.evaluate(atr_pips, self.config.horizon_minutes, spread,
                                          self.config.reward_to_cost)
@@ -639,6 +664,45 @@ class FusionEngine:
                 )
 
         read = verdict.read
+
+        # --- Present-condition awareness ---
+        # Evaluate current market state alongside future predictions.
+        # Present conditions = current candle state, spread, volatility, session.
+        present = {}
+        if features:
+            present["current_candle_state"] = _classify_candle_state(features)
+            present["spread_pips"] = float(spread)
+            present["atr_pips"] = float(atr_pips)
+            present["regime"] = verdict.regime
+            # Volatility regime: is the market moving enough for short horizons?
+            present["volatility_ok"] = atr_pips >= 1.0  # Minimum 1 pip ATR for short horizons
+            present["spread_ok"] = float(spread) <= 2.0  # Max 2 pips spread for short horizons
+            # Session check
+            from fusion import session as session_mod
+            from fusion import instruments as instruments_mod
+            inst = instruments_mod.for_symbol(getattr(self.config, "pair", None))
+            present["session"] = session_mod.session_of(entry_time, inst)
+            present["session_ok"] = present["session"] != session_mod.OFF_HOURS
+            # Present trend alignment: does the current candle direction agree with the signal?
+            present["trend_aligned"] = _check_present_trend(features, verdict.side)
+
+        # --- Sureshot detection ---
+        # A SURESHOT fires when: model confidence is high AND present conditions
+        # align AND the cost gate passes AND the horizon is affordable.
+        sureshot = False
+        confidence = float(read.probability) if read and read.probability is not None else 0.0
+        threshold = getattr(self.config, "sureshot_confidence_threshold", 0.72)
+
+        if (
+            confidence >= threshold
+            and present
+            and present.get("volatility_ok", False)
+            and present.get("spread_ok", False)
+            and present.get("session_ok", False)
+            and present.get("trend_aligned", False)
+        ):
+            sureshot = True
+
         signal = Signal.create(
             pair=self.config.pair,
             side=verdict.side,
@@ -658,17 +722,51 @@ class FusionEngine:
             # settlement cannot update the model and the bar is wasted.
             features=dict(features or {}),
             spread_pips=spread,
+            sureshot=sureshot,
+            present_conditions=present,
         )
+
+        # Auto-select expiry based on horizon and sureshot status
+        reason_text = verdict.reason
+        if sureshot:
+            reason_text = f"SURESHOT: {horizon}-min expiry auto-selected (confidence {confidence:.2f}, conditions aligned)"
+        elif horizon < self.config.horizon_minutes:
+            reason_text = f"Aggressive {horizon}-min expiry (default {self.config.horizon_minutes}-min unaffordable)"
+
         return EngineResult(
             charter.SEAL_SIGNAL,
             signal,
-            verdict.reason,
+            reason_text,
             gate=gate,
             regime=verdict.regime,
             read=read,
             council=verdict.council,
             model_reason=verdict.model_reason,
         )
+
+
+def _classify_candle_state(features: dict[str, float]) -> str:
+    """Classify current candle state from features."""
+    # Use ATR and recent momentum to classify
+    atr = abs(float(features.get("atr", 0.0)))
+    momentum = float(features.get("momentum_1", 0.0))
+    if atr > 2.0 and abs(momentum) > 0.5:
+        return "HIGH_VOL_MOMENTUM"
+    elif atr > 1.0:
+        return "MODERATE_VOL"
+    else:
+        return "LOW_VOL"
+
+
+def _check_present_trend(features: dict[str, float], side: str) -> bool:
+    """Check if the present candle trend aligns with the signal direction."""
+    momentum = float(features.get("momentum_1", 0.0))
+    rsi = float(features.get("rsi_14", 50.0))
+    if side == "BUY":
+        # For BUY: momentum should be positive or RSI not overbought
+        return momentum > 0.0 or rsi < 60.0
+    else:  # SELL
+        return momentum < 0.0 or rsi > 40.0
 
 
 def expiry_of(signal: Signal) -> datetime:

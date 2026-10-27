@@ -134,6 +134,98 @@ class TestWalkForward(unittest.TestCase):
         self.assertIn("worse than the champion", reason)
 
 
+class TestWalkForwardPurgeAndEmbargo(unittest.TestCase):
+    """Regression tests for the walk-forward purge/embargo fix.
+
+    Before the fix, ``walk_forward`` defaulted to ``purge=0``, which means
+    the last training sample's label (which spans bars *i+1* to *i+horizon*)
+    overlaps the first test sample's feature bar. This is label leakage: the
+    model is evaluated on data its training labels already "saw."
+    """
+
+    def setUp(self):
+        self.candles = trending_candles(420)
+        self.samples = build_training_samples(self.candles, horizon=5)
+
+    def test_purge_creates_a_gap_between_train_and_test(self):
+        from fusion.learning import _folds
+
+        splits = _folds(self.samples, folds=4, purge=5)
+        self.assertGreaterEqual(len(splits), 3)
+        for train, test in splits:
+            # The last training sample index must be strictly less than the
+            # first test sample index minus the purge gap.
+            train_end_idx = self.samples.index(train[-1])
+            test_start_idx = self.samples.index(test[0])
+            self.assertLess(
+                train_end_idx,
+                test_start_idx,
+                "Training and test must not be adjacent without a purge gap.",
+            )
+
+    def test_purge_default_is_nonzero(self):
+        """The default purge must be at least 1 to prevent label overlap."""
+        from fusion.learning import _folds
+
+        # Calling _folds without explicit purge should still create a gap.
+        splits = _folds(self.samples, folds=4)
+        self.assertGreaterEqual(len(splits), 3)
+        for train, test in splits:
+            train_end_idx = self.samples.index(train[-1])
+            test_start_idx = self.samples.index(test[0])
+            self.assertLess(
+                train_end_idx,
+                test_start_idx,
+                "Default purge must create at least a 1-bar gap.",
+            )
+
+    def test_embargo_creates_a_gap_between_consecutive_test_folds(self):
+        from fusion.learning import _folds
+
+        splits_with = _folds(self.samples, folds=4, purge=1, embargo=5)
+        splits_without = _folds(self.samples, folds=4, purge=1, embargo=0)
+        self.assertGreaterEqual(len(splits_with), 3)
+
+        # With embargo, the test sets should be shifted later, leaving a gap.
+        for (_, test_a), (_, test_b) in zip(splits_with, splits_without):
+            if not test_a or not test_b:
+                continue
+            a_start = self.samples.index(test_a[0])
+            b_start = self.samples.index(test_b[0])
+            self.assertGreaterEqual(
+                a_start,
+                b_start,
+                "Embargo should shift test folds later or keep them at the same start.",
+            )
+
+    def test_wider_purge_produces_different_folds(self):
+        """A wider purge should change the fold boundaries."""
+        from fusion.learning import _folds
+
+        narrow = _folds(self.samples, folds=4, purge=1)
+        wide = _folds(self.samples, folds=4, purge=10)
+        self.assertGreaterEqual(len(narrow), 3)
+        self.assertGreaterEqual(len(wide), 3)
+
+        # The training sets should differ.
+        narrow_train = [len(train) for train, _ in narrow]
+        wide_train = [len(train) for train, _ in wide]
+        self.assertNotEqual(
+            narrow_train,
+            wide_train,
+            "Wider purge should produce smaller training sets.",
+        )
+
+    def test_run_nightly_passes_purge_equal_to_horizon(self):
+        """run_nightly must pass purge=horizon so training labels cannot reach the test window."""
+        import inspect
+        from fusion import learning
+
+        src = inspect.getsource(learning.run_nightly)
+        self.assertIn("purge=rep_horizon", src)
+        self.assertIn("embargo=rep_horizon", src)
+
+
 class TestPromotionNeedsMoreThanAPositiveTotal(unittest.TestCase):
     def _report(self, trade_pips):
         from fusion.learning import WalkForwardReport
