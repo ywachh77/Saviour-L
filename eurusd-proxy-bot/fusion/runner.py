@@ -30,6 +30,7 @@ from .domain import Candle, Signal, closed_before
 from .engine import FusionEngine
 from .family_fusion import FamilyFusionEngine
 from .keypool import KeyPool
+from .gbdt import GradientBoostingModel
 from .model import MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
 from .mistakes import MistakeMemory
 from .provider import TwelveDataProvider
@@ -196,7 +197,7 @@ class FusionBot:
 
     def _load_state(self) -> None:
         row = self.store.load_model_state(pair=self.config.pair) or {}
-        self.model = OnlineLogisticModel.from_dict(row.get("model"))
+        self.model = GradientBoostingModel.from_dict(row.get("model")) or OnlineLogisticModel.from_dict(row.get("model"))
         self.ensemble = BootstrapEnsemble.from_dict(row.get("ensemble"))
         self.weights = CouncilWeights.from_dict(self.store.load_council_weights(pair=self.config.pair))
         runtime = row.get("runtime")
@@ -1779,15 +1780,15 @@ class FusionBot:
             samples = learning.build_training_samples(history, horizon=rep_horizon, instrument=inst)
             if len(samples) >= 40:
                 try:
-                    fitted = OnlineLogisticModel(mode=MODE_VETO).fit(
-                        [item.to_pair() for item in samples], epochs=80
+                    fitted = GradientBoostingModel(mode=MODE_VETO).fit(
+                        [item.to_pair() for item in samples], min_samples=40
                     )
                     fitted.mode = MODE_VETO
                     self.model = fitted
                     return
                 except ValueError:
                     pass
-        self.model = OnlineLogisticModel.cold_start_veto()
+        self.model = GradientBoostingModel.cold_start_veto()
 
     def run_auto_backtest(
         self,

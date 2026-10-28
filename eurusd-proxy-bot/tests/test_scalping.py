@@ -314,7 +314,7 @@ class ScalpFeatureTests(unittest.TestCase):
             feature_version=3,
         )
         self.assertFalse(stale.compatible)
-        self.assertEqual(4, FEATURE_VERSION)
+        self.assertEqual(5, FEATURE_VERSION)
 
 
 class ScalpIntegrationTests(unittest.TestCase):

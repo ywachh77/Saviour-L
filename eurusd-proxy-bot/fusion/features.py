@@ -49,7 +49,7 @@ CCI_PERIOD = 20
 # swing the swing strategies use, because a scalp targets a few pips, not a leg.
 MICRO_PIVOT_BARS = 5
 
-FEATURE_VERSION = 4
+FEATURE_VERSION = 5
 
 # Higher-timeframe context. The feed is one-minute only, so these are resampled
 # from the bars we already hold rather than fetched: five one-minute bars are a
@@ -95,6 +95,22 @@ FEATURE_NAMES = (
     "stoch_d_scaled",
     "cci_scaled",
     "vwap_dev",
+    # --- regime detection (v5) ---------------------------------------------
+    # Research: ADX > 25 + ATR above median = momentum regime; ADX < 20 +
+    # ATR below median = mean-reversion. Model must know which regime it's in
+    # before committing to a direction.
+    "regime_momentum",
+    "regime_mean_reversion",
+    "regime_chop",
+    "return_20",
+    "return_60",
+    "volatility_z",
+    "ker_slope",
+    "adx_trend",
+    "session_london",
+    "session_ny",
+    "autocorr_abs",
+    "range_expansion",
     # Higher-timeframe context is deliberately NOT here. The tilt is computed
     # and carried as strategy-facing values below (mtf_fast / mtf_slow, plus
     # mtf_bias_* and mtf_gap_*), but it does not enter the model vector:
@@ -138,6 +154,18 @@ FEATURE_LABELS = {
     "stoch_d_scaled": "Stochastic %D (centred)",
     "cci_scaled": "CCI (scaled)",
     "vwap_dev": "Distance from VWAP",
+    "regime_momentum": "Momentum regime flag",
+    "regime_mean_reversion": "Mean-reversion regime flag",
+    "regime_chop": "Choppy regime flag",
+    "return_20": "20-bar return",
+    "return_60": "60-bar return",
+    "volatility_z": "Volatility z-score",
+    "ker_slope": "KAMA efficiency ratio slope",
+    "adx_trend": "ADX trend change",
+    "session_london": "London session flag",
+    "session_ny": "NY session flag",
+    "autocorr_abs": "Autocorrelation strength",
+    "range_expansion": "Range expansion ratio",
 }
 
 # How many bars are needed before a feature row is complete.
@@ -200,7 +228,76 @@ def compute_features(
     mtf_slow = mtf.bias_series(candles, minutes=MTF_SLOW_MINUTES, ema_period=MTF_EMA_PERIOD)
     mtf_macro = mtf.bias_series(candles, minutes=MTF_MACRO_MINUTES, ema_period=MTF_EMA_PERIOD)
 
+    # --- regime detection series (v5) ---
+    # Returns computed first — regime features depend on rolling volatility.
     returns: list[float] = [0.0]
+    for i in range(1, len(closes)):
+        returns.append(_safe_ratio(closes[i] - closes[i - 1], closes[i - 1]))
+
+    # Rolling 50-bar median ATR for regime classification.
+    _atr_med_window = 50
+    atr_medians: list[float | None] = [None] * len(candles)
+    for i in range(_atr_med_window - 1, len(candles)):
+        window = [v for v in atr_values[i - _atr_med_window + 1 : i + 1] if v is not None]
+        if len(window) >= _atr_med_window // 2:
+            atr_medians[i] = median(window)
+
+    # Volatility z-score: current 10-bar vol vs 50-bar distribution.
+    _vol_window = 50
+    vol_zscores: list[float | None] = [None] * len(candles)
+    vol_medians_list: list[float | None] = [None] * len(candles)
+    for i in range(_vol_window - 1, len(candles)):
+        vol_now = rolling_std(returns, i, 10)
+        if vol_now is None:
+            continue
+        vol_history = [
+            rolling_std(returns, j, 10)
+            for j in range(i - _vol_window + 1, i + 1)
+            if rolling_std(returns, j, 10) is not None
+        ]
+        if len(vol_history) < _vol_window // 2:
+            continue
+        v_med = median(vol_history)
+        vol_medians_list[i] = v_med
+        if v_med and v_med > 0:
+            # z-score of current vol vs history
+            v_mean = mean(vol_history)
+            v_std = pstdev(vol_history) or 1e-8
+            vol_zscores[i] = (vol_now - v_mean) / v_std
+
+    # Longer-horizon returns (20, 60 bars)
+    return_20_vals: list[float] = [0.0] * len(candles)
+    return_60_vals: list[float] = [0.0] * len(candles)
+    for i in range(len(candles)):
+        if i >= 20:
+            return_20_vals[i] = _safe_ratio(closes[i] - closes[i - 20], closes[i - 20])
+        if i >= 60:
+            return_60_vals[i] = _safe_ratio(closes[i] - closes[i - 60], closes[i - 60])
+
+    # KAMA efficiency-ratio slope (5-bar change)
+    ker_slope_vals: list[float] = [0.0] * len(candles)
+    for i in range(5, len(candles)):
+        if ker_10_values[i] is not None and ker_10_values[i - 5] is not None:
+            ker_slope_vals[i] = ker_10_values[i] - ker_10_values[i - 5]
+
+    # ADX trend change (5-bar delta, scaled)
+    adx_trend_vals: list[float] = [0.0] * len(candles)
+    for i in range(5, len(candles)):
+        if adx_values[i] is not None and adx_values[i - 5] is not None:
+            adx_trend_vals[i] = (adx_values[i] - adx_values[i - 5]) / 100.0
+
+    # Autocorrelation absolute value
+    autocorr_abs_vals: list[float] = [0.0] * len(candles)
+    for i in range(20, len(candles)):
+        autocorr_abs_vals[i] = abs(autocorrelation(returns[i - 19 : i + 1]))
+
+    # Range expansion: current bar range vs 5-bar average
+    range_expansion_vals: list[float] = [1.0] * len(candles)
+    for i in range(5, len(candles)):
+        ranges_5 = [candles[j].high - candles[j].low for j in range(i - 4, i + 1)]
+        avg_r5 = mean(ranges_5)
+        cur_range = candles[i].high - candles[i].low
+        range_expansion_vals[i] = _safe_ratio(cur_range, avg_r5, 1.0)
     for index in range(1, len(closes)):
         returns.append(_safe_ratio(closes[index] - closes[index - 1], closes[index - 1]))
 
@@ -328,6 +425,19 @@ def compute_features(
             "stoch_d_scaled": (stoch_d_values[index] - 50.0) / 50.0,
             "cci_scaled": max(-1.0, min(1.0, cci_values[index] / 200.0)),
             "vwap_dev": _safe_ratio(candle.close - vwap_values[index], candle.close) * 1000.0,
+            # regime detection (v5)
+            "regime_momentum": 1.0 if (adx_values[index] is not None and adx_values[index] > 25.0 and atr_medians[index] is not None and atr_values[index] is not None and atr_values[index] > atr_medians[index]) else 0.0,
+            "regime_mean_reversion": 1.0 if (adx_values[index] is not None and adx_values[index] < 20.0 and atr_medians[index] is not None and atr_values[index] is not None and atr_values[index] < atr_medians[index]) else 0.0,
+            "regime_chop": 1.0 if (chop_14_values[index] is not None and chop_14_values[index] > 70.0) else 0.0,
+            "return_20": return_20_vals[index],
+            "return_60": return_60_vals[index],
+            "volatility_z": float(vol_zscores[index]) if vol_zscores[index] is not None else 0.0,
+            "ker_slope": ker_slope_vals[index],
+            "adx_trend": adx_trend_vals[index],
+            "session_london": 1.0 if 8 <= candle.timestamp.hour < 16 else 0.0,
+            "session_ny": 1.0 if 13 <= candle.timestamp.hour < 21 else 0.0,
+            "autocorr_abs": autocorr_abs_vals[index],
+            "range_expansion": range_expansion_vals[index],
             # higher-timeframe context
             "mtf_bias_5": float(mtf_fast[index].direction),
             "mtf_gap_5": _mtf_gap(mtf_fast[index], candle.close),
