@@ -49,7 +49,7 @@ CCI_PERIOD = 20
 # swing the swing strategies use, because a scalp targets a few pips, not a leg.
 MICRO_PIVOT_BARS = 5
 
-FEATURE_VERSION = 6
+FEATURE_VERSION = 7
 
 # Higher-timeframe context. The feed is one-minute only, so these are resampled
 # from the bars we already hold rather than fetched: five one-minute bars are a
@@ -116,6 +116,12 @@ FEATURE_NAMES = (
     "upper_shadow_dom",
     "lower_shadow_dom",
     "consecutive_dir_count",
+    # --- volatility regime (v7) --------------------------------------------
+    # Explicit volatility regime flags. The model was struggling to infer
+    # volatility regimes from volatility_z alone. These make it explicit.
+    "vol_regime_low",
+    "vol_regime_high",
+    "vol_regime_cluster",
     # Higher-timeframe context is deliberately NOT here. The tilt is computed
     # and carried as strategy-facing values below (mtf_fast / mtf_slow, plus
     # mtf_bias_* and mtf_gap_*), but it does not enter the model vector:
@@ -175,6 +181,9 @@ FEATURE_LABELS = {
     "upper_shadow_dom": "Upper shadow dominance",
     "lower_shadow_dom": "Lower shadow dominance",
     "consecutive_dir_count": "Consecutive direction count",
+    "vol_regime_low": "Low volatility regime flag",
+    "vol_regime_high": "High volatility regime flag",
+    "vol_regime_cluster": "Volatility clustering flag",
 }
 
 # How many bars are needed before a feature row is complete.
@@ -424,6 +433,28 @@ def compute_features(
             if abs(dir_count) > 20:
                 break
 
+        # --- volatility regime (v7) ---
+        # Compute ATR percentile over the full series for regime classification.
+        vol_regime_low = 0.0
+        vol_regime_high = 0.0
+        vol_regime_cluster = 0.0
+        if atr_values[index] is not None and atr_medians[index] is not None:
+            atr_now = atr_values[index]
+            atr_med = atr_medians[index]
+            # Compute 25th/75th percentile from recent ATR window
+            atr_window_vals = [v for v in atr_values[max(0, index - 49):index + 1] if v is not None]
+            if len(atr_window_vals) >= 10:
+                sorted_atr = sorted(atr_window_vals)
+                n = len(sorted_atr)
+                p25 = sorted_atr[n // 4]
+                p75 = sorted_atr[(3 * n) // 4]
+                vol_regime_low = 1.0 if atr_now < p25 else 0.0
+                vol_regime_high = 1.0 if atr_now > p75 else 0.0
+            # Clustering: vol_zscore spike + range compression
+            vol_z = float(vol_zscores[index]) if vol_zscores[index] is not None else 0.0
+            range_comp = _safe_ratio(micro_range, range_span, 1.0) if range_span > 0 else 1.0
+            vol_regime_cluster = 1.0 if (vol_z > 1.5 and range_comp < 0.8) else 0.0
+
         feature = {
             # model inputs (ordered in FEATURE_NAMES)
             "return_1": returns[index],
@@ -477,6 +508,10 @@ def compute_features(
             "upper_shadow_dom": upper_shadow_dom,
             "lower_shadow_dom": lower_shadow_dom,
             "consecutive_dir_count": max(-1.0, min(1.0, dir_count / 10.0)),
+            # volatility regime (v7)
+            "vol_regime_low": vol_regime_low,
+            "vol_regime_high": vol_regime_high,
+            "vol_regime_cluster": vol_regime_cluster,
             # higher-timeframe context
             "mtf_bias_5": float(mtf_fast[index].direction),
             "mtf_gap_5": _mtf_gap(mtf_fast[index], candle.close),

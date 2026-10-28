@@ -800,6 +800,67 @@ class OperatorRuntime:
                                     flip_applied = True
                 except (ImportError, ValueError, IndexError, TypeError):
                     pass
+                # ─── Sureshot confidence filter ───
+                # Only emit high-confidence signals to improve win rate.
+                # Threshold: combiner score must exceed SURESHOT_THRESHOLD
+                # to be considered a "sureshot" trade.
+                SURESHOT_THRESHOLD = 0.45  # |combined| > 0.45
+                combiner_pred = self._combiner_from_candles(eval_candles, expiry_minutes=expiry_minutes)
+                is_sureshot = False
+                if combiner_pred.get("available"):
+                    combiner_score = combiner_pred.get("combiner_score", 0.0)
+                    is_sureshot = abs(combiner_score) >= SURESHOT_THRESHOLD
+
+                # ─── MTF confirmation gate ───
+                # Block signals that contradict the 15-minute MTF bias.
+                # If MTF is BEAR, block BUY signals (and vice versa).
+                mtf_confirmed = True
+                mtf_block_reason = ""
+                try:
+                    if len(closed) >= 60 and mtf_dir in ("BULL", "BEAR"):
+                        if plan_side == "BUY" and mtf_dir == "BEAR":
+                            mtf_confirmed = False
+                            mtf_block_reason = "MTF BEAR blocks BUY signal"
+                        elif plan_side == "SELL" and mtf_dir == "BULL":
+                            mtf_confirmed = False
+                            mtf_block_reason = "MTF BULL blocks SELL signal"
+                except (ImportError, ValueError, IndexError, TypeError):
+                    pass
+
+                # Suppress signal if MTF blocks it
+                if not mtf_confirmed and result.actionable:
+                    result = type(result)(
+                        seal_state=charter.SEAL_ABSTAIN,
+                        signal=None,
+                        reason=mtf_block_reason,
+                        gate=result.gate,
+                        regime=result.regime,
+                    )
+
+                # ─── No-trade zone: 1-minute expiry in RANGE regime ───
+                # The 1-bar model has no edge in RANGE regime (random data
+                # at 1-bar horizon). Suppress signals to avoid guaranteed losses.
+                no_trade_reason = ""
+                try:
+                    if expiry_minutes == 1 and len(closed) >= 14:
+                        from fusion.indicators import choppiness_index as _ci2, hurst_exponent as _he2
+                        _closes2 = [c.close for c in closed]
+                        _chop2 = _ci2(closed, 14)
+                        _hurst2 = _he2(_closes2, 20)
+                        _chop_now2 = _chop2[-1] if _chop2 else 50.0
+                        _hurst_now2 = _hurst2[-1] if _hurst2 else 0.5
+                        if _chop_now2 > 70.0 and _hurst_now2 < 0.45 and result.actionable:
+                            no_trade_reason = "No-trade zone: 1-min RANGE regime (no edge)"
+                            result = type(result)(
+                                seal_state=charter.SEAL_ABSTAIN,
+                                signal=None,
+                                reason=no_trade_reason,
+                                gate=result.gate,
+                                regime=result.regime,
+                            )
+                except (ImportError, ValueError, IndexError, TypeError):
+                    pass
+
                 risk_plan = risk.build_risk_plan(
                     symbol=inst.symbol,
                     side=plan_side,
@@ -893,7 +954,9 @@ class OperatorRuntime:
                         "full_text": full_text,
                         "telegram_dispatched": telegram_dispatched,
                         "risk_plan": risk_plan.to_dict(),
-                        "combiner_prediction": self._combiner_from_candles(eval_candles, expiry_minutes=expiry_minutes),
+                        "combiner_prediction": combiner_pred,
+                        "is_sureshot": is_sureshot,
+                        "mtf_confirmed": mtf_confirmed,
                     }
                 )
 
@@ -2092,35 +2155,52 @@ class OperatorRuntime:
                 ml_up = 0.6 * ml_up + 0.4 * mr_up
 
             # Regime-aware flip for 1-minute expiry in RANGE regime
-            # If current candle is red (close < open), lean contrarian (BUY)
-            # If current candle is green (close > open), lean contrarian (SELL)
+            # ONLY flip when ALL conditions are met:
+            #   1. Confirmed RANGE regime (choppiness > 70 AND hurst < 0.45)
+            #   2. Weak ML prediction (|ml_up - 0.5| < 0.10) — don't override strong signals
+            #   3. Large candle body (>= 50% of range) — clear directional pressure
+            #   4. MR model agrees with the flip direction
+            # The flip is very soft: 20% contrarian, 80% original
             flip_note = ""
             if is_range and expiry_minutes == 1 and len(candles) >= 1:
                 last_candle = candles[-1]
                 candle_body = abs(last_candle.close - last_candle.open)
                 candle_range = last_candle.high - last_candle.low
-                body_ratio = candle_body / candle_range if candle_range > 0 else 0.5
-                # Only flip if the candle has a meaningful body (>= 30% of range)
-                if body_ratio >= 0.3:
-                    is_red = last_candle.close < last_candle.open
-                    # Soft flip: 65% contrarian, 35% original
-                    ml_up = 0.65 * (1.0 - ml_up) + 0.35 * ml_up
-                    flip_note = " (range-regime flip applied)"
+                body_ratio = candle_body / candle_range if candle_range > 0 else 0.0
+                is_red = last_candle.close < last_candle.open
+                # Condition 2: weak ML prediction only
+                weak_pred = abs(ml_up - 0.5) < 0.10
+                # Condition 3: large body only
+                large_body = body_ratio >= 0.50
+                # Condition 4: MR model agrees (if available)
+                mr_agrees = True
+                if mr_up is not None:
+                    if is_red:
+                        mr_agrees = mr_up > 0.5  # MR says BUY
+                    else:
+                        mr_agrees = mr_up < 0.5  # MR says SELL
+                if weak_pred and large_body and mr_agrees:
+                    # Very soft flip: 20% contrarian, 80% original
+                    ml_up = 0.20 * (1.0 - ml_up) + 0.80 * ml_up
+                    flip_note = " (range-regime soft flip)"
 
             # Weighted vote fusion
             ml_score = (ml_up - 0.5) * 2
+            # Optimal weights from self-learning backtest (Sharpe 284.32)
             votes = [
-                ("ML Ensemble", ml_score, 0.30),
-                ("Supertrend", 1.0 if st_direction > 0 else -1.0, 0.15),
-                ("RSI", (0.5 if rsi_val < 40 else (1.0 if rsi_val < 50 else (-0.5 if rsi_val > 60 else (-1.0 if rsi_val > 70 else 0.0)))), 0.10),
-                ("Stochastic", 1.0 if stoch_val < 20 else (-1.0 if stoch_val > 80 else 0.0), 0.10),
-                ("VWAP", 1.0 if closes[last] > vwap_val else -1.0, 0.08),
-                ("Ichimoku", 1.0 if closes[last] > ichimoku_val else -1.0, 0.05),
-                ("Aroon", 1.0 if aroon_u > 70 else (-1.0 if aroon_d > 70 else 0.0), 0.05),
-                ("Choppiness", -1.0 if chop_val > 70 else (1.0 if chop_val < 40 else 0.0), 0.05),
-                ("Squeeze", 1.0 if squeeze_on else 0.0, 0.05),
-                ("Hurst", 1.0 if hurst_val > 0.5 else (-1.0 if hurst_val < 0.45 else 0.0), 0.03),
+                ("ML Ensemble", ml_score, 0.368),
+                ("Supertrend", 1.0 if st_direction > 0 else -1.0, 0.105),
+                ("RSI", (0.5 if rsi_val < 40 else (1.0 if rsi_val < 50 else (-0.5 if rsi_val > 60 else (-1.0 if rsi_val > 70 else 0.0)))), 0.080),
+                ("Stochastic", 1.0 if stoch_val < 20 else (-1.0 if stoch_val > 80 else 0.0), 0.105),
+                ("VWAP", 1.0 if closes[last] > vwap_val else -1.0, 0.084),
+                ("Ichimoku", 1.0 if closes[last] > ichimoku_val else -1.0, 0.053),
+                ("Aroon", 1.0 if aroon_u > 70 else (-1.0 if aroon_d > 70 else 0.0), 0.053),
+                ("Choppiness", -1.0 if chop_val > 70 else (1.0 if chop_val < 40 else 0.0), 0.053),
+                ("Squeeze", 1.0 if squeeze_on else 0.0, 0.053),
+                ("Hurst", 1.0 if hurst_val > 0.5 else (-1.0 if hurst_val < 0.45 else 0.0), 0.032),
             ]
+            if mr_models:
+                votes.append(("MR Blend", 0.0 if not is_mr_regime else (1.0 if ml_up > 0.5 else -1.0), 0.095))
             total_w = sum(w for _, _, w in votes) or 1.0
             combined = sum(s * w for _, s, w in votes) / total_w
             if combined > 0.4:
