@@ -49,7 +49,7 @@ CCI_PERIOD = 20
 # swing the swing strategies use, because a scalp targets a few pips, not a leg.
 MICRO_PIVOT_BARS = 5
 
-FEATURE_VERSION = 5
+FEATURE_VERSION = 6
 
 # Higher-timeframe context. The feed is one-minute only, so these are resampled
 # from the bars we already hold rather than fetched: five one-minute bars are a
@@ -111,6 +111,11 @@ FEATURE_NAMES = (
     "session_ny",
     "autocorr_abs",
     "range_expansion",
+    # --- candle quality microstructure (v6) -------------------------------
+    "body_to_wick_ratio",
+    "upper_shadow_dom",
+    "lower_shadow_dom",
+    "consecutive_dir_count",
     # Higher-timeframe context is deliberately NOT here. The tilt is computed
     # and carried as strategy-facing values below (mtf_fast / mtf_slow, plus
     # mtf_bias_* and mtf_gap_*), but it does not enter the model vector:
@@ -166,6 +171,10 @@ FEATURE_LABELS = {
     "session_ny": "NY session flag",
     "autocorr_abs": "Autocorrelation strength",
     "range_expansion": "Range expansion ratio",
+    "body_to_wick_ratio": "Body vs wick ratio",
+    "upper_shadow_dom": "Upper shadow dominance",
+    "lower_shadow_dom": "Lower shadow dominance",
+    "consecutive_dir_count": "Consecutive direction count",
 }
 
 # How many bars are needed before a feature row is complete.
@@ -390,6 +399,31 @@ def compute_features(
         mom_now = float(linreg_mom_vals[index] if linreg_mom_vals[index] is not None else 0.0)
         mom_prev = float(linreg_mom_vals[index - 1] if linreg_mom_vals[index - 1] is not None else mom_now)
 
+        # --- candle quality microstructure (v6) ---
+        upper_wick = candle.high - max(candle.open, candle.close)
+        lower_wick = min(candle.open, candle.close) - candle.low
+        total_wick = upper_wick + lower_wick
+        body_to_wick = _safe_ratio(abs(body), total_wick, 1.0)
+        upper_shadow_dom = _safe_ratio(upper_wick, total_wick, 0.5)
+        lower_shadow_dom = _safe_ratio(lower_wick, total_wick, 0.5)
+        # Count consecutive same-direction closes (signed, capped at ±1.0)
+        dir_count = 0
+        for j in range(index, 0, -1):
+            if closes[j] > closes[j - 1]:
+                if dir_count >= 0:
+                    dir_count += 1
+                else:
+                    break
+            elif closes[j] < closes[j - 1]:
+                if dir_count <= 0:
+                    dir_count -= 1
+                else:
+                    break
+            else:
+                break
+            if abs(dir_count) > 20:
+                break
+
         feature = {
             # model inputs (ordered in FEATURE_NAMES)
             "return_1": returns[index],
@@ -438,6 +472,11 @@ def compute_features(
             "session_ny": 1.0 if 13 <= candle.timestamp.hour < 21 else 0.0,
             "autocorr_abs": autocorr_abs_vals[index],
             "range_expansion": range_expansion_vals[index],
+            # candle quality microstructure (v6)
+            "body_to_wick_ratio": body_to_wick,
+            "upper_shadow_dom": upper_shadow_dom,
+            "lower_shadow_dom": lower_shadow_dom,
+            "consecutive_dir_count": max(-1.0, min(1.0, dir_count / 10.0)),
             # higher-timeframe context
             "mtf_bias_5": float(mtf_fast[index].direction),
             "mtf_gap_5": _mtf_gap(mtf_fast[index], candle.close),

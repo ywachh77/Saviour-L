@@ -775,6 +775,31 @@ class OperatorRuntime:
                         else fallback_side
                     )
                 )
+                # Regime-aware flip for 1-minute expiry in RANGE regime
+                # If current candle is red -> lean BUY; if green -> lean SELL
+                flip_applied = False
+                try:
+                    _chop_vals = []
+                    if len(closed) >= 14:
+                        from fusion.indicators import choppiness_index as _ci, hurst_exponent as _he
+                        _closes = [c.close for c in closed]
+                        _chop_vals = _ci(closed, 14)
+                        _hurst_vals = _he(_closes, 20)
+                        _chop_now = _chop_vals[-1] if _chop_vals else 50.0
+                        _hurst_now = _hurst_vals[-1] if _hurst_vals else 0.5
+                        if _chop_now > 70.0 and _hurst_now < 0.45 and expiry_minutes == 1 and closed:
+                            last_closed = closed[-1]
+                            _body = abs(last_closed.close - last_closed.open)
+                            _rng = last_closed.high - last_closed.low
+                            if _rng > 0 and (_body / _rng) >= 0.3:
+                                if plan_side == "BUY":
+                                    plan_side = "SELL"
+                                    flip_applied = True
+                                elif plan_side == "SELL":
+                                    plan_side = "BUY"
+                                    flip_applied = True
+                except (ImportError, ValueError, IndexError, TypeError):
+                    pass
                 risk_plan = risk.build_risk_plan(
                     symbol=inst.symbol,
                     side=plan_side,
@@ -851,7 +876,7 @@ class OperatorRuntime:
                         "mtf_bias": mtf_dir,
                         "actionable": result.actionable,
                         "seal_state": result.seal_state,
-                        "side": result.signal.side if result.signal else "NO SIGNAL",
+                        "side": (plan_side if flip_applied else (result.signal.side if result.signal else "NO SIGNAL")),
                         "reason": result.reason,
                         "regime": result.regime,
                         "core_checks": core_score,
@@ -868,7 +893,7 @@ class OperatorRuntime:
                         "full_text": full_text,
                         "telegram_dispatched": telegram_dispatched,
                         "risk_plan": risk_plan.to_dict(),
-                        "combiner_prediction": self._combiner_from_candles(eval_candles),
+                        "combiner_prediction": self._combiner_from_candles(eval_candles, expiry_minutes=expiry_minutes),
                     }
                 )
 
@@ -1975,7 +2000,7 @@ class OperatorRuntime:
             "errors": indicators.get("error"),
         }
 
-    def _combiner_from_candles(self, candles: list) -> dict[str, Any]:
+    def _combiner_from_candles(self, candles: list, expiry_minutes: int = 30) -> dict[str, Any]:
         """Compute combiner score + ML prediction from Candle objects (used in signal cards)."""
         try:
             if not candles or len(candles) < 60:
@@ -1995,8 +2020,14 @@ class OperatorRuntime:
             indicators["close"] = closes[last]
 
             # Run ML ensemble if a model is available
-            model_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model.json"
+            # Select model based on expiry: 1-min -> 1-bar model, 3/30-min -> 5-bar model
+            if expiry_minutes == 1:
+                model_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model_1bar.json"
+            else:
+                model_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model.json"
+            mr_model_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model_mr.json"
             ml_up = 0.5
+            mr_up = None
             if model_path.is_file():
                 try:
                     with open(model_path, encoding="utf-8") as f:
@@ -2011,6 +2042,22 @@ class OperatorRuntime:
                                 loaded_models.append(m)
                         if loaded_models:
                             ml_up = sum(m.predict_up(last_feat) for m in loaded_models) / len(loaded_models)
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+
+            # Load MR model for regime blending
+            if mr_model_path.is_file():
+                try:
+                    with open(mr_model_path, encoding="utf-8") as f:
+                        mr_data = json.load(f)
+                    if last_feat and mr_data.get("models"):
+                        mr_models = []
+                        for m_dict in mr_data["models"]:
+                            m = GBDTModel.from_dict(m_dict)
+                            if m is not None:
+                                mr_models.append(m)
+                        if mr_models:
+                            mr_up = sum(m.predict_up(last_feat) for m in mr_models) / len(mr_models)
                 except (OSError, ValueError, KeyError, TypeError):
                     pass
 
@@ -2035,6 +2082,30 @@ class OperatorRuntime:
             squeeze_on = bool(squeeze_bools[-1]) if squeeze_bools else False
             hurst_vals = hurst_exponent(closes, 20)
             hurst_val = hurst_vals[-1] if hurst_vals else 0.5
+
+            # Regime detection for blending and flip
+            is_range = chop_val > 70.0 and hurst_val < 0.45
+            is_mr_regime = (chop_val > 65.0 and hurst_val < 0.48) or (adx_val < 20.0 if 'adx_val' in dir() else False)
+
+            # Blend MR model when in mean-reversion regime
+            if mr_up is not None and is_mr_regime:
+                ml_up = 0.6 * ml_up + 0.4 * mr_up
+
+            # Regime-aware flip for 1-minute expiry in RANGE regime
+            # If current candle is red (close < open), lean contrarian (BUY)
+            # If current candle is green (close > open), lean contrarian (SELL)
+            flip_note = ""
+            if is_range and expiry_minutes == 1 and len(candles) >= 1:
+                last_candle = candles[-1]
+                candle_body = abs(last_candle.close - last_candle.open)
+                candle_range = last_candle.high - last_candle.low
+                body_ratio = candle_body / candle_range if candle_range > 0 else 0.5
+                # Only flip if the candle has a meaningful body (>= 30% of range)
+                if body_ratio >= 0.3:
+                    is_red = last_candle.close < last_candle.open
+                    # Soft flip: 65% contrarian, 35% original
+                    ml_up = 0.65 * (1.0 - ml_up) + 0.35 * ml_up
+                    flip_note = " (range-regime flip applied)"
 
             # Weighted vote fusion
             ml_score = (ml_up - 0.5) * 2
@@ -2068,6 +2139,8 @@ class OperatorRuntime:
                 "combiner_score": round(combined, 4),
                 "tier": tier,
                 "ml_up_probability": round(ml_up, 4),
+                "flipped": flip_note != "",
+                "flip_note": flip_note,
                 "ml_down_probability": round(1 - ml_up, 4),
                 "last_close": round(closes[last], 6),
                 "atr": round(atr_val, 6),

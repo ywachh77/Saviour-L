@@ -35,9 +35,12 @@ from fusion.gbdt import GradientBoostingModel
 
 CANDLE_DIR = PROJECT_ROOT / "var" / "real_candles"
 OUTPUT_JSON = CANDLE_DIR / "ensemble_model.json"
+OUTPUT_1BAR = CANDLE_DIR / "ensemble_model_1bar.json"
+OUTPUT_MR = CANDLE_DIR / "ensemble_model_mr.json"
 REPORT_JSON = CANDLE_DIR / "training_report.json"
 
 HORIZON = 5
+HORIZON_1BAR = 1  # 1-bar horizon for 1-minute expiry
 MIN_BARS = 30
 N_MODELS = 5
 CANDLESTERS_PER_SCENARIO = 500  # 10 scenarios × 500 = 5,000 candles (same scale as fast model)
@@ -286,15 +289,17 @@ def compute_features_all(candles):
     return feat_dicts
 
 
-def build_samples(candles, feat_dicts, scenario_idx=None):
+def build_samples(candles, feat_dicts, scenario_idx=None, horizon=None):
     """Build (features, label) samples with optional scenario tracking."""
+    if horizon is None:
+        horizon = HORIZON
     samples = []
     sample_scenarios = []
-    for i in range(MIN_BARS, len(candles) - HORIZON):
+    for i in range(MIN_BARS, len(candles) - horizon):
         feat = feat_dicts[i]
         if feat is None:
             continue
-        future_close = candles[i + HORIZON].close
+        future_close = candles[i + horizon].close
         current_close = candles[i].close
         label = 1 if future_close > current_close else 0
         samples.append((feat, label))
@@ -322,6 +327,34 @@ def train_model(samples, config, seed):
     )
     model.fit(samples, seed=seed)
     return model
+
+
+def save_ensemble(models, samples, configs, scenario_report, output_path, horizon, label):
+    """Save an ensemble model to JSON."""
+    model_data = {
+        "n_features": len(FEATURE_NAMES),
+        "feature_names": list(FEATURE_NAMES),
+        "feature_version": FEATURE_VERSION,
+        "horizon": horizon,
+        "accuracy": 0.0,
+        "n_samples": len(samples),
+        "n_models": len(models),
+        "configs": configs,
+        "scenarios": scenario_report,
+        "label": label,
+        "models": [],
+    }
+    for m in models:
+        model_data["models"].append(m.to_dict())
+    # Compute accuracy
+    correct = 0
+    for feat, label_val in samples:
+        pred = sum(m.predict_up(feat) for m in models) / len(models)
+        if (pred > 0.5) == bool(label_val):
+            correct += 1
+    model_data["accuracy"] = correct / len(samples) if samples else 0
+    output_path.write_text(json.dumps(model_data, indent=2))
+    return model_data["accuracy"]
 
 
 def evaluate_model(model, samples):
@@ -450,6 +483,76 @@ def main():
     }, indent=2))
     print(f"  Report saved to {REPORT_JSON}")
 
+    # ─── Step 8: Train 1-bar horizon ensemble (for 1-minute expiry) ───
+    print("\n[8] Training 1-bar horizon ensemble (1-minute expiry)...")
+    samples_1bar, scenario_1bar = build_samples(candles, feat_dicts, scenario_idx, horizon=HORIZON_1BAR)
+    print(f"  1-bar samples: {len(samples_1bar)}")
+    
+    # Per-scenario split for 1-bar
+    scenario_samples_1bar = split_by_scenario(samples_1bar, scenario_1bar)
+    
+    models_1bar = []
+    configs_1bar = [
+        {"n_estimators": 50,  "max_depth": 3, "learning_rate": 0.10, "subsample": 0.7},
+        {"n_estimators": 60,  "max_depth": 3, "learning_rate": 0.15, "subsample": 0.8},
+        {"n_estimators": 40,  "max_depth": 4, "learning_rate": 0.12, "subsample": 0.6},
+        {"n_estimators": 80,  "max_depth": 3, "learning_rate": 0.08, "subsample": 0.9},
+        {"n_estimators": 30,  "max_depth": 2, "learning_rate": 0.20, "subsample": 0.5},
+    ]
+    for i, cfg in enumerate(configs_1bar):
+        print(f"  Model {i+1}/{len(configs_1bar)}: depth={cfg['max_depth']} est={cfg['n_estimators']}")
+        sys.stdout.flush()
+        model = train_model(samples_1bar, cfg, seed=99 + i)
+        models_1bar.append(model)
+    
+    # 1-bar per-scenario report
+    scenario_report_1bar = {}
+    for name, s_samples in scenario_samples_1bar.items():
+        if not s_samples:
+            continue
+        ensemble_correct = 0
+        for feat, label in s_samples:
+            pred = sum(m.predict_up(feat) for m in models_1bar) / len(models_1bar)
+            if (pred > 0.5) == bool(label):
+                ensemble_correct += 1
+        acc = ensemble_correct / len(s_samples)
+        scenario_report_1bar[name] = {"samples": len(s_samples), "accuracy": round(acc, 4)}
+        print(f"  {name}: {acc:.1%} ({len(s_samples)} samples)")
+    
+    acc_1bar = save_ensemble(models_1bar, samples_1bar, configs_1bar, scenario_report_1bar, OUTPUT_1BAR, HORIZON_1BAR, "1-bar horizon (1-min expiry)")
+    print(f"  1-bar overall accuracy: {acc_1bar:.1%}")
+    print(f"  Saved to {OUTPUT_1BAR}")
+
+    # ─── Step 9: Train mean-reversion-only model ───
+    print("\n[9] Training mean-reversion-only ensemble...")
+    mr_samples = scenario_samples.get("mean_reversion", [])
+    if mr_samples:
+        print(f"  MR samples: {len(mr_samples)}")
+        
+        # Add range_bound samples too — they share mean-reversion characteristics
+        range_samples = scenario_samples.get("range_bound", [])
+        mr_samples = mr_samples + range_samples
+        print(f"  Total MR+range samples: {len(mr_samples)}")
+        
+        models_mr = []
+        configs_mr = [
+            {"n_estimators": 60,  "max_depth": 3, "learning_rate": 0.10, "subsample": 0.7},
+            {"n_estimators": 80,  "max_depth": 2, "learning_rate": 0.15, "subsample": 0.8},
+            {"n_estimators": 40,  "max_depth": 4, "learning_rate": 0.08, "subsample": 0.6},
+        ]
+        for i, cfg in enumerate(configs_mr):
+            print(f"  Model {i+1}/{len(configs_mr)}: depth={cfg['max_depth']} est={cfg['n_estimators']}")
+            sys.stdout.flush()
+            model = train_model(mr_samples, cfg, seed=77 + i)
+            models_mr.append(model)
+        
+        acc_mr = save_ensemble(models_mr, mr_samples, configs_mr, {}, OUTPUT_MR, HORIZON, "mean-reversion-only")
+        print(f"  MR model accuracy: {acc_mr:.1%}")
+        print(f"  Saved to {OUTPUT_MR}")
+    else:
+        print("  No mean-reversion samples found — skipping MR model")
+        acc_mr = 0.0
+
     # ─── Summary ───
     print("\n" + "=" * 60)
     print("TRAINING COMPLETE")
@@ -460,6 +563,9 @@ def main():
     print(f"Scenarios: {len(scenario_report)}")
     avg_scenario = sum(s["accuracy"] for s in scenario_report.values()) / len(scenario_report) if scenario_report else 0
     print(f"Average scenario accuracy: {avg_scenario:.1%}")
+    print(f"Features: {len(FEATURE_NAMES)} (v{FEATURE_VERSION})")
+    print(f"1-bar ensemble: {acc_1bar:.1%}")
+    print(f"MR ensemble: {acc_mr:.1%}")
 
 
 if __name__ == "__main__":
