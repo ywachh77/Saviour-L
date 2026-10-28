@@ -184,6 +184,15 @@
             </div>
           </div>
 
+          <div class="field-group">
+            <span class="field-label">Expiry Period</span>
+            <div class="seg-group" id="sig-expiry-tabs" role="group" aria-label="Select expiry">
+              <button type="button" class="seg is-active" data-expiry="1">1-Minute</button>
+              <button type="button" class="seg" data-expiry="3">3-Minute</button>
+              <button type="button" class="seg" data-expiry="30">30-Minute</button>
+            </div>
+          </div>
+
           <div class="signal-params">
             <label class="field">
               <span class="field-label">Paper Balance (USD)</span>
@@ -218,7 +227,7 @@
         <div class="empty-stage">
           <p class="empty-jp" lang="ja">待機中</p>
           <p class="empty-title">Press <strong>Generate Signal</strong> to evaluate the upcoming next candle in <strong>UTC+05:30</strong>.</p>
-          <p class="empty-sub">Every evaluation uses strictly completed bars to target the next future candle open (never an ongoing or past bar), with 5m/15m/60m MTF alignment and 1% ATR sizing.</p>
+          <p class="empty-sub">Choose your expiry period (1m / 3m / 30m) above. Every evaluation uses strictly completed bars to target the next future candle open (never an ongoing or past bar), with 5m/15m/60m MTF alignment and 1% ATR sizing.</p>
         </div>
       </div>
 

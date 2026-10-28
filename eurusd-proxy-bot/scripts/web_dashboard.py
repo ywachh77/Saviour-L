@@ -614,6 +614,7 @@ class OperatorRuntime:
         dispatch_telegram: bool = False,
         balance_usd: float = 10_000.0,
         risk_pct: float = 1.0,
+        expiry_minutes: int = 30,
     ) -> dict[str, Any]:
         """Evaluate requested market(s) directly for the web console without requiring Telegram."""
         with self.lock:
@@ -814,10 +815,13 @@ class OperatorRuntime:
                         member.store.local.replace("signals", existing_local[-400:])
                     signal_dict = sig.to_dict()
                     signal_dict["entry_time"] = format_display_iso(sig.entry_time)
-                    signal_dict["expiry_time"] = format_display_iso(sig.expiry_time)
+                    # Override expiry with user-selected expiry_minutes
+                    expiry_dt = sig.entry_time + timedelta(minutes=expiry_minutes)
+                    signal_dict["expiry_time"] = format_display_iso(expiry_dt)
                     signal_dict["generated_at"] = format_display_iso(sig.generated_at)
                     signal_dict["entry_hm"] = format_display_hm(sig.entry_time)
-                    signal_dict["expiry_hm"] = format_display_hm(sig.expiry_time)
+                    signal_dict["expiry_hm"] = format_display_hm(expiry_dt)
+                    signal_dict["horizon_minutes"] = expiry_minutes
                     signal_dict["timezone"] = DISPLAY_TZ_LABEL
                     signal_dict["entry_display"] = f"{latest_close:,.{inst.precision}f}"
                     brief_text = format_brief_signal(sig, member.telegram_format)
@@ -842,6 +846,7 @@ class OperatorRuntime:
                         "latest_price": round(latest_close, inst.precision),
                         "atr_pips": round(atr_pips, 2),
                         "spread_pips": member.config.spread_pips,
+                        "expiry_minutes": expiry_minutes,
                         "mtf_minutes": member.config.mtf_minutes,
                         "mtf_bias": mtf_dir,
                         "actionable": result.actionable,
@@ -2420,6 +2425,7 @@ def make_handler(runtime: OperatorRuntime):
                         dispatch_telegram=bool(body.get("dispatch_telegram", False)),
                         balance_usd=float(body.get("balance_usd", 10_000.0)),
                         risk_pct=float(body.get("risk_pct", 1.0)),
+                        expiry_minutes=int(body.get("expiry_minutes", 30)),
                     )
                     self._send_json(res)
                     return

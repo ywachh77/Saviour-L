@@ -196,6 +196,7 @@
   var HALF_NORMAL_SCALE = 0.7978845608;
   var currentPaused = false;
   var selectedPair = "ALL";
+  var selectedExpiry = 1;
   var toastTimer = null;
 
   function showToast(msg) {
@@ -586,9 +587,10 @@
     var now = new Date();
     var nextMin = new Date(Math.floor(now.getTime() / 60000) * 60000 + 60000);
     var secsUntil = Math.max(1, Math.round((nextMin.getTime() - now.getTime()) / 1000));
+    var expiryMin = selectedExpiry || 1;
     return keys.map(function (sym) {
       var m = MARKETS_STATIC[sym] || MARKETS_STATIC["EUR/USD"];
-      var exp = new Date(nextMin.getTime() + m.horizon * 60000);
+      var exp = new Date(nextMin.getTime() + expiryMin * 60000);
       var entryIst = formatIstHm(nextMin, true);
       var expIst = formatIstHm(exp, true);
       var stopPips = Math.max(m.spread * 1.5, m.atr * 1.5);
@@ -607,6 +609,7 @@
         latest_price: m.entry,
         atr_pips: m.atr,
         spread_pips: m.spread,
+        expiry_minutes: expiryMin,
         mtf_bias: "UP",
         actionable: true,
         seal_state: "SIGNAL",
@@ -634,9 +637,9 @@
           expiry_time: exp.toISOString(),
           entry_hm: entryIst,
           expiry_hm: expIst,
-          horizon_minutes: m.horizon
+          horizon_minutes: expiryMin
         },
-        brief_text: sym + " BUY\nEntry  open of " + entryIst + " candle\nExpiry " + expIst + "  (" + m.horizon + " min)\n\nPaper — research only, no broker order.",
+        brief_text: sym + " BUY\nEntry  open of " + entryIst + " candle\nExpiry " + expIst + "  (" + expiryMin + " min)\n\nPaper — research only, no broker order.",
         risk_plan: {
           stop_price: m.entry - stopPips * m.pip,
           target_price: m.entry + targetPips * m.pip,
@@ -654,6 +657,7 @@
     var bal = parseFloat((document.getElementById("sig-balance") || {}).value || "10000") || 10000;
     var rsk = parseFloat((document.getElementById("sig-risk") || {}).value || "1.0") || 1.0;
     var sendTg = Boolean((document.getElementById("sig-send-tg") || {}).checked);
+    var expiry = selectedExpiry;
 
     if (genBtn) genBtn.disabled = true;
     if (insBtn) insBtn.disabled = true;
@@ -669,7 +673,8 @@
       mode: mode,
       dispatch_telegram: sendTg,
       balance_usd: bal,
-      risk_pct: rsk
+      risk_pct: rsk,
+      expiry_minutes: expiry
     })
       .then(function (res) {
         renderSignalEvaluations(res.evaluations || []);
@@ -696,6 +701,16 @@
       });
       btn.classList.add("is-active");
       selectedPair = btn.getAttribute("data-pair") || "ALL";
+    });
+  });
+
+  Array.prototype.forEach.call(document.querySelectorAll("#sig-expiry-tabs .seg"), function (btn) {
+    btn.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll("#sig-expiry-tabs .seg"), function (b) {
+        b.classList.remove("is-active");
+      });
+      btn.classList.add("is-active");
+      selectedExpiry = parseInt(btn.getAttribute("data-expiry") || "1", 10);
     });
   });
 
