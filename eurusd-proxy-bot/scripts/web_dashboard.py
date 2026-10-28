@@ -1666,7 +1666,7 @@ class OperatorRuntime:
             indicators["atr_14"] = atr_vals[-1] if atr_vals else None
             adx_vals, plus_di, minus_di = adx(fc_candles, 14)
             indicators["adx_14"] = adx_vals[-1] if adx_vals else None
-            bb_upper, bb_mid, bb_lower = bollinger(closes, 20, 2.0)
+            bb_lower, bb_mid, bb_upper = bollinger(closes, 20, 2.0)
             indicators["bb_upper"] = bb_upper
             indicators["bb_mid"] = bb_mid
             indicators["bb_lower"] = bb_lower
@@ -1684,15 +1684,15 @@ class OperatorRuntime:
             indicators["kaufman_er"] = ke_vals[-1] if ke_vals else None
             chop_vals = choppiness_index(fc_candles, 14)
             indicators["choppiness"] = chop_vals[-1] if chop_vals else None
-            squeeze_bools, squeeze_mid = keltner_squeeze(fc_candles, bb_period=20, bb_mult=2.0, kc_period=20, kc_mult=1.5)
+            squeeze_bools, squeeze_momentum = keltner_squeeze(fc_candles, bb_period=20, bb_mult=2.0, kc_period=20, kc_mult=1.5)
             indicators["squeeze_on"] = bool(squeeze_bools[-1]) if squeeze_bools else False
-            indicators["squeeze_mid"] = squeeze_mid[-1] if squeeze_mid else None
+            indicators["squeeze_momentum"] = squeeze_momentum[-1] if squeeze_momentum else None
             st_dir, st_val = supertrend_window(fc_candles, period=10, multiplier=3.0)
             indicators["supertrend_direction"] = st_dir[-1] if st_dir else None
             indicators["supertrend_value"] = st_val[-1] if st_val else None
-            smc_fvg, smc_ob, smc_bs, smc_is = smc_structure(fc_candles, atr_vals)
-            indicators["smc_regime"] = smc_is[-1] if smc_is else None
-            indicators["smc_structure"] = smc_bs[-1] if smc_bs else None
+            smc_fvg_bull, smc_fvg_bear, smc_ob_bull, smc_ob_bear = smc_structure(fc_candles, atr_vals)
+            indicators["smc_regime"] = smc_fvg_bull[-1] if smc_fvg_bull else None
+            indicators["smc_structure"] = smc_ob_bull[-1] if smc_ob_bull else None
             ichimoku_tenkan, ichimoku_kijun, ichimoku_senkou_a, ichimoku_senkou_b, ichimoku_chikou = ichimoku_cloud(fc_candles, 9, 26, 52)
             indicators["ichimoku_kijun"] = ichimoku_kijun[-1] if ichimoku_kijun else None
             indicators["ichimoku_tenkan"] = ichimoku_tenkan[-1] if ichimoku_tenkan else None
@@ -1710,16 +1710,17 @@ class OperatorRuntime:
             aroon_up, aroon_down = aroon(fc_candles, 25)
             indicators["aroon_up"] = aroon_up[-1] if aroon_up else None
             indicators["aroon_down"] = aroon_down[-1] if aroon_down else None
-            dc_upper, dc_mid, dc_lower = donchian_channel(fc_candles, 20)
+            dc_upper, dc_lower, dc_mid = donchian_channel(fc_candles, 20)
             indicators["donchian_upper"] = dc_upper[-1] if dc_upper else None
             indicators["donchian_mid"] = dc_mid[-1] if dc_mid else None
             indicators["donchian_lower"] = dc_lower[-1] if dc_lower else None
             pivots = pivot_points(fc_candles, 14)
-            indicators["pivot_sr2"] = pivots[0][-1] if pivots and pivots[0] else None
-            indicators["pivot_sr1"] = pivots[1][-1] if pivots and len(pivots) > 1 and pivots[1] else None
-            indicators["pivot_pp"] = pivots[2][-1] if pivots and len(pivots) > 2 and pivots[2] else None
-            indicators["pivot_r1"] = pivots[3][-1] if pivots and len(pivots) > 3 and pivots[3] else None
-            indicators["pivot_r2"] = pivots[4][-1] if pivots and len(pivots) > 4 and pivots[4] else None
+            # pivot_points returns (pivot, r1, r2, s1, s2)
+            indicators["pivot_pp"] = pivots[0][-1] if pivots and pivots[0] else None
+            indicators["pivot_r1"] = pivots[1][-1] if pivots and len(pivots) > 1 and pivots[1] else None
+            indicators["pivot_r2"] = pivots[2][-1] if pivots and len(pivots) > 2 and pivots[2] else None
+            indicators["pivot_sr1"] = pivots[3][-1] if pivots and len(pivots) > 3 and pivots[3] else None
+            indicators["pivot_sr2"] = pivots[4][-1] if pivots and len(pivots) > 4 and pivots[4] else None
             indicators["count"] = 21
             return indicators
         except (ImportError, ValueError, IndexError, TypeError) as exc:
@@ -1879,9 +1880,11 @@ class OperatorRuntime:
         horizons = []
         last_close = candles[-1]["close"]
         atr_val = indicators.get("atr_14", 0.01) or 0.01
-        for horizon_name, bars in [("1-Minute", 1), ("3-Minute", 3), ("30-Minute", 30)]:
+        # Use fixed ATR multipliers per horizon (not linear bars scaling)
+        # 1-min: 1x ATR, 3-min: 1.5x ATR, 30-min: 3x ATR (capped)
+        for horizon_name, bars, atr_mult in [("1-Minute", 1, 1.0), ("3-Minute", 3, 1.5), ("30-Minute", 30, 3.0)]:
             direction = "BUY" if combiner["combiner_score"] > 0 else "SELL"
-            est_price = last_close + (combiner["combiner_score"] * atr_val) * (bars / 1.0)
+            est_price = last_close + (combiner["combiner_score"] * atr_val * atr_mult)
             confidence = min(abs(combiner["combiner_score"]) * 2, 1.0)
             if combiner["combiner_score"] > 0.4:
                 confidence = min(confidence * 1.2, 0.95)
@@ -1899,6 +1902,7 @@ class OperatorRuntime:
                 "sl_1r": round(last_close - (atr_val if combiner["combiner_score"] > 0 else -atr_val), 6),
                 "sl_2r": round(last_close - (2 * atr_val if combiner["combiner_score"] > 0 else -2 * atr_val), 6),
                 "atr": round(atr_val, 6),
+                "atr_mult": atr_mult,
             })
         return {
             "ok": True,
@@ -1947,6 +1951,7 @@ class OperatorRuntime:
                 "kaufman_er": interp("kaufman_er", indicators.get("kaufman_er"), 0.5, 0.2, desc="Kaufman Efficiency — >0.5 trending"),
                 "choppiness": interp("choppiness", indicators.get("choppiness"), 40, 70, desc="Choppiness — <40 trending, >70 choppy"),
                 "squeeze_on": interp("squeeze_on", indicators.get("squeeze_on"), bull=indicators.get("squeeze_on"), bear=False, desc="Keltner Squeeze — breakout pending"),
+                "squeeze_momentum": interp("squeeze_momentum", indicators.get("squeeze_momentum"), desc="Squeeze Momentum — breakout direction"),
                 "supertrend_direction": interp("supertrend_direction", indicators.get("supertrend_direction"), bull=indicators.get("supertrend_direction", 0) > 0, bear=indicators.get("supertrend_direction", 0) < 0, desc="Supertrend — +1 bull, -1 bear"),
                 "ichimoku_kijun": interp("ichimoku_kijun", indicators.get("ichimoku_kijun"), desc="Ichimoku Kijun — price above = bullish"),
                 "ichimoku_tenkan": interp("ichimoku_tenkan", indicators.get("ichimoku_tenkan"), desc="Ichimoku Tenkan — fast line"),
@@ -1954,10 +1959,13 @@ class OperatorRuntime:
                 "aroon_up": interp("aroon_up", indicators.get("aroon_up"), 70, 50, desc="Aroon Up — >70 bullish"),
                 "aroon_down": interp("aroon_down", indicators.get("aroon_down"), 50, 70, desc="Aroon Down — >70 bearish"),
                 "donchian_upper": interp("donchian_upper", indicators.get("donchian_upper"), desc="Donchian Upper — resistance"),
+                "donchian_mid": interp("donchian_mid", indicators.get("donchian_mid"), desc="Donchian Mid — channel centre"),
                 "donchian_lower": interp("donchian_lower", indicators.get("donchian_lower"), desc="Donchian Lower — support"),
                 "pivot_pp": interp("pivot_pp", indicators.get("pivot_pp"), desc="Pivot Point — central level"),
                 "pivot_r1": interp("pivot_r1", indicators.get("pivot_r1"), desc="Pivot R1 — resistance"),
+                "pivot_r2": interp("pivot_r2", indicators.get("pivot_r2"), desc="Pivot R2 — extended resistance"),
                 "pivot_sr1": interp("pivot_sr1", indicators.get("pivot_sr1"), desc="Pivot S1 — support"),
+                "pivot_sr2": interp("pivot_sr2", indicators.get("pivot_sr2"), desc="Pivot S2 — extended support"),
             },
             "errors": indicators.get("error"),
         }
