@@ -544,6 +544,27 @@
                 '<ul class="vote-list">' + votesHtml + '</ul>' +
               '</details>'
             : "") +
+          (card.combiner_prediction && card.combiner_prediction.available
+            ? (function() {
+                var cp = card.combiner_prediction;
+                var cpClass = cp.combiner_score > 0.2 ? "bull" : (cp.combiner_score < -0.2 ? "bear" : "neutral");
+                var voteHtml = (cp.votes || []).map(function (v) {
+                  var vc = v.score > 0.1 ? "bull" : (v.score < -0.1 ? "bear" : "neutral");
+                  return '<div class="combiner-vote-row"><span class="mono">' + esc(v.indicator) + '</span><span class="mono ' + vc + '">' + v.score.toFixed(2) + '</span><span class="mono dim" style="font-size:0.65rem">w=' + v.weight.toFixed(2) + '</span></div>';
+                }).join("");
+                return '<details class="sig-votes-details combiner-details">' +
+                  '<summary>Combiner Fusion Score: <span class="' + cpClass + '">' + cp.combiner_score.toFixed(4) + '</span> · ' + esc(cp.tier) + ' · ML Up: ' + (cp.ml_up_probability * 100).toFixed(1) + '%</summary>' +
+                  '<div class="combiner-card-inner">' +
+                    '<div class="combiner-card-stats mono">' +
+                      '<div><span class="dim">Est Price 5m:</span> ' + fmtPrice(cp.estimated_price_5min, card.precision) + '</div>' +
+                      '<div><span class="dim">ATR:</span> ' + fmtPrice(cp.atr, card.precision) + '</div>' +
+                      '<div><span class="dim">ML Down:</span> ' + (cp.ml_down_probability * 100).toFixed(1) + '%</div>' +
+                    '</div>' +
+                    '<div class="combiner-vote-list">' + voteHtml + '</div>' +
+                  '</div>' +
+                '</details>';
+              })()
+            : "") +
         '</article>'
       );
     }).join("");
@@ -1699,6 +1720,10 @@
   }
 
   /* ───────────────────────── Combiner / Generator / Indicators ───────────────────────── */
+
+  function goToSignals() {
+    activatePage("signals", true, true);
+  }
 
   function loadCombiner() {
     var board = document.getElementById("combiner-score-board");

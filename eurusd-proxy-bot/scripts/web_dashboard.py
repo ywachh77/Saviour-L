@@ -863,6 +863,7 @@ class OperatorRuntime:
                         "full_text": full_text,
                         "telegram_dispatched": telegram_dispatched,
                         "risk_plan": risk_plan.to_dict(),
+                        "combiner_prediction": self._combiner_from_candles(eval_candles),
                     }
                 )
 
@@ -1960,6 +1961,108 @@ class OperatorRuntime:
             },
             "errors": indicators.get("error"),
         }
+
+    def _combiner_from_candles(self, candles: list) -> dict[str, Any]:
+        """Compute combiner score + ML prediction from Candle objects (used in signal cards)."""
+        try:
+            if not candles or len(candles) < 60:
+                return {"available": False, "reason": "Not enough candles"}
+            sys.path.insert(0, str(BOT_ROOT.parent))
+            from fusion.indicators import (
+                rsi, atr, supertrend_window, stochastic, vwap,
+                ichimoku_cloud, aroon, choppiness_index, keltner_squeeze,
+                hurst_exponent,
+            )
+            from fusion.gbdt import GradientBoostingModel as GBDTModel
+            from fusion.features import compute_features
+
+            last = len(candles) - 1
+            closes = [c.close for c in candles]
+            indicators: dict[str, Any] = {}
+            indicators["close"] = closes[last]
+
+            # Run ML ensemble if a model is available
+            model_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model.json"
+            ml_up = 0.5
+            if model_path.is_file():
+                try:
+                    with open(model_path, encoding="utf-8") as f:
+                        model_data = json.load(f)
+                    feat_dicts = compute_features(candles)
+                    last_feat = feat_dicts[last] if feat_dicts and last < len(feat_dicts) else None
+                    if last_feat and model_data.get("models"):
+                        loaded_models = []
+                        for m_dict in model_data["models"]:
+                            m = GBDTModel.from_dict(m_dict)
+                            if m is not None:
+                                loaded_models.append(m)
+                        if loaded_models:
+                            ml_up = sum(m.predict_up(last_feat) for m in loaded_models) / len(loaded_models)
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+
+            # Compute indicator values for voting
+            rsi_val = rsi(closes, 14)[-1] if len(closes) >= 14 else 50.0
+            atr_vals = atr(candles, 14)
+            atr_val = atr_vals[-1] if atr_vals else 0.01
+            st_dir, _ = supertrend_window(candles, period=10, multiplier=3.0)
+            st_direction = st_dir[-1] if st_dir else 0.0
+            stoch_k, _ = stochastic(candles, 14, 3)
+            stoch_val = stoch_k[-1] if stoch_k else 50.0
+            vwap_vals = vwap(candles, 30)
+            vwap_val = vwap_vals[-1] if vwap_vals else closes[last]
+            ichimoku_kijun, _, _, _, _ = ichimoku_cloud(candles, 9, 26, 52)
+            ichimoku_val = ichimoku_kijun[-1] if ichimoku_kijun else closes[last]
+            aroon_up, aroon_down = aroon(candles, 25)
+            aroon_u = aroon_up[-1] if aroon_up else 50.0
+            aroon_d = aroon_down[-1] if aroon_down else 50.0
+            chop_vals = choppiness_index(candles, 14)
+            chop_val = chop_vals[-1] if chop_vals else 50.0
+            squeeze_bools, _ = keltner_squeeze(candles, bb_period=20, bb_mult=2.0, kc_period=20, kc_mult=1.5)
+            squeeze_on = bool(squeeze_bools[-1]) if squeeze_bools else False
+            hurst_vals = hurst_exponent(closes, 20)
+            hurst_val = hurst_vals[-1] if hurst_vals else 0.5
+
+            # Weighted vote fusion
+            ml_score = (ml_up - 0.5) * 2
+            votes = [
+                ("ML Ensemble", ml_score, 0.30),
+                ("Supertrend", 1.0 if st_direction > 0 else -1.0, 0.15),
+                ("RSI", (0.5 if rsi_val < 40 else (1.0 if rsi_val < 50 else (-0.5 if rsi_val > 60 else (-1.0 if rsi_val > 70 else 0.0)))), 0.10),
+                ("Stochastic", 1.0 if stoch_val < 20 else (-1.0 if stoch_val > 80 else 0.0), 0.10),
+                ("VWAP", 1.0 if closes[last] > vwap_val else -1.0, 0.08),
+                ("Ichimoku", 1.0 if closes[last] > ichimoku_val else -1.0, 0.05),
+                ("Aroon", 1.0 if aroon_u > 70 else (-1.0 if aroon_d > 70 else 0.0), 0.05),
+                ("Choppiness", -1.0 if chop_val > 70 else (1.0 if chop_val < 40 else 0.0), 0.05),
+                ("Squeeze", 1.0 if squeeze_on else 0.0, 0.05),
+                ("Hurst", 1.0 if hurst_val > 0.5 else (-1.0 if hurst_val < 0.45 else 0.0), 0.03),
+            ]
+            total_w = sum(w for _, _, w in votes) or 1.0
+            combined = sum(s * w for _, s, w in votes) / total_w
+            if combined > 0.4:
+                tier = "STRONG BUY"
+            elif combined > 0.2:
+                tier = "MODERATE BUY"
+            elif combined > -0.2:
+                tier = "NEUTRAL"
+            elif combined > -0.4:
+                tier = "MODERATE SELL"
+            else:
+                tier = "STRONG SELL"
+
+            return {
+                "available": True,
+                "combiner_score": round(combined, 4),
+                "tier": tier,
+                "ml_up_probability": round(ml_up, 4),
+                "ml_down_probability": round(1 - ml_up, 4),
+                "last_close": round(closes[last], 6),
+                "atr": round(atr_val, 6),
+                "estimated_price_5min": round(closes[last] + (ml_up - 0.5) * 2 * atr_val, 6),
+                "votes": [{"indicator": n, "score": round(s, 3), "weight": round(w, 3)} for n, s, w in votes],
+            }
+        except (ImportError, ValueError, IndexError, TypeError) as exc:
+            return {"available": False, "reason": str(exc)}
 
     def save_credentials(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Write validated credentials to local git-ignored .env (chmod 600); never echo secrets."""

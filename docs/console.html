@@ -906,7 +906,10 @@
             <p class="eyebrow mono">MULTI-INDICATOR FUSION // COMBINED SCORE</p>
             <h2 class="panel-title">Combiner Score Engine</h2>
           </div>
-          <button type="button" class="btn btn-sm btn-ghost" onclick="loadCombiner()">Refresh</button>
+          <div class="action-bar" style="margin:0">
+            <button type="button" class="btn btn-sm btn-ghost" onclick="loadCombiner()">Refresh</button>
+            <button type="button" class="btn btn-sm btn-primary" onclick="goToSignals()">Generate Signal</button>
+          </div>
         </div>
         <div id="combiner-score-board" class="combiner-score-board">
           <div class="empty-stage"><p class="empty-jp" lang="ja">待機中</p><p class="empty-title">Loading combiner data…</p></div>
@@ -954,7 +957,10 @@
             <p class="eyebrow mono">FUTURE SIGNAL PREDICTION // ALL HORIZONS</p>
             <h2 class="panel-title">Signal Generator — Upcoming Candles</h2>
           </div>
-          <button type="button" class="btn btn-sm btn-ghost" onclick="loadGenerator()">Refresh</button>
+          <div class="action-bar" style="margin:0">
+            <button type="button" class="btn btn-sm btn-ghost" onclick="loadGenerator()">Refresh</button>
+            <button type="button" class="btn btn-sm btn-primary" onclick="goToSignals()">Generate Signal</button>
+          </div>
         </div>
         <div id="generator-summary" class="generator-summary"></div>
       </div>

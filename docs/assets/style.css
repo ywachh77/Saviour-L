@@ -2723,3 +2723,62 @@ body.is-unleashing .fuin-flash {
 #page-generator.is-active > *:nth-child(2) .panel { animation-delay: 0.08s; }
 
 #page-indicators.is-active .panel { animation: panelFadeUp 0.5s ease-out both; }
+
+/* ==========================================================================
+   SAVIOUR — Combiner Fusion in Signal Cards
+   ========================================================================== */
+
+.combiner-details {
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.8rem;
+}
+.combiner-details > summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--bone-2);
+  padding: 0.4rem 0;
+  list-style: none;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.combiner-details > summary::-webkit-details-marker { display: none; }
+.combiner-details > summary::before {
+  content: "✚";
+  font-size: 0.7rem;
+  color: var(--bone-4);
+}
+.combiner-details[open] > summary::before {
+  content: "−";
+}
+.combiner-card-inner {
+  padding: 0.8rem;
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-top: 0.5rem;
+}
+.combiner-card-stats {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+.combiner-vote-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.combiner-vote-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  padding: 0.15rem 0;
+}
+.combiner-vote-row .bull { color: var(--moss); }
+.combiner-vote-row .bear { color: var(--seal); }
