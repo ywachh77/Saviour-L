@@ -85,6 +85,21 @@
         <span class="nav-name">Risk &amp; Charter</span>
         <span class="nav-jp" lang="ja">規律</span>
       </button>
+      <button type="button" class="nav-item" data-nav="combiner">
+        <span class="nav-idx mono">07</span>
+        <span class="nav-name">Combiner</span>
+        <span class="nav-jp" lang="ja">融合</span>
+      </button>
+      <button type="button" class="nav-item" data-nav="generator">
+        <span class="nav-idx mono">08</span>
+        <span class="nav-name">Generator</span>
+        <span class="nav-jp" lang="ja">生成</span>
+      </button>
+      <button type="button" class="nav-item" data-nav="indicators">
+        <span class="nav-idx mono">09</span>
+        <span class="nav-name">Indicators</span>
+        <span class="nav-jp" lang="ja">指標</span>
+      </button>
     </nav>
 
     <div class="rail-footer">
@@ -880,6 +895,96 @@
         </div>
       </div>
     </section>
+
+    <!-- =================================================================
+         PAGE 07 : COMBINER (融合)
+         ================================================================= -->
+    <section class="page" id="page-combiner" data-page="combiner">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">MULTI-INDICATOR FUSION // COMBINED SCORE</p>
+            <h2 class="panel-title">Combiner Score Engine</h2>
+          </div>
+          <button type="button" class="btn btn-sm btn-ghost" onclick="loadCombiner()">Refresh</button>
+        </div>
+        <div id="combiner-score-board" class="combiner-score-board">
+          <div class="empty-stage"><p class="empty-jp" lang="ja">待機中</p><p class="empty-title">Loading combiner data…</p></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">INDICATOR VOTES // WEIGHTED FUSED</p>
+            <h2 class="panel-title">Signal Vote Matrix</h2>
+          </div>
+        </div>
+        <div id="combiner-votes" class="vote-grid"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">ML ENSEMBLE // GBDT PREDICTION</p>
+            <h2 class="panel-title">Model Prediction</h2>
+          </div>
+        </div>
+        <div id="combiner-ml" class="ml-prediction-box"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">RECENT PRICE ACTION // 60 CANDLES</p>
+            <h2 class="panel-title">Price Tape</h2>
+          </div>
+        </div>
+        <div id="combiner-tape" class="price-tape"></div>
+      </div>
+    </section>
+
+    <!-- =================================================================
+         PAGE 08 : GENERATOR (生成)
+         ================================================================= -->
+    <section class="page" id="page-generator" data-page="generator">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">FUTURE SIGNAL PREDICTION // ALL HORIZONS</p>
+            <h2 class="panel-title">Signal Generator — Upcoming Candles</h2>
+          </div>
+          <button type="button" class="btn btn-sm btn-ghost" onclick="loadGenerator()">Refresh</button>
+        </div>
+        <div id="generator-summary" class="generator-summary"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">EXPIRY HORIZONS // 1-MIN · 3-MIN · 30-MIN</p>
+            <h2 class="panel-title">Predicted Signals per Horizon</h2>
+          </div>
+        </div>
+        <div id="generator-horizons" class="horizon-grid"></div>
+      </div>
+    </section>
+
+    <!-- =================================================================
+         PAGE 09 : INDICATORS (指標)
+         ================================================================= -->
+    <section class="page" id="page-indicators" data-page="indicators">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">TECHNICAL INDICATOR LIBRARY // 21 METRICS</p>
+            <h2 class="panel-title">Indicator Dashboard</h2>
+          </div>
+          <button type="button" class="btn btn-sm btn-ghost" onclick="loadIndicators()">Refresh</button>
+        </div>
+        <div id="indicators-grid" class="indicator-grid"></div>
+      </div>
+    </section>
   </div>
 
   <!-- ───────────────────── MOBILE BOTTOM APP TAB BAR ──────────────────── -->
@@ -923,6 +1028,25 @@
         <polygon points="12 3 20 7 20 13 12 21 4 13 4 7 12 3"/>
       </svg>
       <span>Risk</span>
+    </button>
+    <button type="button" class="tab-btn" data-nav="combiner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/>
+      </svg>
+      <span>Comb</span>
+    </button>
+    <button type="button" class="tab-btn" data-nav="generator">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+      </svg>
+      <span>Gen</span>
+    </button>
+    <button type="button" class="tab-btn" data-nav="indicators">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <line x1="4" y1="20" x2="4" y2="10"/><line x1="10" y1="20" x2="10" y2="4"/>
+        <line x1="16" y1="20" x2="16" y2="14"/><line x1="22" y1="20" x2="2" y2="20"/>
+      </svg>
+      <span>Indic</span>
     </button>
   </nav>
 </div>

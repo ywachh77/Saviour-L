@@ -569,3 +569,246 @@ def smc_structure(
     return fvg_bull, fvg_bear, ob_bull_tap, ob_bear_tap
 
 
+# =====================================================================
+# NEW INDICATORS — Saviour Combiner Expansion
+# =====================================================================
+
+
+def ichimoku_cloud(
+    candles: list[Candle],
+    tenkan_period: int = 9,
+    kijun_period: int = 26,
+    senkou_a_period: int = 52,
+    senkou_b_period: int = 26,
+) -> tuple[list[float | None], list[float | None], list[float | None], list[float | None], list[float | None]]:
+    """Ichimoku Kinko Hyo (Cloud).
+
+    Returns (tenkan, kijun, senkou_a, senkou_b, chikou) aligned to candles.
+    Tenkan = midpoint of 9-period high/low.
+    Kijun = midpoint of 26-period high/low.
+    Senkou A = (tenkan + kijun) / 2 shifted 26 bars forward.
+    Senkou B = midpoint of 52-period high/low shifted 26 bars forward.
+    Chikou = current close plotted 26 bars back.
+    All causal — no look-ahead.
+    """
+    n = len(candles)
+    tenkan = [None] * n
+    kijun = [None] * n
+    senkou_a = [None] * n
+    senkou_b = [None] * n
+    chikou = [None] * n
+
+    for i in range(n):
+        if i >= tenkan_period - 1:
+            h = max(c.high for c in candles[i - tenkan_period + 1 : i + 1])
+            l = min(c.low for c in candles[i - tenkan_period + 1 : i + 1])
+            tenkan[i] = (h + l) / 2
+
+        if i >= kijun_period - 1:
+            h = max(c.high for c in candles[i - kijun_period + 1 : i + 1])
+            l = min(c.low for c in candles[i - kijun_period + 1 : i + 1])
+            kijun[i] = (h + l) / 2
+
+        # Senkou A is shifted 26 bars forward
+        if i >= 1 and tenkan[i - 1] is not None and kijun[i - 1] is not None:
+            senkou_a[i] = (tenkan[i - 1] + kijun[i - 1]) / 2
+
+        # Senkou B is shifted 26 bars forward
+        if i >= 1 and i - 1 >= senkou_b_period - 1:
+            h = max(c.high for c in candles[i - 1 - senkou_b_period + 1 : i])
+            l = min(c.low for c in candles[i - 1 - senkou_b_period + 1 : i])
+            senkou_b[i] = (h + l) / 2
+
+        # Chikou is close shifted 26 bars back
+        if i + senkou_a_period < n:
+            chikou[i + senkou_a_period] = candles[i].close
+
+    return tenkan, kijun, senkou_a, senkou_b, chikou
+
+
+def hurst_exponent(values: list[float], max_lag: int = 20) -> list[float | None]:
+    """Hurst Exponent — measures mean-reversion (<0.5) vs trend (>0.5).
+
+    Uses the R/S analysis method. Returns a list aligned to values.
+    Causal: only uses past data.
+    """
+    n = len(values)
+    result = [None] * n
+
+    for i in range(max_lag * 2, n):
+        window = values[i - max_lag * 2 + 1 : i + 1]
+        if len(window) < max_lag:
+            continue
+
+        lags = list(range(2, min(max_lag, len(window) // 2) + 1))
+        if not lags:
+            continue
+
+        tau = []
+        rs = []
+        for lag in lags:
+            n_groups = len(window) // lag
+            if n_groups < 2:
+                continue
+            groups = [window[j * lag : (j + 1) * lag] for j in range(n_groups)]
+            means = [sum(g) / len(g) for g in groups]
+            deviations = [abs(sum((x - m) ** 2 for x in g) / len(g)) ** 0.5 for g, m in zip(groups, means)]
+            # R/S: range of cumulative deviations from mean / std dev
+            cum_devs = []
+            for g, m in zip(groups, means):
+                devs = [x - m for x in g]
+                cum = []
+                s = 0.0
+                for d in devs:
+                    s += d
+                    cum.append(s)
+                if deviations[len(cum_devs)] > 0:
+                    r = max(cum) - min(cum)
+                    rs_val = r / deviations[len(cum_devs)]
+                else:
+                    rs_val = 0.0
+                cum_devs.append(rs_val)
+
+            avg_rs = sum(cum_devs) / len(cum_devs) if cum_devs else 0.0
+            tau.append(avg_rs ** 2)
+            rs.append(avg_rs)
+
+        if len(tau) >= 2:
+            # Linear regression: log(tau) = 2*H*log(lag) + c
+            log_lags = [math.log(lags[i]) for i in range(len(tau))]
+            log_taus = [math.log(t) if t > 0 else 0.0 for t in tau]
+            n_pts = len(log_lags)
+            mean_l = sum(log_lags) / n_pts
+            mean_t = sum(log_taus) / n_pts
+            num = sum((log_lags[i] - mean_l) * (log_taus[i] - mean_t) for i in range(n_pts))
+            den = sum((log_lags[i] - mean_l) ** 2 for i in range(n_pts))
+            if den > 0:
+                h = num / (2 * den)
+                result[i] = h
+
+    return result
+
+
+def fft_cycles(values: list[float], max_cycles: int = 5) -> list[tuple[float, float]]:
+    """FFT-based cycle detection. Returns top cycles as (period, strength).
+
+    Detects dominant periodicities in the price series using a simple
+    Hann-windowed FFT. Returns the strongest cycles.
+    """
+    import math
+
+    n = len(values)
+    if n < 64:
+        return []
+
+    # Hann window
+    windowed = [values[i] * (0.5 - 0.5 * math.cos(2 * math.pi * i / (n - 1))) for i in range(n)]
+
+    # Simple DFT (not full FFT — just enough for cycle detection)
+    # For efficiency, only compute at specific frequencies
+    best_cycles = []
+    for k in range(2, max_cycles * 2 + 1):
+        if k > n // 2:
+            break
+        period = n / k
+        # Compute magnitude at this frequency
+        real = sum(windowed[i] * math.cos(2 * math.pi * k * i / n) for i in range(n))
+        imag = sum(windowed[i] * math.sin(2 * math.pi * k * i / n) for i in range(n))
+        magnitude = math.sqrt(real ** 2 + imag ** 2) / n
+        if period > 2 and magnitude > 0:
+            best_cycles.append((period, magnitude))
+
+    # Sort by magnitude, return top max_cycles
+    best_cycles.sort(key=lambda x: x[1], reverse=True)
+    return best_cycles[:max_cycles]
+
+
+def aroon(candles: list[Candle], period: int = 25) -> tuple[list[float | None], list[float | None]]:
+    """Aroon Indicator — trend strength and direction.
+
+    Aroon Up = % of period since highest high (0 = just made new high).
+    Aroon Down = % of period since lowest low.
+    Returns (aroon_up, aroon_down) aligned to candles.
+    """
+    n = len(candles)
+    aroon_up = [None] * n
+    aroon_down = [None] * n
+
+    for i in range(period, n):
+        window = candles[i - period : i + 1]
+        h = max(c.high for c in window)
+        l = min(c.low for c in window)
+
+        days_since_high = 0
+        days_since_low = 0
+        for j in range(period, -1, -1):
+            if window[j].high == h:
+                days_since_high = period - j
+                break
+        for j in range(period, -1, -1):
+            if window[j].low == l:
+                days_since_low = period - j
+                break
+
+        aroon_up[i] = ((period - days_since_high) / period) * 100
+        aroon_down[i] = ((period - days_since_low) / period) * 100
+
+    return aroon_up, aroon_down
+
+
+def donchian_channel(candles: list[Candle], period: int = 20) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    """Donchian Channel — trend-following bands.
+
+    Upper = highest high of period.
+    Lower = lowest low of period.
+    Middle = average of upper and lower.
+    Returns (upper, lower, middle) aligned to candles.
+    """
+    n = len(candles)
+    upper = [None] * n
+    lower = [None] * n
+    middle = [None] * n
+
+    for i in range(period - 1, n):
+        window = candles[i - period + 1 : i + 1]
+        h = max(c.high for c in window)
+        l = min(c.low for c in window)
+        upper[i] = h
+        lower[i] = l
+        middle[i] = (h + l) / 2
+
+    return upper, lower, middle
+
+
+def pivot_points(candles: list[Candle], period: int = 14) -> tuple[list[float | None], ...]:
+    """Pivot Points — classic support/resistance levels.
+
+    Uses the standard pivot point formula:
+    Pivot = (High + Low + Close) / 3
+    R1 = 2*Pivot - Low, R2 = Pivot + (High - Low)
+    S1 = 2*Pivot - High, S2 = Pivot - (High - Low)
+    Returns (pivot, r1, r2, s1, s2) aligned to candles.
+    """
+    n = len(candles)
+    pivot = [None] * n
+    r1 = [None] * n
+    r2 = [None] * n
+    s1 = [None] * n
+    s2 = [None] * n
+
+    for i in range(period, n):
+        window = candles[i - period : i + 1]
+        h = max(c.high for c in window)
+        l = min(c.low for c in window)
+        c = candles[i].close
+
+        p = (h + l + c) / 3
+        pivot[i] = p
+        r1[i] = 2 * p - l
+        r2[i] = p + (h - l)
+        s1[i] = 2 * p - h
+        s2[i] = p - (h - l)
+
+    return pivot, r1, r2, s1, s2
+
+

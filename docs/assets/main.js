@@ -181,7 +181,10 @@
     health:      { code: "DIVISION 03 // HEALTH",      title: "Health & Causality",  jp: "健全", sig: "検診 · DIAGNOSTIC SCAN", fx: "fx-health",      stamp: "検診 · 健全", manga: "assets/manga/bankai-clash.jpg",        plate: "CHRONICLE PLATE 03 // ZERO-LEAKAGE SEAL",  quote: "Five independent future-shock causality checks guard every indicator and MTF resampler." },
     strategies:  { code: "DIVISION 04 // STRATEGIES",  title: "6-Family Fusion Lab", jp: "戦術", sig: "陣形 · TACTICAL FLANK",  fx: "fx-strategies",  stamp: "陣形 · 戦術", manga: "assets/manga/ichigo-yhwach-tybw.jpg",  plate: "CHRONICLE PLATE 04 // SIX FAMILIES MERGED", quote: "22 council rules fused across 6 specialist families with automatic walk-forward backtests." },
     credentials: { code: "DIVISION 05 // CREDENTIALS", title: "Credentials Vault",   jp: "機密", sig: "解錠 · VAULT UNSEAL",    fx: "fx-credentials", stamp: "解錠 · 機密", manga: "assets/manga/yhwach-sovereign.jpg",    plate: "CHRONICLE PLATE 05 // SEALED VAULT",       quote: "Owner-only chmod 600 secret storage and 13-table Row-Level Security persistence." },
-    risk:        { code: "DIVISION 06 // DISCIPLINE",  title: "Risk & Charter",      jp: "規律", sig: "鉄則 · MONOLITH DESCENT", fx: "fx-risk",        stamp: "鉄則 · 規律", manga: "assets/manga/shunsui-bankai.jpg",      plate: "CHRONICLE PLATE 06 // IRON CHARTER",       quote: "Full spread deducted on every trade — zero broker orders, zero OTC feeds, zero fabrication." }
+    risk:        { code: "DIVISION 06 // DISCIPLINE",  title: "Risk & Charter",      jp: "規律", sig: "鉄則 · MONOLITH DESCENT", fx: "fx-risk",        stamp: "鉄則 · 規律", manga: "assets/manga/shunsui-bankai.jpg",      plate: "CHRONICLE PLATE 06 // IRON CHARTER",       quote: "Full spread deducted on every trade — zero broker orders, zero OTC feeds, zero fabrication." },
+    combiner:    { code: "DIVISION 07 // FUSION",      title: "Combiner Fusion",     jp: "融合", sig: "融合 · FUSION REACTOR",  fx: "fx-combiner",   stamp: "融合 · 結合", manga: "assets/manga/vasto-ulquiorra.jpg",      plate: "CHRONICLE PLATE 07 // INFINITE FUSION",  quote: "21 indicators fused with ML ensemble into a single directional vote." },
+    generator:   { code: "DIVISION 08 // GENERATION",  title: "Signal Generator",    jp: "生成", sig: "生成 · SIGNAL FORGE",    fx: "fx-generator",  stamp: "生成 · 未来", manga: "assets/manga/bankai-clash.jpg",         plate: "CHRONICLE PLATE 08 // FUTURE FORGE",      quote: "Predicts upcoming candle direction across 1-min, 3-min, and 30-min horizons." },
+    indicators:  { code: "DIVISION 09 // INDICATORS",  title: "Indicator Library",   jp: "指標", sig: "指標 · COMPASS ROSE",    fx: "fx-indicators", stamp: "指標 · 羅針", manga: "assets/manga/zangetsu-cleave.jpg",       plate: "CHRONICLE PLATE 09 // 21-STAR COMPASS",  quote: "Every indicator value rendered with directional interpretation in real time." }
   };
 
   var MARKETS_STATIC = {
@@ -278,6 +281,9 @@
     if (pageId === "health") refreshHealth(false);
     if (pageId === "strategies") { refreshStrategies(); refreshLearning(); }
     if (pageId === "credentials") refreshCredentials();
+    if (pageId === "combiner") loadCombiner();
+    if (pageId === "generator") loadGenerator();
+    if (pageId === "indicators") loadIndicators();
   }
 
   Array.prototype.forEach.call(document.querySelectorAll("[data-nav]"), function (btn) {
@@ -1690,6 +1696,192 @@
           });
       })
       .catch(function () {});
+  }
+
+  /* ───────────────────────── Combiner / Generator / Indicators ───────────────────────── */
+
+  function loadCombiner() {
+    var board = document.getElementById("combiner-score-board");
+    var votes = document.getElementById("combiner-votes");
+    var mlBox = document.getElementById("combiner-ml");
+    var tape = document.getElementById("combiner-tape");
+    if (!board) return;
+    board.innerHTML = '<div class="empty-stage"><p class="empty-jp" lang="ja">読み込み中</p><p class="empty-title">Forging combiner score…</p></div>';
+    fetch("api/combiner")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          board.innerHTML = '<div class="empty-stage"><p class="empty-title">No combiner data available.</p></div>';
+          return;
+        }
+        var c = data.combiner || {};
+        var score = c.combiner_score || 0;
+        var tier = c.tier || "NEUTRAL";
+        var tierClass = "bull";
+        if (score < -0.2) tierClass = "bear";
+        if (Math.abs(score) < 0.2) tierClass = "neutral";
+        board.innerHTML =
+          '<div class="combiner-score-display ' + tierClass + '">' +
+            '<div class="combiner-score-value">' + score.toFixed(4) + '</div>' +
+            '<div class="combiner-score-tier ' + tierClass + '">' + esc(tier) + '</div>' +
+            '<div class="combiner-score-bar">' +
+              '<div class="combiner-score-fill ' + tierClass + '" style="width:' + (Math.abs(score) * 50) + '%;margin-left:' + (score < 0 ? 50 - Math.abs(score) * 50 : 50) + '%"></div>' +
+            '</div>' +
+            '<div class="combiner-score-meta mono">' +
+              '<span>Last Close: ' + fmtPrice(data.last_candle ? data.last_candle.close : 0) + '</span>' +
+              '<span>Candles: ' + data.candle_count + '</span>' +
+            '</div>' +
+          '</div>';
+
+        // Votes
+        if (votes) {
+          var voteHtml = "";
+          if (c.votes && c.votes.length) {
+            c.votes.forEach(function (v) {
+              var vClass = v.score > 0.1 ? "bull" : (v.score < -0.1 ? "bear" : "neutral");
+              voteHtml +=
+                '<div class="vote-card ' + vClass + '">' +
+                  '<span class="vote-name">' + esc(v.indicator) + '</span>' +
+                  '<span class="vote-score mono">' + v.score.toFixed(2) + '</span>' +
+                  '<span class="vote-weight mono">w=' + v.weight.toFixed(2) + '</span>' +
+                '</div>';
+            });
+          }
+          votes.innerHTML = voteHtml || '<p class="dim">No votes computed.</p>';
+        }
+
+        // ML Prediction
+        if (mlBox) {
+          var ml = data.ml_prediction || {};
+          if (ml.available) {
+            mlBox.innerHTML =
+              '<div class="ml-prediction-card">' +
+                '<div class="ml-row"><span class="ml-label">Up Probability</span><span class="ml-val bull mono">' + (ml.up_probability * 100).toFixed(1) + '%</span></div>' +
+                '<div class="ml-row"><span class="ml-label">Down Probability</span><span class="ml-val bear mono">' + (ml.down_probability * 100).toFixed(1) + '%</span></div>' +
+                '<div class="ml-row"><span class="ml-label">Last Close</span><span class="ml-val mono">' + fmtPrice(ml.last_close) + '</span></div>' +
+                '<div class="ml-row"><span class="ml-label">Est. Price (5min)</span><span class="ml-val mono">' + fmtPrice(ml.estimated_price_5min) + '</span></div>' +
+                '<div class="ml-row"><span class="ml-label">Confidence</span><span class="ml-val mono">' + (ml.confidence * 100).toFixed(1) + '%</span></div>' +
+                '<div class="ml-row"><span class="ml-label">ATR</span><span class="ml-val mono">' + fmtPrice(ml.atr) + '</span></div>' +
+              '</div>';
+          } else {
+            mlBox.innerHTML = '<p class="dim">ML model not available: ' + esc(ml.reason || "unknown") + '</p>';
+          }
+        }
+
+        // Price Tape
+        if (tape && data.recent_candles && data.recent_candles.length) {
+          var candles = data.recent_candles.slice(-40);
+          var maxH = Math.max.apply(null, candles.map(function (c) { return c.high; }));
+          var minL = Math.min.apply(null, candles.map(function (c) { return c.low; }));
+          var range = maxH - minL || 1;
+          var html = '<div class="price-tape-bars">';
+          candles.forEach(function (c) {
+            var up = c.close >= c.open;
+            var h = ((c.high - minL) / range) * 100;
+            var l = ((c.low - minL) / range) * 100;
+            html += '<div class="tape-bar ' + (up ? "bull" : "bear") + '" style="height:' + (100 - l) + '%;margin-bottom:' + (h - l) * 0.1 + '%"><div class="tape-bar-body" style="height:' + (h - l) + '%;top:' + l + '%"></div></div>';
+          });
+          html += '</div>';
+          html += '<div class="price-tape-labels mono"><span>' + fmtPrice(minL) + '</span><span>' + fmtPrice(maxH) + '</span></div>';
+          tape.innerHTML = html;
+        }
+      })
+      .catch(function () {
+        board.innerHTML = '<div class="empty-stage"><p class="empty-title">Failed to load combiner data.</p></div>';
+      });
+  }
+
+  function loadGenerator() {
+    var summary = document.getElementById("generator-summary");
+    var horizons = document.getElementById("generator-horizons");
+    if (!summary) return;
+    summary.innerHTML = '<div class="empty-stage"><p class="empty-jp" lang="ja">読み込み中</p><p class="empty-title">Forging future signals…</p></div>';
+    fetch("api/generator")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          summary.innerHTML = '<div class="empty-stage"><p class="empty-title">No generator data available.</p></div>';
+          return;
+        }
+        var score = data.combiner_score || 0;
+        var tier = data.tier || "NEUTRAL";
+        var tierClass = "bull";
+        if (score < -0.2) tierClass = "bear";
+        if (Math.abs(score) < 0.2) tierClass = "neutral";
+        summary.innerHTML =
+          '<div class="generator-summary-card">' +
+            '<div class="gen-summary-score ' + tierClass + '">' + score.toFixed(4) + '</div>' +
+            '<div class="gen-summary-tier ' + tierClass + '">' + esc(tier) + '</div>' +
+            '<div class="gen-summary-meta mono">' +
+              '<span>Last Close: ' + fmtPrice(data.last_close) + '</span>' +
+              '<span>ML Up: ' + (data.ml_up_prob * 100).toFixed(1) + '%</span>' +
+              '<span>ML Down: ' + (data.ml_down_prob * 100).toFixed(1) + '%</span>' +
+            '</div>' +
+          '</div>';
+
+        if (horizons && data.horizons && data.horizons.length) {
+          var html = "";
+          data.horizons.forEach(function (h) {
+            var dirClass = h.direction === "BUY" ? "bull" : "bear";
+            html +=
+              '<div class="horizon-card">' +
+                '<div class="horizon-header">' +
+                  '<span class="horizon-name">' + esc(h.horizon) + '</span>' +
+                  '<span class="horizon-dir ' + dirClass + '">' + h.direction + '</span>' +
+                '</div>' +
+                '<div class="horizon-body">' +
+                  '<div class="horizon-row"><span class="mono dim">Entry</span><span class="mono">' + fmtPrice(h.entry_price) + '</span></div>' +
+                  '<div class="horizon-row"><span class="mono dim">Est. Price</span><span class="mono">' + fmtPrice(h.estimated_price) + '</span></div>' +
+                  '<div class="horizon-row"><span class="mono dim">Confidence</span><span class="mono ' + dirClass + '">' + (h.confidence * 100).toFixed(1) + '%</span></div>' +
+                  '<div class="horizon-row"><span class="mono dim">TP 1R</span><span class="mono bull">' + fmtPrice(h.tp_1r) + '</span></div>' +
+                  '<div class="horizon-row"><span class="mono dim">TP 2R</span><span class="mono bull">' + fmtPrice(h.tp_2r) + '</span></div>' +
+                  '<div class="horizon-row"><span class="mono dim">SL 1R</span><span class="mono bear">' + fmtPrice(h.sl_1r) + '</span></div>' +
+                  '<div class="horizon-row"><span class="mono dim">SL 2R</span><span class="mono bear">' + fmtPrice(h.sl_2r) + '</span></div>' +
+                  '<div class="horizon-row"><span class="mono dim">ATR</span><span class="mono">' + fmtPrice(h.atr) + '</span></div>' +
+                '</div>' +
+              '</div>';
+          });
+          horizons.innerHTML = html;
+        }
+      })
+      .catch(function () {
+        summary.innerHTML = '<div class="empty-stage"><p class="empty-title">Failed to load generator data.</p></div>';
+      });
+  }
+
+  function loadIndicators() {
+    var grid = document.getElementById("indicators-grid");
+    if (!grid) return;
+    grid.innerHTML = '<div class="empty-stage"><p class="empty-jp" lang="ja">読み込み中</p><p class="empty-title">Scanning indicators…</p></div>';
+    fetch("api/indicators")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok || !data.indicators) {
+          grid.innerHTML = '<div class="empty-stage"><p class="empty-title">No indicator data available.</p></div>';
+          return;
+        }
+        var ind = data.indicators;
+        var html = "";
+        Object.keys(ind).forEach(function (key) {
+          var v = ind[key];
+          if (!v || v.value === null || v.value === undefined) return;
+          var cls = v.signal === "BULLISH" ? "bull" : (v.signal === "BEARISH" ? "bear" : "neutral");
+          var valDisplay = (typeof v.value === "number") ? fmtPrice(v.value) : String(v.value);
+          html +=
+            '<div class="indicator-card ' + cls + '">' +
+              '<div class="indicator-head">' +
+                '<span class="indicator-name">' + esc(key) + '</span>' +
+                '<span class="indicator-signal ' + cls + '">' + v.signal + '</span>' +
+              '</div>' +
+              '<div class="indicator-value mono">' + valDisplay + '</div>' +
+              '<div class="indicator-desc mono dim">' + esc(v.desc || "") + '</div>' +
+            '</div>';
+        });
+        grid.innerHTML = html || '<p class="dim">No indicator values available.</p>';
+      })
+      .catch(function () {
+        grid.innerHTML = '<div class="empty-stage"><p class="empty-title">Failed to load indicators.</p></div>';
+      });
   }
 
   /* Initial Boot --------------------------------------------------------- */

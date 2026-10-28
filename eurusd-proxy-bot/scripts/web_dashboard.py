@@ -11,6 +11,7 @@ from .env or os.environ.
 from __future__ import annotations
 
 import argparse
+import glob
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -1598,6 +1599,368 @@ class OperatorRuntime:
                 },
             }
 
+    def _load_real_candles(self) -> list[dict[str, float]]:
+        """Load latest real candles from the demo batch files or live feed."""
+        import glob, json
+        candles_dir = BOT_ROOT / "var" / "real_candles"
+        files = sorted(glob.glob(str(candles_dir / "batch_*.txt")))
+        candles: list[dict[str, float]] = []
+        for f in files[-3:]:
+            try:
+                for line in open(f, encoding="utf-8"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    for candle_str in line.split(";"):
+                        c = candle_str.strip()
+                        if not c:
+                            continue
+                        parts = c.split(",")
+                        if len(parts) < 6:
+                            continue
+                        candles.append({
+                            "ts": float(parts[0]),
+                            "open": float(parts[1]),
+                            "high": float(parts[2]),
+                            "low": float(parts[3]),
+                            "close": float(parts[4]),
+                            "volume": float(parts[5]),
+                        })
+            except (ValueError, OSError):
+                continue
+        return candles[-300:] if candles else []
+
+    def _compute_indicators(self, candles: list[dict[str, float]]) -> dict[str, Any]:
+        """Compute all fusion indicators on the latest candle."""
+        try:
+            sys.path.insert(0, str(BOT_ROOT.parent))
+            from datetime import datetime, timezone
+            from fusion.domain import Candle as FusionCandle
+            from fusion.indicators import (
+                ema, rsi, atr, adx, bollinger, stochastic, cci, vwap,
+                vwap_zscore, kaufman_er, choppiness_index, keltner_squeeze,
+                supertrend_window, smc_structure, ichimoku_cloud, hurst_exponent,
+                fft_cycles, aroon, donchian_channel, pivot_points,
+            )
+            # Convert dict candles to FusionCandle objects
+            fc_candles: list[FusionCandle] = []
+            for c in candles:
+                fc = FusionCandle(
+                    timestamp=datetime.fromtimestamp(c["ts"], tz=timezone.utc),
+                    open=c["open"], high=c["high"], low=c["low"],
+                    close=c["close"], volume=c["volume"],
+                )
+                fc_candles.append(fc)
+            if len(fc_candles) < 60:
+                return {"error": "Not enough candles (need 60+)"}
+            closes = [c["close"] for c in candles]
+            last = len(candles) - 1
+            indicators: dict[str, Any] = {}
+            indicators["close"] = closes[last]
+            indicators["ema_20"] = ema(closes, 20)[-1] if len(closes) >= 20 else None
+            indicators["ema_50"] = ema(closes, 50)[-1] if len(closes) >= 50 else None
+            indicators["ema_200"] = ema(closes, 200)[-1] if len(closes) >= 200 else None
+            indicators["rsi_14"] = rsi(closes, 14)[-1] if len(closes) >= 14 else None
+            atr_vals = atr(fc_candles, 14)
+            indicators["atr_14"] = atr_vals[-1] if atr_vals else None
+            adx_vals, plus_di, minus_di = adx(fc_candles, 14)
+            indicators["adx_14"] = adx_vals[-1] if adx_vals else None
+            bb_upper, bb_mid, bb_lower = bollinger(closes, 20, 2.0)
+            indicators["bb_upper"] = bb_upper
+            indicators["bb_mid"] = bb_mid
+            indicators["bb_lower"] = bb_lower
+            indicators["bb_width"] = (bb_upper - bb_lower) / bb_mid if bb_mid else None
+            stoch_k, stoch_d = stochastic(fc_candles, 14, 3)
+            indicators["stoch_k"] = stoch_k[-1] if stoch_k else None
+            indicators["stoch_d"] = stoch_d[-1] if stoch_d else None
+            cci_vals = cci(fc_candles, 20)
+            indicators["cci_20"] = cci_vals[-1] if cci_vals else None
+            vwap_vals = vwap(fc_candles, 30)
+            indicators["vwap"] = vwap_vals[-1] if vwap_vals else None
+            vwap_z_vals = vwap_zscore(fc_candles, 20)
+            indicators["vwap_zscore"] = vwap_z_vals[-1] if vwap_z_vals else None
+            ke_vals = kaufman_er(closes, 10)
+            indicators["kaufman_er"] = ke_vals[-1] if ke_vals else None
+            chop_vals = choppiness_index(fc_candles, 14)
+            indicators["choppiness"] = chop_vals[-1] if chop_vals else None
+            squeeze_bools, squeeze_mid = keltner_squeeze(fc_candles, bb_period=20, bb_mult=2.0, kc_period=20, kc_mult=1.5)
+            indicators["squeeze_on"] = bool(squeeze_bools[-1]) if squeeze_bools else False
+            indicators["squeeze_mid"] = squeeze_mid[-1] if squeeze_mid else None
+            st_dir, st_val = supertrend_window(fc_candles, period=10, multiplier=3.0)
+            indicators["supertrend_direction"] = st_dir[-1] if st_dir else None
+            indicators["supertrend_value"] = st_val[-1] if st_val else None
+            smc_fvg, smc_ob, smc_bs, smc_is = smc_structure(fc_candles, atr_vals)
+            indicators["smc_regime"] = smc_is[-1] if smc_is else None
+            indicators["smc_structure"] = smc_bs[-1] if smc_bs else None
+            ichimoku_tenkan, ichimoku_kijun, ichimoku_senkou_a, ichimoku_senkou_b, ichimoku_chikou = ichimoku_cloud(fc_candles, 9, 26, 52)
+            indicators["ichimoku_kijun"] = ichimoku_kijun[-1] if ichimoku_kijun else None
+            indicators["ichimoku_tenkan"] = ichimoku_tenkan[-1] if ichimoku_tenkan else None
+            indicators["ichimoku_senkou_a"] = ichimoku_senkou_a[-1] if ichimoku_senkou_a else None
+            indicators["ichimoku_senkou_b"] = ichimoku_senkou_b[-1] if ichimoku_senkou_b else None
+            hurst_vals = hurst_exponent(closes, 20)
+            indicators["hurst"] = hurst_vals[-1] if hurst_vals else None
+            fft_results = fft_cycles(closes, 5)
+            if fft_results:
+                indicators["fft_dominant_period"] = fft_results[0][1]
+                indicators["fft_dominant_power"] = fft_results[0][0]
+            else:
+                indicators["fft_dominant_period"] = None
+                indicators["fft_dominant_power"] = None
+            aroon_up, aroon_down = aroon(fc_candles, 25)
+            indicators["aroon_up"] = aroon_up[-1] if aroon_up else None
+            indicators["aroon_down"] = aroon_down[-1] if aroon_down else None
+            dc_upper, dc_mid, dc_lower = donchian_channel(fc_candles, 20)
+            indicators["donchian_upper"] = dc_upper[-1] if dc_upper else None
+            indicators["donchian_mid"] = dc_mid[-1] if dc_mid else None
+            indicators["donchian_lower"] = dc_lower[-1] if dc_lower else None
+            pivots = pivot_points(fc_candles, 14)
+            indicators["pivot_sr2"] = pivots[0][-1] if pivots and pivots[0] else None
+            indicators["pivot_sr1"] = pivots[1][-1] if pivots and len(pivots) > 1 and pivots[1] else None
+            indicators["pivot_pp"] = pivots[2][-1] if pivots and len(pivots) > 2 and pivots[2] else None
+            indicators["pivot_r1"] = pivots[3][-1] if pivots and len(pivots) > 3 and pivots[3] else None
+            indicators["pivot_r2"] = pivots[4][-1] if pivots and len(pivots) > 4 and pivots[4] else None
+            indicators["count"] = 21
+            return indicators
+        except (ImportError, ValueError, IndexError, TypeError) as exc:
+            return {"error": str(exc)}
+
+    def _run_ensemble_prediction(self, candles: list[dict[str, float]]) -> dict[str, Any]:
+        """Run the GBDT ensemble on the latest candle to predict next-bar direction."""
+        try:
+            sys.path.insert(0, str(BOT_ROOT.parent))
+            from datetime import datetime, timezone
+            from fusion.domain import Candle as FusionCandle
+            from fusion.indicators import ema, rsi, atr
+            model_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model.json"
+            if not model_path.is_file():
+                return {"available": False, "reason": "Model not trained yet"}
+            with open(model_path, encoding="utf-8") as f:
+                model_data = json.load(f)
+            if len(candles) < 30:
+                return {"available": False, "reason": "Not enough candles"}
+            last_candle = candles[-1]
+            closes = [c["close"] for c in candles[-100:]]
+            highs = [c["high"] for c in candles[-100:]]
+            lows = [c["low"] for c in candles[-100:]]
+            fc_candles = [FusionCandle(
+                timestamp=datetime.fromtimestamp(c["ts"], tz=timezone.utc),
+                open=c["open"], high=c["high"], low=c["low"],
+                close=c["close"], volume=c["volume"],
+            ) for c in candles[-100:]]
+            ema_fast = ema(closes, 10)[-1] if len(closes) >= 10 else closes[-1]
+            ema_slow = ema(closes, 30)[-1] if len(closes) >= 30 else closes[-1]
+            rsi_val = rsi(closes, 14)[-1] if len(closes) >= 14 else 50.0
+            atr_vals = atr(fc_candles, 14)
+            atr_val = atr_vals[-1] if atr_vals else 0.01
+            features = {
+                "return_1": closes[-1] / closes[-2] - 1 if len(closes) > 1 else 0.0,
+                "return_2": closes[-1] / closes[-3] - 1 if len(closes) > 2 else 0.0,
+                "return_3": closes[-1] / closes[-4] - 1 if len(closes) > 3 else 0.0,
+                "ema_fast": ema_fast,
+                "ema_slow": ema_slow,
+                "ema_cross": 1.0 if ema_fast > ema_slow else 0.0,
+                "rsi_14": rsi_val,
+                "rsi_overbought": 1.0 if rsi_val > 70 else 0.0,
+                "rsi_oversold": 1.0 if rsi_val < 30 else 0.0,
+                "atr_pct": atr_val / closes[-1] if closes[-1] else 0.0,
+                "close_position": (closes[-1] - min(lows[-20:])) / (max(highs[-20:]) - min(lows[-20:])) if max(highs[-20:]) != min(lows[-20:]) else 0.5,
+                "volume_change": (candles[-1]["volume"] / candles[-2]["volume"]) if len(candles) > 1 and candles[-2]["volume"] > 0 else 1.0,
+            }
+            if model_data.get("models"):
+                from fusion.gbdt import GradientBoostingModel as GBDTModel
+                up_prob = 0.0
+                loaded_models = []
+                for m_dict in model_data["models"]:
+                    model = GBDTModel.from_dict(m_dict)
+                    if model is not None:
+                        loaded_models.append(model)
+                if not loaded_models:
+                    return {"available": False, "reason": "Could not load model from JSON"}
+                for m in loaded_models:
+                    try:
+                        pred = m.predict_up(features)
+                        up_prob += pred / len(loaded_models)
+                    except Exception:
+                        continue
+                if up_prob == 0.0:
+                    return {"available": False, "reason": "Ensemble prediction failed"}
+                last_close = closes[-1]
+                est_price = last_close + (up_prob - 0.5) * 2 * atr_val
+                return {
+                    "available": True,
+                    "up_probability": round(up_prob, 4),
+                    "down_probability": round(1 - up_prob, 4),
+                    "last_close": round(last_close, 6),
+                    "estimated_price_5min": round(est_price, 6),
+                    "confidence": round(abs(up_prob - 0.5) * 2, 4),
+                    "atr": round(atr_val, 6),
+                }
+        except (ImportError, ValueError, IndexError, TypeError, OSError, KeyError) as exc:
+            return {"available": False, "reason": str(exc)}
+        return {"available": False, "reason": "No model loaded"}
+
+    def _compute_combiner_score(self, indicators: dict[str, Any], ml_prob: dict[str, Any]) -> dict[str, Any]:
+        """Fuse all indicator votes into a combiner score (-1 to +1)."""
+        votes = []
+        ml_weight = 0.30
+        ml_score = (ml_prob.get("up_probability", 0.5) - 0.5) * 2 if ml_prob.get("available") else 0.0
+        votes.append(("ML Ensemble", ml_score, ml_weight))
+        if indicators.get("supertrend_direction") is not None:
+            score = 1.0 if indicators["supertrend_direction"] > 0 else -1.0
+            votes.append(("Supertrend", score, 0.15))
+        if indicators.get("rsi_14") is not None:
+            rsi_val = indicators["rsi_14"]
+            score = 0.5 if rsi_val < 40 else (1.0 if rsi_val < 50 else (-0.5 if rsi_val > 60 else (-1.0 if rsi_val > 70 else 0.0)))
+            votes.append(("RSI", score, 0.10))
+        if indicators.get("stoch_k") is not None:
+            score = 1.0 if indicators["stoch_k"] < 20 else (-1.0 if indicators["stoch_k"] > 80 else 0.0)
+            votes.append(("Stochastic", score, 0.10))
+        if indicators.get("vwap") is not None and indicators.get("close") is not None:
+            score = 1.0 if indicators["close"] > indicators["vwap"] else -1.0
+            votes.append(("VWAP", score, 0.08))
+        if indicators.get("ichimoku_kijun") is not None and indicators.get("close") is not None:
+            score = 1.0 if indicators["close"] > indicators["ichimoku_kijun"] else -1.0
+            votes.append(("Ichimoku", score, 0.05))
+        if indicators.get("aroon_up") is not None and indicators.get("aroon_down") is not None:
+            score = 1.0 if indicators["aroon_up"] > 70 else (-1.0 if indicators["aroon_down"] > 70 else 0.0)
+            votes.append(("Aroon", score, 0.05))
+        if indicators.get("choppiness") is not None:
+            score = -1.0 if indicators["choppiness"] > 70 else (1.0 if indicators["choppiness"] < 40 else 0.0)
+            votes.append(("Choppiness", score, 0.05))
+        if indicators.get("squeeze_on") is not None:
+            score = 1.0 if indicators["squeeze_on"] else 0.0
+            votes.append(("Squeeze Breakout", score, 0.05))
+        if indicators.get("hurst") is not None:
+            score = 1.0 if indicators["hurst"] > 0.5 else (-1.0 if indicators["hurst"] < 0.45 else 0.0)
+            votes.append(("Hurst", score, 0.03))
+        total_weight = sum(w for _, _, w in votes) or 1.0
+        combined = sum(s * w for _, s, w in votes) / total_weight
+        if combined > 0.4:
+            tier = "STRONG BUY"
+        elif combined > 0.2:
+            tier = "MODERATE BUY"
+        elif combined > -0.2:
+            tier = "NEUTRAL"
+        elif combined > -0.4:
+            tier = "MODERATE SELL"
+        else:
+            tier = "STRONG SELL"
+        return {
+            "combiner_score": round(combined, 4),
+            "tier": tier,
+            "votes": [{"indicator": name, "score": round(score, 3), "weight": round(w, 3)} for name, score, w in votes],
+        }
+
+    def combiner_payload(self) -> dict[str, Any]:
+        """Payload for the Combiner chart page: candles + indicators + ML + combiner score."""
+        candles = self._load_real_candles()
+        indicators = self._compute_indicators(candles)
+        ml_prob = self._run_ensemble_prediction(candles)
+        combiner = self._compute_combiner_score(indicators, ml_prob)
+        return {
+            "ok": True,
+            "candle_count": len(candles),
+            "indicators": indicators,
+            "ml_prediction": ml_prob,
+            "combiner": combiner,
+            "last_candle": candles[-1] if candles else None,
+            "recent_candles": candles[-60:],
+        }
+
+    def generator_payload(self) -> dict[str, Any]:
+        """Payload for the Signal Generator page: future signal predictions for all horizons."""
+        candles = self._load_real_candles()
+        if not candles:
+            return {"ok": False, "error": "No candle data available", "horizons": []}
+        indicators = self._compute_indicators(candles)
+        ml_prob = self._run_ensemble_prediction(candles)
+        combiner = self._compute_combiner_score(indicators, ml_prob)
+        horizons = []
+        last_close = candles[-1]["close"]
+        atr_val = indicators.get("atr_14", 0.01) or 0.01
+        for horizon_name, bars in [("1-Minute", 1), ("3-Minute", 3), ("30-Minute", 30)]:
+            direction = "BUY" if combiner["combiner_score"] > 0 else "SELL"
+            est_price = last_close + (combiner["combiner_score"] * atr_val) * (bars / 1.0)
+            confidence = min(abs(combiner["combiner_score"]) * 2, 1.0)
+            if combiner["combiner_score"] > 0.4:
+                confidence = min(confidence * 1.2, 0.95)
+            elif combiner["combiner_score"] < -0.4:
+                confidence = min(confidence * 1.2, 0.95)
+            horizons.append({
+                "horizon": horizon_name,
+                "bars": bars,
+                "direction": direction,
+                "entry_price": round(last_close, 6),
+                "estimated_price": round(est_price, 6),
+                "confidence": round(confidence, 4),
+                "tp_1r": round(last_close + (atr_val if combiner["combiner_score"] > 0 else -atr_val), 6),
+                "tp_2r": round(last_close + (2 * atr_val if combiner["combiner_score"] > 0 else -2 * atr_val), 6),
+                "sl_1r": round(last_close - (atr_val if combiner["combiner_score"] > 0 else -atr_val), 6),
+                "sl_2r": round(last_close - (2 * atr_val if combiner["combiner_score"] > 0 else -2 * atr_val), 6),
+                "atr": round(atr_val, 6),
+            })
+        return {
+            "ok": True,
+            "combiner_score": combiner["combiner_score"],
+            "tier": combiner["tier"],
+            "ml_up_prob": ml_prob.get("up_probability", 0.5),
+            "ml_down_prob": ml_prob.get("down_probability", 0.5),
+            "last_close": round(last_close, 6),
+            "horizons": horizons,
+        }
+
+    def indicators_payload(self) -> dict[str, Any]:
+        """Payload for the Indicators page: all 21 indicator values with interpretations."""
+        candles = self._load_real_candles()
+        indicators = self._compute_indicators(candles)
+        def interp(name, val, bull_above=None, bear_below=None, bull=None, bear=None, desc=""):
+            if val is None:
+                return {"value": None, "signal": "N/A", "desc": desc}
+            if bull_above is not None and bear_below is not None:
+                signal = "BULLISH" if val > bull_above else ("BEARISH" if val < bear_below else "NEUTRAL")
+            elif bull is not None and bear is not None:
+                signal = "BULLISH" if bull else ("BEARISH" if bear else "NEUTRAL")
+            else:
+                signal = "NEUTRAL"
+            return {"value": round(val, 6) if isinstance(val, float) else val, "signal": signal, "desc": desc}
+        return {
+            "ok": True,
+            "candle_count": len(candles),
+            "last_close": indicators.get("close"),
+            "indicators": {
+                "ema_20": interp("ema_20", indicators.get("ema_20"), desc="Fast EMA — price above = bullish"),
+                "ema_50": interp("ema_50", indicators.get("ema_50"), desc="Mid EMA — trend filter"),
+                "ema_200": interp("ema_200", indicators.get("ema_200"), desc="Long EMA — macro trend"),
+                "rsi_14": interp("rsi_14", indicators.get("rsi_14"), 70, 30, desc="RSI 14 — overbought >70, oversold <30"),
+                "atr_14": interp("atr_14", indicators.get("atr_14"), desc="ATR 14 — volatility in price units"),
+                "adx_14": interp("adx_14", indicators.get("adx_14"), 25, 20, desc="ADX 14 — trend strength >25"),
+                "bb_upper": interp("bb_upper", indicators.get("bb_upper"), desc="Bollinger Upper Band"),
+                "bb_mid": interp("bb_mid", indicators.get("bb_mid"), desc="Bollinger Middle Band"),
+                "bb_lower": interp("bb_lower", indicators.get("bb_lower"), desc="Bollinger Lower Band"),
+                "bb_width": interp("bb_width", indicators.get("bb_width"), desc="BB Width — volatility expansion"),
+                "stoch_k": interp("stoch_k", indicators.get("stoch_k"), 20, 80, desc="Stochastic K — oversold <20, overbought >80"),
+                "stoch_d": interp("stoch_d", indicators.get("stoch_d"), 20, 80, desc="Stochastic D — signal line"),
+                "cci_20": interp("cci_20", indicators.get("cci_20"), 100, -100, desc="CCI 20 — >100 bullish, <-100 bearish"),
+                "vwap": interp("vwap", indicators.get("vwap"), desc="VWAP — price above = bullish"),
+                "vwap_zscore": interp("vwap_zscore", indicators.get("vwap_zscore"), 2, -2, desc="VWAP Z-score — >2 overbought"),
+                "kaufman_er": interp("kaufman_er", indicators.get("kaufman_er"), 0.5, 0.2, desc="Kaufman Efficiency — >0.5 trending"),
+                "choppiness": interp("choppiness", indicators.get("choppiness"), 40, 70, desc="Choppiness — <40 trending, >70 choppy"),
+                "squeeze_on": interp("squeeze_on", indicators.get("squeeze_on"), bull=indicators.get("squeeze_on"), bear=False, desc="Keltner Squeeze — breakout pending"),
+                "supertrend_direction": interp("supertrend_direction", indicators.get("supertrend_direction"), bull=indicators.get("supertrend_direction", 0) > 0, bear=indicators.get("supertrend_direction", 0) < 0, desc="Supertrend — +1 bull, -1 bear"),
+                "ichimoku_kijun": interp("ichimoku_kijun", indicators.get("ichimoku_kijun"), desc="Ichimoku Kijun — price above = bullish"),
+                "ichimoku_tenkan": interp("ichimoku_tenkan", indicators.get("ichimoku_tenkan"), desc="Ichimoku Tenkan — fast line"),
+                "hurst": interp("hurst", indicators.get("hurst"), 0.5, 0.45, desc="Hurst Exponent — >0.5 trending, <0.45 mean-reverting"),
+                "aroon_up": interp("aroon_up", indicators.get("aroon_up"), 70, 50, desc="Aroon Up — >70 bullish"),
+                "aroon_down": interp("aroon_down", indicators.get("aroon_down"), 50, 70, desc="Aroon Down — >70 bearish"),
+                "donchian_upper": interp("donchian_upper", indicators.get("donchian_upper"), desc="Donchian Upper — resistance"),
+                "donchian_lower": interp("donchian_lower", indicators.get("donchian_lower"), desc="Donchian Lower — support"),
+                "pivot_pp": interp("pivot_pp", indicators.get("pivot_pp"), desc="Pivot Point — central level"),
+                "pivot_r1": interp("pivot_r1", indicators.get("pivot_r1"), desc="Pivot R1 — resistance"),
+                "pivot_sr1": interp("pivot_sr1", indicators.get("pivot_sr1"), desc="Pivot S1 — support"),
+            },
+            "errors": indicators.get("error"),
+        }
+
     def save_credentials(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Write validated credentials to local git-ignored .env (chmod 600); never echo secrets."""
         with self.lock:
@@ -1905,6 +2268,18 @@ def make_handler(runtime: OperatorRuntime):
                     self._send_json({"error": str(exc)}, status=400)
                     return
                 self._send_json(out)
+                return
+
+            if route == "/api/combiner":
+                self._send_json(runtime.combiner_payload())
+                return
+
+            if route == "/api/generator":
+                self._send_json(runtime.generator_payload())
+                return
+
+            if route == "/api/indicators":
+                self._send_json(runtime.indicators_payload())
                 return
 
             super().do_GET()
