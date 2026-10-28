@@ -1,0 +1,46 @@
+name: fetch-supabase-candles
+
+# Fetch real EUR/USD M1 candles from Supabase and save to the repository.
+# GitHub Actions runners have full internet access, so they can reach Supabase
+# even though the sandbox environment cannot.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"  # Every 6 hours
+  workflow_dispatch:
+
+concurrency:
+  group: fetch-supabase-candles
+  cancel-in-progress: false
+
+jobs:
+  fetch-candles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests python-dotenv
+
+      - name: Fetch candles from Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          cd eurusd-proxy-bot
+          python3 scripts/fetch_supabase_candles.py
+
+      - name: Commit and push candles
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add eurusd-proxy-bot/var/real_candles/
+          git commit -m "chore: fetch real candles from Supabase [skip ci]" || echo "No changes to commit"
+          git push origin HEAD
