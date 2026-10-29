@@ -1,0 +1,109 @@
+# Bulk Training on Expanded Dataset
+#
+# Fetches 10,000+ real EUR/USD candles from Supabase, trains GBDT ensemble
+# models on the expanded dataset, and force-commits the model JSON files
+# to the repo (var/ is gitignored, so we use git add -f).
+#
+# This runs on demand via workflow_dispatch. The daily real-data-training.yml
+# continues to run on 2000 candles for quick iteration; this workflow is for
+# major retraining runs on the full historical dataset.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candles:
+        description: "Number of candles to fetch"
+        required: false
+        default: "10000"
+
+concurrency:
+  group: bulk-training
+  cancel-in-progress: false
+
+jobs:
+  bulk-train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: eurusd-proxy-bot
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: eurusd-proxy-bot/requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          pip install requests python-dotenv
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Fetch expanded candle dataset
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          echo "Fetching ${{ github.event.inputs.candles || '10000' }} candles from Supabase..."
+          python3 scripts/fetch_supabase_candles.py
+
+      - name: Limit to requested candle count
+        run: |
+          LIMIT="${{ github.event.inputs.candles || '10000' }}"
+          # Keep only the latest N candles by merging all batches and truncating
+          python3 -c "
+          import glob, os
+          from pathlib import Path
+          cdir = Path('var/real_candles')
+          all_lines = []
+          for f in sorted(cdir.glob('batch_*.txt')):
+              all_lines.extend(f.read_text().strip().split(';'))
+          # Keep last N
+          all_lines = [l for l in all_lines if l.strip()][-int('$LIMIT'):]
+          # Rewrite first batch with all, clear others
+          first = sorted(cdir.glob('batch_*.txt'))[0]
+          first.write_text(';'.join(all_lines))
+          for f in sorted(cdir.glob('batch_*.txt'))[1:]:
+              f.unlink()
+          print(f'Kept {len(all_lines)} candles')
+          "
+
+      - name: Train models on expanded dataset
+        run: |
+          python3 scripts/train_real_model.py
+
+      - name: Run backtest
+        run: |
+          python3 scripts/backtest_engine.py
+
+      - name: Force-commit model files to repo
+        if: always()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Force-add model JSONs (var/ is gitignored)
+          git add -f eurusd-proxy-bot/var/real_candles/ensemble_model*.json
+          git add -f eurusd-proxy-bot/var/real_candles/training_report.json
+          git add -f eurusd-proxy-bot/var/real_candles/backtest_report.json
+
+          if git diff --staged --quiet; then
+            echo "No model changes to commit"
+          else
+            git commit -m "chore: bulk train on expanded dataset (${{ github.event.inputs.candles || '10000' }} candles) [skip ci]"
+            git push origin HEAD
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulk-training-${{ github.run_id }}
+          path: eurusd-proxy-bot/var/real_candles/ensemble_model*.json
+          retention-days: 90

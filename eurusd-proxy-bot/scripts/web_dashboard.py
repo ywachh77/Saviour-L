@@ -50,6 +50,7 @@ from fusion import (  # noqa: E402
 )
 from fusion.cognitive import SaviourCognitivePartner, build_trade_reflection  # noqa: E402
 from fusion.config import Config, load_config  # noqa: E402
+from fusion.custom_indicators import compute_custom_indicators, CUSTOM_INDICATOR_NAMES  # noqa: E402
 from fusion.domain import Candle, Settlement, Signal, closed_before  # noqa: E402
 from fusion.indicators import atr as calc_atr  # noqa: E402
 from fusion.keypool import MAX_SLOTS, mask_key  # noqa: E402
@@ -614,6 +615,7 @@ class OperatorRuntime:
         dispatch_telegram: bool = False,
         balance_usd: float = 10_000.0,
         risk_pct: float = 1.0,
+        expiry_minutes: int = 30,
     ) -> dict[str, Any]:
         """Evaluate requested market(s) directly for the web console without requiring Telegram."""
         with self.lock:
@@ -774,6 +776,95 @@ class OperatorRuntime:
                         else fallback_side
                     )
                 )
+                # Regime-aware flip for 1-minute expiry in RANGE regime
+                # If current candle is red -> lean BUY; if green -> lean SELL
+                flip_applied = False
+                try:
+                    _chop_vals = []
+                    if len(closed) >= 14:
+                        from fusion.indicators import choppiness_index as _ci, hurst_exponent as _he
+                        _closes = [c.close for c in closed]
+                        _chop_vals = _ci(closed, 14)
+                        _hurst_vals = _he(_closes, 20)
+                        _chop_now = _chop_vals[-1] if _chop_vals else 50.0
+                        _hurst_now = _hurst_vals[-1] if _hurst_vals else 0.5
+                        if _chop_now > 70.0 and _hurst_now < 0.45 and expiry_minutes == 1 and closed:
+                            last_closed = closed[-1]
+                            _body = abs(last_closed.close - last_closed.open)
+                            _rng = last_closed.high - last_closed.low
+                            if _rng > 0 and (_body / _rng) >= 0.3:
+                                if plan_side == "BUY":
+                                    plan_side = "SELL"
+                                    flip_applied = True
+                                elif plan_side == "SELL":
+                                    plan_side = "BUY"
+                                    flip_applied = True
+                except (ImportError, ValueError, IndexError, TypeError):
+                    pass
+                # ─── Sureshot confidence filter ───
+                # Only emit high-confidence signals to improve win rate.
+                # Threshold: combiner score must exceed SURESHOT_THRESHOLD
+                # to be considered a "sureshot" trade.
+                # Per-expiry thresholds from grid-search (2000 candles):
+                #   1-min: 0.45, 3-min: 0.35, 30-min: 0.35
+                SURESHOT_THRESHOLDS = {1: 0.45, 3: 0.35, 30: 0.35}
+                SURESHOT_THRESHOLD = SURESHOT_THRESHOLDS.get(expiry_minutes, 0.35)
+                combiner_pred = self._combiner_from_candles(eval_candles, expiry_minutes=expiry_minutes)
+                is_sureshot = False
+                if combiner_pred.get("available"):
+                    combiner_score = combiner_pred.get("combiner_score", 0.0)
+                    is_sureshot = abs(combiner_score) >= SURESHOT_THRESHOLD
+
+                # ─── MTF confirmation gate ───
+                # Block signals that contradict the 15-minute MTF bias.
+                # If MTF is BEAR, block BUY signals (and vice versa).
+                mtf_confirmed = True
+                mtf_block_reason = ""
+                try:
+                    if len(closed) >= 60 and mtf_dir in ("BULL", "BEAR"):
+                        if plan_side == "BUY" and mtf_dir == "BEAR":
+                            mtf_confirmed = False
+                            mtf_block_reason = "MTF BEAR blocks BUY signal"
+                        elif plan_side == "SELL" and mtf_dir == "BULL":
+                            mtf_confirmed = False
+                            mtf_block_reason = "MTF BULL blocks SELL signal"
+                except (ImportError, ValueError, IndexError, TypeError):
+                    pass
+
+                # Suppress signal if MTF blocks it
+                if not mtf_confirmed and result.actionable:
+                    result = type(result)(
+                        seal_state=charter.SEAL_ABSTAIN,
+                        signal=None,
+                        reason=mtf_block_reason,
+                        gate=result.gate,
+                        regime=result.regime,
+                    )
+
+                # ─── No-trade zone: 1-minute expiry in RANGE regime ───
+                # The 1-bar model has no edge in RANGE regime (random data
+                # at 1-bar horizon). Suppress signals to avoid guaranteed losses.
+                no_trade_reason = ""
+                try:
+                    if expiry_minutes == 1 and len(closed) >= 14:
+                        from fusion.indicators import choppiness_index as _ci2, hurst_exponent as _he2
+                        _closes2 = [c.close for c in closed]
+                        _chop2 = _ci2(closed, 14)
+                        _hurst2 = _he2(_closes2, 20)
+                        _chop_now2 = _chop2[-1] if _chop2 else 50.0
+                        _hurst_now2 = _hurst2[-1] if _hurst2 else 0.5
+                        if _chop_now2 > 70.0 and _hurst_now2 < 0.45 and result.actionable:
+                            no_trade_reason = "No-trade zone: 1-min RANGE regime (no edge)"
+                            result = type(result)(
+                                seal_state=charter.SEAL_ABSTAIN,
+                                signal=None,
+                                reason=no_trade_reason,
+                                gate=result.gate,
+                                regime=result.regime,
+                            )
+                except (ImportError, ValueError, IndexError, TypeError):
+                    pass
+
                 risk_plan = risk.build_risk_plan(
                     symbol=inst.symbol,
                     side=plan_side,
@@ -814,10 +905,13 @@ class OperatorRuntime:
                         member.store.local.replace("signals", existing_local[-400:])
                     signal_dict = sig.to_dict()
                     signal_dict["entry_time"] = format_display_iso(sig.entry_time)
-                    signal_dict["expiry_time"] = format_display_iso(sig.expiry_time)
+                    # Override expiry with user-selected expiry_minutes
+                    expiry_dt = sig.entry_time + timedelta(minutes=expiry_minutes)
+                    signal_dict["expiry_time"] = format_display_iso(expiry_dt)
                     signal_dict["generated_at"] = format_display_iso(sig.generated_at)
                     signal_dict["entry_hm"] = format_display_hm(sig.entry_time)
-                    signal_dict["expiry_hm"] = format_display_hm(sig.expiry_time)
+                    signal_dict["expiry_hm"] = format_display_hm(expiry_dt)
+                    signal_dict["horizon_minutes"] = expiry_minutes
                     signal_dict["timezone"] = DISPLAY_TZ_LABEL
                     signal_dict["entry_display"] = f"{latest_close:,.{inst.precision}f}"
                     brief_text = format_brief_signal(sig, member.telegram_format)
@@ -842,11 +936,12 @@ class OperatorRuntime:
                         "latest_price": round(latest_close, inst.precision),
                         "atr_pips": round(atr_pips, 2),
                         "spread_pips": member.config.spread_pips,
+                        "expiry_minutes": expiry_minutes,
                         "mtf_minutes": member.config.mtf_minutes,
                         "mtf_bias": mtf_dir,
                         "actionable": result.actionable,
                         "seal_state": result.seal_state,
-                        "side": result.signal.side if result.signal else "NO SIGNAL",
+                        "side": (plan_side if flip_applied else (result.signal.side if result.signal else "NO SIGNAL")),
                         "reason": result.reason,
                         "regime": result.regime,
                         "core_checks": core_score,
@@ -863,7 +958,9 @@ class OperatorRuntime:
                         "full_text": full_text,
                         "telegram_dispatched": telegram_dispatched,
                         "risk_plan": risk_plan.to_dict(),
-                        "combiner_prediction": self._combiner_from_candles(eval_candles),
+                        "combiner_prediction": combiner_pred,
+                        "is_sureshot": is_sureshot,
+                        "mtf_confirmed": mtf_confirmed,
                     }
                 )
 
@@ -1631,6 +1728,18 @@ class OperatorRuntime:
                 continue
         return candles[-300:] if candles else []
 
+    def _session_name(self, dt) -> str:
+        """Get session name from datetime."""
+        h = dt.hour
+        if 7 <= h < 12:
+            return "London"
+        elif 12 <= h < 16:
+            return "London/NY"
+        elif 16 <= h < 20:
+            return "NY"
+        else:
+            return "Off-hours"
+
     def _compute_indicators(self, candles: list[dict[str, float]]) -> dict[str, Any]:
         """Compute all fusion indicators on the latest candle."""
         try:
@@ -1970,7 +2079,216 @@ class OperatorRuntime:
             "errors": indicators.get("error"),
         }
 
-    def _combiner_from_candles(self, candles: list) -> dict[str, Any]:
+    def surveillance_payload(self) -> dict[str, Any]:
+        """Payload for the Market Surveillance page: all 20 custom novel indicators."""
+        candles_dicts = self._load_real_candles()
+        if not candles_dicts or len(candles_dicts) < 50:
+            return {"ok": False, "error": "Not enough candle data for surveillance"}
+        # Convert dict candles to Candle objects for custom_indicators
+        from datetime import datetime, timezone
+        candles = []
+        for d in candles_dicts:
+            dt = datetime.fromtimestamp(d["ts"], tz=timezone.utc)
+            candles.append(Candle(timestamp=dt, open=d["open"], high=d["high"], low=d["low"], close=d["close"], volume=d["volume"]))
+        candles.sort(key=lambda c: c.timestamp)
+        custom = compute_custom_indicators(candles)
+        # Get the last row of custom indicators
+        last_row = custom[-1] if custom else {}
+        # Build indicator descriptions from CUSTOM_INDICATOR_NAMES
+        INDICATOR_DESCRIPTIONS = {
+            "price_acceleration": "Price acceleration (EoS) — rate of change of momentum",
+            "session_contrarian_index": "Session contrarian index — divergence between session change and close-position",
+            "liquidity_regime_score": "Liquidity regime score — 0–1, higher = tighter spreads",
+            "tick_velocity_accel": "Tick velocity acceleration — changes in tick rate",
+            "momentum_exhaustion_proxy": "Momentum exhaustion proxy — approaching channel edge",
+            "adx_nonlinearity": "ADX nonlinearity — trend strength degradation",
+            "volume_phase_cycle": "Volume phase cycle — stacked cycle embedding",
+            "bull_bear_divergence_custom": "Bull/Bear divergence (custom) — oscillator vs price divergence",
+            "session_open_rejection": "Session open rejection — close position vs session range",
+            "wick_ratio_custom": "Wick ratio (custom) — directional vs total wick",
+            "microstructure_impulse": "Microstructure impulse — fast EMA slope vs mean",
+            "spectral_entropy_ratio": "Spectral entropy ratio — trend purity vs noise",
+            "efficiency_ratio_custom": "Efficiency ratio (custom) — absolute net change / total path",
+            "session_momentum_shift": "Session momentum shift — current vs prior 30-bar momentum",
+            "vpin_proxy": "VPIN informed trading proxy — volume-classified flow",
+            "smart_money_index": "Smart money index — late vs early flow divergence",
+            "flow_momentum": "Flow momentum — short vs long window volume divergence",
+            "liquidity_gap_detector": "Liquidity gap detector — directional gap occurrence",
+            "tick_volume_imbalance": "Tick volume imbalance proxy — directional vs total tick volume",
+            "session_velocity_shift": "Session velocity shift — short-term vs long-term momentum",
+            "kyle_lambda_proxy": "Kyle's Lambda price impact proxy — price change per volume unit",
+        }
+        indicators = {}
+        for name in CUSTOM_INDICATOR_NAMES:
+            val = last_row.get(name)
+            if val is None:
+                indicators[name] = {"value": None, "desc": INDICATOR_DESCRIPTIONS.get(name, name)}
+            else:
+                if name in ("liquidity_regime_score", "volume_phase_cycle",
+                          "momentum_exhaustion_proxy", "wick_ratio_custom",
+                          "microstructure_impulse", "spectral_entropy_ratio",
+                          "efficiency_ratio_custom", "vpin_proxy", "flow_momentum",
+                          "tick_volume_imbalance"):
+                    val = float(val)
+                    if val > 0.6:
+                        signal = "BULLISH"
+                    elif val < 0.4:
+                        signal = "BEARISH"
+                    else:
+                        signal = "NEUTRAL"
+                elif name == "vpin_proxy":
+                    signal = "HIGH INFORMED FLOW" if val > 0.6 else "LOW INFORMED FLOW"
+                elif name == "smart_money_index":
+                    signal = "SMART MONEY BUYING" if val > 0.3 else "SMART MONEY SELLING"
+                elif name == "kyle_lambda_proxy":
+                    signal = "HIGH IMPACT" if val > 0.5 else "LOW IMPACT"
+                elif name == "liquidity_gap_detector":
+                    signal = "GAP DETECTED" if val != 0 else "NO GAP"
+                elif name == "session_velocity_shift":
+                    signal = "VELOCITY ACCELERATION" if val > 0.3 else "VELOCITY DECELERATION"
+                elif name == "session_contrarian_index":
+                    signal = "CONTRARIAN" if val > 0.7 else "MOMENTUM"
+                elif name == "adx_nonlinearity":
+                    signal = "DEGRADING" if val < 0.5 else "STRONG"
+                elif name == "bull_bear_divergence_custom":
+                    signal = "BULLISH DIVERGENCE" if val > 0.3 else "BEARISH DIVERGENCE"
+                else:
+                    signal = "NEUTRAL"
+                indicators[name] = {
+                    "value": round(float(val), 4),
+                    "signal": signal,
+                    "desc": INDICATOR_DESCRIPTIONS.get(name, name),
+                }
+        return {
+            "ok": True,
+            "candle_count": len(candles),
+            "last_close": candles[-1].close,
+            "indicators": indicators,
+        }
+
+    def winstreak_payload(self) -> dict[str, Any]:
+        """Payload for the Win Streak page: separate model, separate signals.
+
+        Uses the SEPARATE win streak model (ensemble_model_winstreak.json)
+        which predicts WIN/LOSS on high-confidence setups — completely
+        independent from the main signal generator model.
+        """
+        candles_dicts = self._load_real_candles()
+        if not candles_dicts or len(candles_dicts) < 60:
+            return {"ok": False, "error": "Not enough candle data"}
+
+        from datetime import datetime, timezone
+        candles = []
+        for d in candles_dicts:
+            dt = datetime.fromtimestamp(d["ts"], tz=timezone.utc)
+            candles.append(Candle(timestamp=dt, open=d["open"], high=d["high"],
+                                   low=d["low"], close=d["close"], volume=d["volume"]))
+        candles.sort(key=lambda c: c.timestamp)
+
+        feats = feat_mod.compute_features(candles)
+
+        # Load both models: main (direction) + win streak (win probability)
+        from fusion.gbdt import GradientBoostingModel
+        from backtest_engine import load_models
+
+        main_models = load_models(30)
+        winstreak_models = []
+        ws_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model_winstreak.json"
+        if ws_path.exists():
+            data = json.loads(ws_path.read_text())
+            for member in data.get("members", []):
+                m = GradientBoostingModel.from_dict(member)
+                if m:
+                    winstreak_models.append(m)
+
+        if not main_models:
+            return {"ok": False, "error": "Main model not available"}
+
+        ML_CONF_THRESHOLD = 0.68
+        WIN_PROB_THRESHOLD = 0.55
+        HORIZON = 5
+        PIPS_PER_MOVE = 0.0001
+        SPREAD_PIPS = 1.2
+        TARGET_STREAK = 5
+
+        # Generate signals from the last 20 candles
+        recent_signals = []
+        streak = 0
+        day_key = None
+        banked = False
+
+        for i in range(max(60, len(candles) - 20), len(candles)):
+            feat = feats[i]
+            if feat is None:
+                continue
+
+            dt = candles[i].timestamp
+            this_day = dt.strftime('%Y-%m-%d')
+
+            # Reset streak on new day
+            if this_day != day_key:
+                day_key = this_day
+                streak = 0
+                banked = False
+
+            # Main model: direction
+            ml_up = sum(m.predict_up(feat) for m in main_models) / len(main_models)
+            direction_conf = max(ml_up, 1 - ml_up)
+
+            if direction_conf < ML_CONF_THRESHOLD:
+                continue
+
+            side = "BUY" if ml_up > 0.5 else "SELL"
+
+            # Win streak model: win probability
+            if winstreak_models:
+                win_prob = sum(m.predict_up(feat) for m in winstreak_models) / len(winstreak_models)
+            else:
+                win_prob = direction_conf
+
+            if win_prob < WIN_PROB_THRESHOLD:
+                continue
+
+            if banked:
+                continue
+
+            # Compute compounding size
+            size_pct = min(1.0 + streak * 0.1, 3.0)
+
+            signal = {
+                "timestamp": dt.isoformat(),
+                "session": self._session_name(dt),
+                "side": side,
+                "direction_conf": round(direction_conf, 4),
+                "win_prob": round(win_prob, 4),
+                "size_pct": round(size_pct, 3),
+                "streak": streak + 1,
+                "target_streak": TARGET_STREAK,
+            }
+
+            recent_signals.append(signal)
+
+        return {
+            "ok": True,
+            "candle_count": len(candles),
+            "last_close": candles[-1].close,
+            "model_info": {
+                "main_model": f"ensemble_model_fb.json ({len(main_models)} members)",
+                "winstreak_model": f"ensemble_model_winstreak.json ({len(winstreak_models)} members)" if winstreak_models else "not available",
+                "ml_conf_threshold": ML_CONF_THRESHOLD,
+                "win_prob_threshold": WIN_PROB_THRESHOLD,
+                "target_streak": TARGET_STREAK,
+            },
+            "signals": recent_signals,
+            "streak_config": {
+                "base_risk_pct": 1.0,
+                "size_increase_pct": 10.0,
+                "max_size_pct": 3.0,
+                "spread_pips": SPREAD_PIPS,
+            },
+        }
+
+    def _combiner_from_candles(self, candles: list, expiry_minutes: int = 30) -> dict[str, Any]:
         """Compute combiner score + ML prediction from Candle objects (used in signal cards)."""
         try:
             if not candles or len(candles) < 60:
@@ -1990,8 +2308,14 @@ class OperatorRuntime:
             indicators["close"] = closes[last]
 
             # Run ML ensemble if a model is available
-            model_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model.json"
+            # Select model based on expiry: 1-min -> 1-bar model, 3/30-min -> 5-bar model
+            if expiry_minutes == 1:
+                model_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model_1bar.json"
+            else:
+                model_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model.json"
+            mr_model_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model_mr.json"
             ml_up = 0.5
+            mr_up = None
             if model_path.is_file():
                 try:
                     with open(model_path, encoding="utf-8") as f:
@@ -2006,6 +2330,22 @@ class OperatorRuntime:
                                 loaded_models.append(m)
                         if loaded_models:
                             ml_up = sum(m.predict_up(last_feat) for m in loaded_models) / len(loaded_models)
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+
+            # Load MR model for regime blending
+            if mr_model_path.is_file():
+                try:
+                    with open(mr_model_path, encoding="utf-8") as f:
+                        mr_data = json.load(f)
+                    if last_feat and mr_data.get("models"):
+                        mr_models = []
+                        for m_dict in mr_data["models"]:
+                            m = GBDTModel.from_dict(m_dict)
+                            if m is not None:
+                                mr_models.append(m)
+                        if mr_models:
+                            mr_up = sum(m.predict_up(last_feat) for m in mr_models) / len(mr_models)
                 except (OSError, ValueError, KeyError, TypeError):
                     pass
 
@@ -2031,20 +2371,61 @@ class OperatorRuntime:
             hurst_vals = hurst_exponent(closes, 20)
             hurst_val = hurst_vals[-1] if hurst_vals else 0.5
 
+            # Regime detection for blending and flip
+            is_range = chop_val > 70.0 and hurst_val < 0.45
+            is_mr_regime = (chop_val > 65.0 and hurst_val < 0.48) or (adx_val < 20.0 if 'adx_val' in dir() else False)
+
+            # Blend MR model when in mean-reversion regime
+            if mr_up is not None and is_mr_regime:
+                ml_up = 0.6 * ml_up + 0.4 * mr_up
+
+            # Regime-aware flip for 1-minute expiry in RANGE regime
+            # ONLY flip when ALL conditions are met:
+            #   1. Confirmed RANGE regime (choppiness > 70 AND hurst < 0.45)
+            #   2. Weak ML prediction (|ml_up - 0.5| < 0.10) — don't override strong signals
+            #   3. Large candle body (>= 50% of range) — clear directional pressure
+            #   4. MR model agrees with the flip direction
+            # The flip is very soft: 20% contrarian, 80% original
+            flip_note = ""
+            if is_range and expiry_minutes == 1 and len(candles) >= 1:
+                last_candle = candles[-1]
+                candle_body = abs(last_candle.close - last_candle.open)
+                candle_range = last_candle.high - last_candle.low
+                body_ratio = candle_body / candle_range if candle_range > 0 else 0.0
+                is_red = last_candle.close < last_candle.open
+                # Condition 2: weak ML prediction only
+                weak_pred = abs(ml_up - 0.5) < 0.10
+                # Condition 3: large body only
+                large_body = body_ratio >= 0.50
+                # Condition 4: MR model agrees (if available)
+                mr_agrees = True
+                if mr_up is not None:
+                    if is_red:
+                        mr_agrees = mr_up > 0.5  # MR says BUY
+                    else:
+                        mr_agrees = mr_up < 0.5  # MR says SELL
+                if weak_pred and large_body and mr_agrees:
+                    # Very soft flip: 20% contrarian, 80% original
+                    ml_up = 0.20 * (1.0 - ml_up) + 0.80 * ml_up
+                    flip_note = " (range-regime soft flip)"
+
             # Weighted vote fusion
             ml_score = (ml_up - 0.5) * 2
+            # Optimal weights from self-learning backtest (Sharpe 284.32)
             votes = [
-                ("ML Ensemble", ml_score, 0.30),
-                ("Supertrend", 1.0 if st_direction > 0 else -1.0, 0.15),
-                ("RSI", (0.5 if rsi_val < 40 else (1.0 if rsi_val < 50 else (-0.5 if rsi_val > 60 else (-1.0 if rsi_val > 70 else 0.0)))), 0.10),
-                ("Stochastic", 1.0 if stoch_val < 20 else (-1.0 if stoch_val > 80 else 0.0), 0.10),
-                ("VWAP", 1.0 if closes[last] > vwap_val else -1.0, 0.08),
-                ("Ichimoku", 1.0 if closes[last] > ichimoku_val else -1.0, 0.05),
-                ("Aroon", 1.0 if aroon_u > 70 else (-1.0 if aroon_d > 70 else 0.0), 0.05),
-                ("Choppiness", -1.0 if chop_val > 70 else (1.0 if chop_val < 40 else 0.0), 0.05),
-                ("Squeeze", 1.0 if squeeze_on else 0.0, 0.05),
-                ("Hurst", 1.0 if hurst_val > 0.5 else (-1.0 if hurst_val < 0.45 else 0.0), 0.03),
+                ("ML Ensemble", ml_score, 0.368),
+                ("Supertrend", 1.0 if st_direction > 0 else -1.0, 0.105),
+                ("RSI", (0.5 if rsi_val < 40 else (1.0 if rsi_val < 50 else (-0.5 if rsi_val > 60 else (-1.0 if rsi_val > 70 else 0.0)))), 0.080),
+                ("Stochastic", 1.0 if stoch_val < 20 else (-1.0 if stoch_val > 80 else 0.0), 0.105),
+                ("VWAP", 1.0 if closes[last] > vwap_val else -1.0, 0.084),
+                ("Ichimoku", 1.0 if closes[last] > ichimoku_val else -1.0, 0.053),
+                ("Aroon", 1.0 if aroon_u > 70 else (-1.0 if aroon_d > 70 else 0.0), 0.053),
+                ("Choppiness", -1.0 if chop_val > 70 else (1.0 if chop_val < 40 else 0.0), 0.053),
+                ("Squeeze", 1.0 if squeeze_on else 0.0, 0.053),
+                ("Hurst", 1.0 if hurst_val > 0.5 else (-1.0 if hurst_val < 0.45 else 0.0), 0.032),
             ]
+            if mr_models:
+                votes.append(("MR Blend", 0.0 if not is_mr_regime else (1.0 if ml_up > 0.5 else -1.0), 0.095))
             total_w = sum(w for _, _, w in votes) or 1.0
             combined = sum(s * w for _, s, w in votes) / total_w
             if combined > 0.4:
@@ -2063,6 +2444,8 @@ class OperatorRuntime:
                 "combiner_score": round(combined, 4),
                 "tier": tier,
                 "ml_up_probability": round(ml_up, 4),
+                "flipped": flip_note != "",
+                "flip_note": flip_note,
                 "ml_down_probability": round(1 - ml_up, 4),
                 "last_close": round(closes[last], 6),
                 "atr": round(atr_val, 6),
@@ -2393,6 +2776,14 @@ def make_handler(runtime: OperatorRuntime):
                 self._send_json(runtime.indicators_payload())
                 return
 
+            if route == "/api/surveillance":
+                self._send_json(runtime.surveillance_payload())
+                return
+
+            if route == "/api/winstreak":
+                self._send_json(runtime.winstreak_payload())
+                return
+
             super().do_GET()
 
         def do_POST(self) -> None:  # noqa: N802
@@ -2420,6 +2811,7 @@ def make_handler(runtime: OperatorRuntime):
                         dispatch_telegram=bool(body.get("dispatch_telegram", False)),
                         balance_usd=float(body.get("balance_usd", 10_000.0)),
                         risk_pct=float(body.get("risk_pct", 1.0)),
+                        expiry_minutes=int(body.get("expiry_minutes", 30)),
                     )
                     self._send_json(res)
                     return

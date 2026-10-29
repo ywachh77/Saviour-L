@@ -9,20 +9,21 @@ from __future__ import annotations
 
 from typing import Callable
 
-from . import methods, scalping
+from . import methods, scalping, scalping_expiry
 from .domain import Candle, Decision
 
 CORE = "orbix_confluence"
 
 # Strategy council prototypes grouped across classic, micro-scalping, SMC/ICT
-# institutional structure, viral volatility/momentum, and quantified scalping.
+# institutional structure, viral volatility/momentum, quantified scalping,
+# and expiry-aware scalping.
 PROTOTYPES = (
     "trend_pullback",
     "range_reversal",
     "breakout",
     "ml_consensus",
     "orbix_cadence",
-) + scalping.SCALPING_PROTOTYPES + methods.METHOD_PROTOTYPES
+) + scalping.SCALPING_PROTOTYPES + methods.METHOD_PROTOTYPES + scalping_expiry.SCALPING_EXPIRY_PROTOTYPES
 
 MEMBERS = {
     CORE: "Orbix Confluence Gate (6 checks, 5-of-6 with mandatory trend + ADX)",
@@ -34,6 +35,7 @@ MEMBERS = {
 }
 MEMBERS.update(scalping.SCALPING_MEMBERS)
 MEMBERS.update(methods.METHOD_MEMBERS)
+MEMBERS.update(scalping_expiry.SCALPING_EXPIRY_MEMBERS)
 
 
 def strategy_family(strategy_id: str) -> str:
@@ -44,6 +46,8 @@ def strategy_family(strategy_id: str) -> str:
         return methods.METHOD_FAMILIES[strategy_id]
     if strategy_id in scalping.SCALPING_PROTOTYPES:
         return "MICRO_SCALPING"
+    if strategy_id in scalping_expiry.SCALPING_EXPIRY_PROTOTYPES:
+        return "EXPIRY_SCALPING"
     return "CLASSIC_COUNCIL"
 
 # Volatility band the core gate was written for. Outside it the gate abstains
@@ -431,6 +435,7 @@ REGISTRY: dict[str, Callable[..., Decision]] = {
 }
 REGISTRY.update(scalping.SCALPING_REGISTRY)
 REGISTRY.update(methods.METHOD_REGISTRY)
+REGISTRY.update(scalping_expiry.SCALPING_EXPIRY_REGISTRY)
 
 # Every member must be either the core gate or a prototype, and every prototype
 # must have a rule and a human-readable description. A member registered in one

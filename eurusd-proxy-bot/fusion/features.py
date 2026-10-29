@@ -17,6 +17,7 @@ from typing import Sequence
 from . import charter, instruments
 from .domain import Candle
 from . import mtf
+from .custom_indicators import compute_custom_indicators, CUSTOM_INDICATOR_NAMES
 from .indicators import (
     adx,
     atr,
@@ -49,7 +50,8 @@ CCI_PERIOD = 20
 # swing the swing strategies use, because a scalp targets a few pips, not a leg.
 MICRO_PIVOT_BARS = 5
 
-FEATURE_VERSION = 5
+FEATURE_VERSION = 8
+FEATURE_VERSION = 9
 
 # Higher-timeframe context. The feed is one-minute only, so these are resampled
 # from the bars we already hold rather than fetched: five one-minute bars are a
@@ -111,6 +113,45 @@ FEATURE_NAMES = (
     "session_ny",
     "autocorr_abs",
     "range_expansion",
+    # --- candle quality microstructure (v6) -------------------------------
+    "body_to_wick_ratio",
+    "upper_shadow_dom",
+    "lower_shadow_dom",
+    "consecutive_dir_count",
+    # --- volatility regime (v7) --------------------------------------------
+    # Explicit volatility regime flags. The model was struggling to infer
+    # volatility regimes from volatility_z alone. These make it explicit.
+    "vol_regime_low",
+    "vol_regime_high",
+    "vol_regime_cluster",
+    # --- custom novel indicators (v8) -------------------------------------
+    # 13 original indicators that capture patterns standard TA cannot.
+    # Information theory, order flow proxies, microstructure, pattern
+    # recognition, and adaptive systems. Not rehashes of RSI/MACD/etc.
+    "price_entropy",
+    "directional_info_ratio",
+    "body_pressure_imbalance",
+    "wick_reversal_score",
+    "volume_directional_flow",
+    "price_clustering_density",
+    "body_acceleration",
+    "gap_pressure",
+    "candle_sequence_encoding",
+    "micro_trend_break",
+    "volatility_phase",
+    "efficiency_ratio_custom",
+    "session_momentum_shift",
+    # --- custom novel indicators v2 (v9) --------------------------------
+    # 7 new microstructure indicators inspired by market microstructure
+    # research: VPIN, Kyle's Lambda, Smart Money Index, flow momentum,
+    # liquidity gaps, tick imbalance, session velocity.
+    "vpin_proxy",
+    "smart_money_index",
+    "flow_momentum",
+    "liquidity_gap_detector",
+    "tick_volume_imbalance",
+    "session_velocity_shift",
+    "kyle_lambda_proxy",
     # Higher-timeframe context is deliberately NOT here. The tilt is computed
     # and carried as strategy-facing values below (mtf_fast / mtf_slow, plus
     # mtf_bias_* and mtf_gap_*), but it does not enter the model vector:
@@ -166,6 +207,33 @@ FEATURE_LABELS = {
     "session_ny": "NY session flag",
     "autocorr_abs": "Autocorrelation strength",
     "range_expansion": "Range expansion ratio",
+    "body_to_wick_ratio": "Body vs wick ratio",
+    "upper_shadow_dom": "Upper shadow dominance",
+    "lower_shadow_dom": "Lower shadow dominance",
+    "consecutive_dir_count": "Consecutive direction count",
+    "vol_regime_low": "Low volatility regime flag",
+    "vol_regime_high": "High volatility regime flag",
+    "vol_regime_cluster": "Volatility clustering flag",
+    "price_entropy": "Price change Shannon entropy",
+    "directional_info_ratio": "Directional information ratio",
+    "body_pressure_imbalance": "Body pressure imbalance",
+    "wick_reversal_score": "Wick reversal score",
+    "volume_directional_flow": "Volume directional flow",
+    "price_clustering_density": "Price clustering density",
+    "body_acceleration": "Body acceleration (2nd derivative)",
+    "gap_pressure": "Gap pressure",
+    "candle_sequence_encoding": "Candle sequence encoding",
+    "micro_trend_break": "Micro trend break detector",
+    "volatility_phase": "Volatility phase",
+    "efficiency_ratio_custom": "Custom efficiency ratio",
+    "session_momentum_shift": "Session momentum shift",
+    "vpin_proxy": "VPIN informed trading proxy",
+    "smart_money_index": "Smart money index (late vs early flow)",
+    "flow_momentum": "Flow momentum (short vs long window)",
+    "liquidity_gap_detector": "Liquidity gap detector",
+    "tick_volume_imbalance": "Tick volume imbalance proxy",
+    "session_velocity_shift": "Session velocity shift",
+    "kyle_lambda_proxy": "Kyle's Lambda price impact proxy",
 }
 
 # How many bars are needed before a feature row is complete.
@@ -301,6 +369,9 @@ def compute_features(
     for index in range(1, len(closes)):
         returns.append(_safe_ratio(closes[index] - closes[index - 1], closes[index - 1]))
 
+    # Pre-compute custom indicators for all candles
+    custom_indicators_list = compute_custom_indicators(candles)
+
     result: list[dict[str, float] | None] = []
     for index, candle in enumerate(candles):
         if (
@@ -390,6 +461,57 @@ def compute_features(
         mom_now = float(linreg_mom_vals[index] if linreg_mom_vals[index] is not None else 0.0)
         mom_prev = float(linreg_mom_vals[index - 1] if linreg_mom_vals[index - 1] is not None else mom_now)
 
+        # --- candle quality microstructure (v6) ---
+        upper_wick = candle.high - max(candle.open, candle.close)
+        lower_wick = min(candle.open, candle.close) - candle.low
+        total_wick = upper_wick + lower_wick
+        body_to_wick = _safe_ratio(abs(body), total_wick, 1.0)
+        upper_shadow_dom = _safe_ratio(upper_wick, total_wick, 0.5)
+        lower_shadow_dom = _safe_ratio(lower_wick, total_wick, 0.5)
+        # Count consecutive same-direction closes (signed, capped at ±1.0)
+        dir_count = 0
+        for j in range(index, 0, -1):
+            if closes[j] > closes[j - 1]:
+                if dir_count >= 0:
+                    dir_count += 1
+                else:
+                    break
+            elif closes[j] < closes[j - 1]:
+                if dir_count <= 0:
+                    dir_count -= 1
+                else:
+                    break
+            else:
+                break
+            if abs(dir_count) > 20:
+                break
+
+        # --- volatility regime (v7) ---
+        # Compute ATR percentile over the full series for regime classification.
+        vol_regime_low = 0.0
+        vol_regime_high = 0.0
+        vol_regime_cluster = 0.0
+        if atr_values[index] is not None and atr_medians[index] is not None:
+            atr_now = atr_values[index]
+            atr_med = atr_medians[index]
+            # Compute 25th/75th percentile from recent ATR window
+            atr_window_vals = [v for v in atr_values[max(0, index - 49):index + 1] if v is not None]
+            if len(atr_window_vals) >= 10:
+                sorted_atr = sorted(atr_window_vals)
+                n = len(sorted_atr)
+                p25 = sorted_atr[n // 4]
+                p75 = sorted_atr[(3 * n) // 4]
+                vol_regime_low = 1.0 if atr_now < p25 else 0.0
+                vol_regime_high = 1.0 if atr_now > p75 else 0.0
+            # Clustering: vol_zscore spike + range compression
+            vol_z = float(vol_zscores[index]) if vol_zscores[index] is not None else 0.0
+            range_comp = _safe_ratio(micro_range, range_span, 1.0) if range_span > 0 else 1.0
+            vol_regime_cluster = 1.0 if (vol_z > 1.5 and range_comp < 0.8) else 0.0
+
+        # --- custom novel indicators (v8) ---
+        # Pre-computed for all candles above
+        custom_row = custom_indicators_list[index] if index < len(custom_indicators_list) else None
+
         feature = {
             # model inputs (ordered in FEATURE_NAMES)
             "return_1": returns[index],
@@ -438,6 +560,37 @@ def compute_features(
             "session_ny": 1.0 if 13 <= candle.timestamp.hour < 21 else 0.0,
             "autocorr_abs": autocorr_abs_vals[index],
             "range_expansion": range_expansion_vals[index],
+            # candle quality microstructure (v6)
+            "body_to_wick_ratio": body_to_wick,
+            "upper_shadow_dom": upper_shadow_dom,
+            "lower_shadow_dom": lower_shadow_dom,
+            "consecutive_dir_count": max(-1.0, min(1.0, dir_count / 10.0)),
+            # volatility regime (v7)
+            "vol_regime_low": vol_regime_low,
+            "vol_regime_high": vol_regime_high,
+            "vol_regime_cluster": vol_regime_cluster,
+            # custom novel indicators (v8)
+            "price_entropy": float(custom_row["price_entropy"]) if custom_row else 0.5,
+            "directional_info_ratio": float(custom_row["directional_info_ratio"]) if custom_row else 0.0,
+            "body_pressure_imbalance": float(custom_row["body_pressure_imbalance"]) if custom_row else 0.0,
+            "wick_reversal_score": float(custom_row["wick_reversal_score"]) if custom_row else 0.0,
+            "volume_directional_flow": float(custom_row["volume_directional_flow"]) if custom_row else 0.0,
+            "price_clustering_density": float(custom_row["price_clustering_density"]) if custom_row else 0.0,
+            "body_acceleration": float(custom_row["body_acceleration"]) if custom_row else 0.0,
+            "gap_pressure": float(custom_row["gap_pressure"]) if custom_row else 0.0,
+            "candle_sequence_encoding": float(custom_row["candle_sequence_encoding"]) if custom_row else 0.0,
+            "micro_trend_break": float(custom_row["micro_trend_break"]) if custom_row else 0.0,
+            "volatility_phase": float(custom_row["volatility_phase"]) if custom_row else 0.0,
+            "efficiency_ratio_custom": float(custom_row["efficiency_ratio_custom"]) if custom_row else 0.0,
+            "session_momentum_shift": float(custom_row["session_momentum_shift"]) if custom_row else 0.0,
+            # custom novel indicators v2 (v9)
+            "vpin_proxy": float(custom_row["vpin_proxy"]) if custom_row else 0.0,
+            "smart_money_index": float(custom_row["smart_money_index"]) if custom_row else 0.0,
+            "flow_momentum": float(custom_row["flow_momentum"]) if custom_row else 0.0,
+            "liquidity_gap_detector": float(custom_row["liquidity_gap_detector"]) if custom_row else 0.0,
+            "tick_volume_imbalance": float(custom_row["tick_volume_imbalance"]) if custom_row else 0.0,
+            "session_velocity_shift": float(custom_row["session_velocity_shift"]) if custom_row else 0.0,
+            "kyle_lambda_proxy": float(custom_row["kyle_lambda_proxy"]) if custom_row else 0.0,
             # higher-timeframe context
             "mtf_bias_5": float(mtf_fast[index].direction),
             "mtf_gap_5": _mtf_gap(mtf_fast[index], candle.close),

@@ -1,0 +1,281 @@
+{
+  "pipeline_version": "1.0",
+  "generated_at": "2026-10-29T09:18:30.880630+00:00",
+  "total_pairs": 1,
+  "pairs": {
+    "EURUSD": {
+      "status": "ok",
+      "candles": 2000,
+      "training": {
+        "main_accuracy": 0.6885,
+        "1bar_accuracy": 0.7826,
+        "mr_accuracy": 0.7858,
+        "fb_main_accuracy": 0.7023,
+        "fb_1bar_accuracy": 0.7664,
+        "fb_mr_accuracy": 0.7858
+      },
+      "backtest": {
+        "1min": {
+          "expiry_minutes": 1,
+          "horizon": 1,
+          "total_candles": 2000,
+          "total_trades": 742,
+          "wins": 108,
+          "losses": 634,
+          "win_rate": 0.1456,
+          "total_pips": -521.2,
+          "avg_pips_per_trade": -0.7,
+          "sharpe_ratio": -141.16,
+          "max_drawdown": 0.9832,
+          "final_equity": 170.42,
+          "starting_equity": 10000.0,
+          "spread_pips": 1.2,
+          "best_trade": {
+            "index": 1304,
+            "side": "BUY",
+            "confidence": 0.5145,
+            "ml_up": 0.8005,
+            "combined": 0.5145,
+            "net_pips": 10.4,
+            "win": true,
+            "regime": "trend",
+            "flipped": false
+          },
+          "worst_trade": {
+            "index": 1333,
+            "side": "BUY",
+            "confidence": 0.3141,
+            "ml_up": 0.5329,
+            "combined": 0.3141,
+            "net_pips": -9.8,
+            "win": false,
+            "regime": "trend",
+            "flipped": false
+          },
+          "per_regime": {
+            "trend": {
+              "trades": 742,
+              "wins": 108,
+              "losses": 634,
+              "win_rate": 0.1456,
+              "total_pips": -521.2
+            },
+            "range": {
+              "trades": 0,
+              "wins": 0,
+              "losses": 0,
+              "win_rate": 0,
+              "total_pips": 0.0
+            },
+            "unknown": {
+              "trades": 0,
+              "wins": 0,
+              "losses": 0,
+              "win_rate": 0,
+              "total_pips": 0.0
+            }
+          },
+          "sureshot_analysis": {
+            "threshold_0.3": {
+              "trades": 320,
+              "win_rate": 0.1812,
+              "total_pips": -169.5
+            },
+            "threshold_0.4": {
+              "trades": 83,
+              "win_rate": 0.2771,
+              "total_pips": -4.3
+            },
+            "threshold_0.5": {
+              "trades": 11,
+              "win_rate": 0.3636,
+              "total_pips": 14.4
+            },
+            "threshold_0.6": {
+              "trades": 0,
+              "win_rate": 0.0,
+              "total_pips": 0
+            }
+          },
+          "flipped_trades": 0,
+          "flipped_win_rate": 0.0
+        },
+        "3min": {
+          "expiry_minutes": 3,
+          "horizon": 5,
+          "total_candles": 2000,
+          "total_trades": 578,
+          "wins": 162,
+          "losses": 416,
+          "win_rate": 0.2803,
+          "total_pips": -607.0,
+          "avg_pips_per_trade": -1.05,
+          "sharpe_ratio": -101.55,
+          "max_drawdown": 0.9817,
+          "final_equity": 186.49,
+          "starting_equity": 10000.0,
+          "spread_pips": 1.2,
+          "best_trade": {
+            "index": 1308,
+            "side": "BUY",
+            "confidence": 0.2907,
+            "ml_up": 0.5754,
+            "combined": 0.2907,
+            "net_pips": 18.3,
+            "win": true,
+            "regime": "trend",
+            "flipped": false
+          },
+          "worst_trade": {
+            "index": 1300,
+            "side": "SELL",
+            "confidence": 0.3559,
+            "ml_up": 0.3772,
+            "combined": -0.3559,
+            "net_pips": -19.1,
+            "win": false,
+            "regime": "trend",
+            "flipped": false
+          },
+          "per_regime": {
+            "trend": {
+              "trades": 577,
+              "wins": 162,
+              "losses": 415,
+              "win_rate": 0.2808,
+              "total_pips": -605.1
+            },
+            "range": {
+              "trades": 1,
+              "wins": 0,
+              "losses": 1,
+              "win_rate": 0.0,
+              "total_pips": -1.9
+            },
+            "unknown": {
+              "trades": 0,
+              "wins": 0,
+              "losses": 0,
+              "win_rate": 0,
+              "total_pips": 0.0
+            }
+          },
+          "sureshot_analysis": {
+            "threshold_0.3": {
+              "trades": 115,
+              "win_rate": 0.3043,
+              "total_pips": -105.2
+            },
+            "threshold_0.4": {
+              "trades": 9,
+              "win_rate": 0.3333,
+              "total_pips": -5.3
+            },
+            "threshold_0.5": {
+              "trades": 0,
+              "win_rate": 0.0,
+              "total_pips": 0
+            },
+            "threshold_0.6": {
+              "trades": 0,
+              "win_rate": 0.0,
+              "total_pips": 0
+            }
+          },
+          "flipped_trades": 0,
+          "flipped_win_rate": 0.0
+        },
+        "30min": {
+          "expiry_minutes": 30,
+          "horizon": 5,
+          "total_candles": 2000,
+          "total_trades": 578,
+          "wins": 162,
+          "losses": 416,
+          "win_rate": 0.2803,
+          "total_pips": -607.0,
+          "avg_pips_per_trade": -1.05,
+          "sharpe_ratio": -101.55,
+          "max_drawdown": 0.9817,
+          "final_equity": 186.49,
+          "starting_equity": 10000.0,
+          "spread_pips": 1.2,
+          "best_trade": {
+            "index": 1308,
+            "side": "BUY",
+            "confidence": 0.2907,
+            "ml_up": 0.5754,
+            "combined": 0.2907,
+            "net_pips": 18.3,
+            "win": true,
+            "regime": "trend",
+            "flipped": false
+          },
+          "worst_trade": {
+            "index": 1300,
+            "side": "SELL",
+            "confidence": 0.3559,
+            "ml_up": 0.3772,
+            "combined": -0.3559,
+            "net_pips": -19.1,
+            "win": false,
+            "regime": "trend",
+            "flipped": false
+          },
+          "per_regime": {
+            "trend": {
+              "trades": 577,
+              "wins": 162,
+              "losses": 415,
+              "win_rate": 0.2808,
+              "total_pips": -605.1
+            },
+            "range": {
+              "trades": 1,
+              "wins": 0,
+              "losses": 1,
+              "win_rate": 0.0,
+              "total_pips": -1.9
+            },
+            "unknown": {
+              "trades": 0,
+              "wins": 0,
+              "losses": 0,
+              "win_rate": 0,
+              "total_pips": 0.0
+            }
+          },
+          "sureshot_analysis": {
+            "threshold_0.3": {
+              "trades": 115,
+              "win_rate": 0.3043,
+              "total_pips": -105.2
+            },
+            "threshold_0.4": {
+              "trades": 9,
+              "win_rate": 0.3333,
+              "total_pips": -5.3
+            },
+            "threshold_0.5": {
+              "trades": 0,
+              "win_rate": 0.0,
+              "total_pips": 0
+            },
+            "threshold_0.6": {
+              "trades": 0,
+              "win_rate": 0.0,
+              "total_pips": 0
+            }
+          },
+          "flipped_trades": 0,
+          "flipped_win_rate": 0.0
+        }
+      },
+      "errors": {
+        "fetch": null,
+        "backtest": null,
+        "backtest_stderr": ""
+      }
+    }
+  }
+}

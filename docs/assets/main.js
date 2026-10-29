@@ -184,7 +184,8 @@
     risk:        { code: "DIVISION 06 // DISCIPLINE",  title: "Risk & Charter",      jp: "規律", sig: "鉄則 · MONOLITH DESCENT", fx: "fx-risk",        stamp: "鉄則 · 規律", manga: "assets/manga/shunsui-bankai.jpg",      plate: "CHRONICLE PLATE 06 // IRON CHARTER",       quote: "Full spread deducted on every trade — zero broker orders, zero OTC feeds, zero fabrication." },
     combiner:    { code: "DIVISION 07 // FUSION",      title: "Combiner Fusion",     jp: "融合", sig: "融合 · FUSION REACTOR",  fx: "fx-combiner",   stamp: "融合 · 結合", manga: "assets/manga/vasto-ulquiorra.jpg",      plate: "CHRONICLE PLATE 07 // INFINITE FUSION",  quote: "21 indicators fused with ML ensemble into a single directional vote." },
     generator:   { code: "DIVISION 08 // GENERATION",  title: "Signal Generator",    jp: "生成", sig: "生成 · SIGNAL FORGE",    fx: "fx-generator",  stamp: "生成 · 未来", manga: "assets/manga/bankai-clash.jpg",         plate: "CHRONICLE PLATE 08 // FUTURE FORGE",      quote: "Predicts upcoming candle direction across 1-min, 3-min, and 30-min horizons." },
-    indicators:  { code: "DIVISION 09 // INDICATORS",  title: "Indicator Library",   jp: "指標", sig: "指標 · COMPASS ROSE",    fx: "fx-indicators", stamp: "指標 · 羅針", manga: "assets/manga/zangetsu-cleave.jpg",       plate: "CHRONICLE PLATE 09 // 21-STAR COMPASS",  quote: "Every indicator value rendered with directional interpretation in real time." }
+    indicators:  { code: "DIVISION 09 // INDICATORS",  title: "Indicator Library",   jp: "指標", sig: "指標 · COMPASS ROSE",    fx: "fx-indicators",  stamp: "指標 · 羅針", manga: "assets/manga/zangetsu-cleave.jpg",       plate: "CHRONICLE PLATE 09 // 21-STAR COMPASS",  quote: "Every indicator value rendered with directional interpretation in real time." },
+    surveillance:{ code: "DIVISION 10 // SURVEILLANCE", title: "Market Surveillance", jp: "監視", sig: "監視 · EYE OF SENTINEL", fx: "fx-surveillance", stamp: "監視 · 眼光", manga: "assets/manga/gotei-captains.webp",       plate: "CHRONICLE PLATE 10 // SENTINEL WATCH",   quote: "20 original microstructure indicators and 7 expiry-aware scalping methods surveilling the market." }
   };
 
   var MARKETS_STATIC = {
@@ -196,6 +197,7 @@
   var HALF_NORMAL_SCALE = 0.7978845608;
   var currentPaused = false;
   var selectedPair = "ALL";
+  var selectedExpiry = 1;
   var toastTimer = null;
 
   function showToast(msg) {
@@ -284,6 +286,8 @@
     if (pageId === "combiner") loadCombiner();
     if (pageId === "generator") loadGenerator();
     if (pageId === "indicators") loadIndicators();
+    if (pageId === "surveillance") loadSurveillance();
+    if (pageId === "winstreak") loadWinStreak();
   }
 
   Array.prototype.forEach.call(document.querySelectorAll("[data-nav]"), function (btn) {
@@ -586,9 +590,10 @@
     var now = new Date();
     var nextMin = new Date(Math.floor(now.getTime() / 60000) * 60000 + 60000);
     var secsUntil = Math.max(1, Math.round((nextMin.getTime() - now.getTime()) / 1000));
+    var expiryMin = selectedExpiry || 1;
     return keys.map(function (sym) {
       var m = MARKETS_STATIC[sym] || MARKETS_STATIC["EUR/USD"];
-      var exp = new Date(nextMin.getTime() + m.horizon * 60000);
+      var exp = new Date(nextMin.getTime() + expiryMin * 60000);
       var entryIst = formatIstHm(nextMin, true);
       var expIst = formatIstHm(exp, true);
       var stopPips = Math.max(m.spread * 1.5, m.atr * 1.5);
@@ -607,6 +612,7 @@
         latest_price: m.entry,
         atr_pips: m.atr,
         spread_pips: m.spread,
+        expiry_minutes: expiryMin,
         mtf_bias: "UP",
         actionable: true,
         seal_state: "SIGNAL",
@@ -634,9 +640,9 @@
           expiry_time: exp.toISOString(),
           entry_hm: entryIst,
           expiry_hm: expIst,
-          horizon_minutes: m.horizon
+          horizon_minutes: expiryMin
         },
-        brief_text: sym + " BUY\nEntry  open of " + entryIst + " candle\nExpiry " + expIst + "  (" + m.horizon + " min)\n\nPaper — research only, no broker order.",
+        brief_text: sym + " BUY\nEntry  open of " + entryIst + " candle\nExpiry " + expIst + "  (" + expiryMin + " min)\n\nPaper — research only, no broker order.",
         risk_plan: {
           stop_price: m.entry - stopPips * m.pip,
           target_price: m.entry + targetPips * m.pip,
@@ -654,6 +660,7 @@
     var bal = parseFloat((document.getElementById("sig-balance") || {}).value || "10000") || 10000;
     var rsk = parseFloat((document.getElementById("sig-risk") || {}).value || "1.0") || 1.0;
     var sendTg = Boolean((document.getElementById("sig-send-tg") || {}).checked);
+    var expiry = selectedExpiry;
 
     if (genBtn) genBtn.disabled = true;
     if (insBtn) insBtn.disabled = true;
@@ -669,7 +676,8 @@
       mode: mode,
       dispatch_telegram: sendTg,
       balance_usd: bal,
-      risk_pct: rsk
+      risk_pct: rsk,
+      expiry_minutes: expiry
     })
       .then(function (res) {
         renderSignalEvaluations(res.evaluations || []);
@@ -696,6 +704,16 @@
       });
       btn.classList.add("is-active");
       selectedPair = btn.getAttribute("data-pair") || "ALL";
+    });
+  });
+
+  Array.prototype.forEach.call(document.querySelectorAll("#sig-expiry-tabs .seg"), function (btn) {
+    btn.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll("#sig-expiry-tabs .seg"), function (b) {
+        b.classList.remove("is-active");
+      });
+      btn.classList.add("is-active");
+      selectedExpiry = parseInt(btn.getAttribute("data-expiry") || "1", 10);
     });
   });
 
@@ -1906,6 +1924,216 @@
       })
       .catch(function () {
         grid.innerHTML = '<div class="empty-stage"><p class="empty-title">Failed to load indicators.</p></div>';
+      });
+  }
+
+  function loadSurveillance() {
+    var grid = document.getElementById("surveillance-grid");
+    if (!grid) return;
+    grid.innerHTML = '<div class="empty-stage"><p class="empty-jp" lang="ja">監視中</p><p class="empty-title">Scanning custom indicators…</p></div>';
+    fetch("api/surveillance")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok || !data.indicators) {
+          // Fallback: show static descriptions of all 20 custom indicators
+          var indicators = [
+            { name: "price_entropy", desc: "Shannon entropy of price changes — high = chaotic, low = ordered", category: "Information Theory" },
+            { name: "directional_info_ratio", desc: "Ratio of directional to total information — 1.0 = perfectly directional", category: "Information Theory" },
+            { name: "body_pressure_imbalance", desc: "Buy/sell pressure from candle body geometry — order flow proxy", category: "Order Flow" },
+            { name: "wick_reversal_score", desc: "Reversal pressure from wick dominance — long lower wick = bullish", category: "Order Flow" },
+            { name: "volume_directional_flow", desc: "Net volume-weighted directional flow", category: "Order Flow" },
+            { name: "price_clustering_density", desc: "How concentrated recent prices are around specific levels", category: "Microstructure" },
+            { name: "body_acceleration", desc: "Second derivative of body size — momentum acceleration/deceleration", category: "Microstructure" },
+            { name: "gap_pressure", desc: "Gap pressure between consecutive candles", category: "Microstructure" },
+            { name: "candle_sequence_encoding", desc: "Encodes recent candle patterns as directional sequence score", category: "Pattern Recognition" },
+            { name: "micro_trend_break", desc: "Detects when short-term trend breaks against longer trend", category: "Pattern Recognition" },
+            { name: "volatility_phase", desc: "Classifies volatility phase: expanding, contracting, or stable", category: "Adaptive Systems" },
+            { name: "efficiency_ratio_custom", desc: "Net displacement vs total path — trend efficiency", category: "Adaptive Systems" },
+            { name: "session_momentum_shift", desc: "Momentum shifts at session boundaries (London/NY open)", category: "Adaptive Systems" },
+            { name: "vpin_proxy", desc: "VPIN proxy — informed trading probability from candle geometry", category: "Microstructure" },
+            { name: "smart_money_index", desc: "Late vs early session flow differential — accumulation/distribution", category: "Order Flow" },
+            { name: "flow_momentum", desc: "Short vs long window flow differential — accelerating or fading", category: "Order Flow" },
+            { name: "liquidity_gap_detector", desc: "Detects liquidity gaps — abrupt price jumps exceeding average range", category: "Microstructure" },
+            { name: "tick_volume_imbalance", desc: "Volume imbalance proxy using body-to-range ratio", category: "Order Flow" },
+            { name: "session_velocity_shift", desc: "Momentum ratio across session windows", category: "Adaptive Systems" },
+            { name: "kyle_lambda_proxy", desc: "Kyle's Lambda — price impact per unit of directional flow", category: "Microstructure" }
+          ];
+          var html = "";
+          indicators.forEach(function (ind) {
+            html +=
+              '<div class="indicator-card neutral">' +
+                '<div class="indicator-head">' +
+                  '<span class="indicator-name mono">' + esc(ind.name) + '</span>' +
+                  '<span class="indicator-signal neutral">' + esc(ind.category) + '</span>' +
+                '</div>' +
+                '<div class="indicator-value mono dim">—</div>' +
+                '<div class="indicator-desc mono dim">' + esc(ind.desc) + '</div>' +
+              '</div>';
+          });
+          grid.innerHTML = html;
+          return;
+        }
+        var ind = data.indicators;
+        var html = "";
+        Object.keys(ind).forEach(function (key) {
+          var v = ind[key];
+          if (!v || v.value === null || v.value === undefined) return;
+          var cls = v.signal === "BULLISH" ? "bull" : (v.signal === "BEARISH" ? "bear" : "neutral");
+          var valDisplay = (typeof v.value === "number") ? v.value.toFixed(4) : String(v.value);
+          html +=
+            '<div class="indicator-card ' + cls + '">' +
+              '<div class="indicator-head">' +
+                '<span class="indicator-name">' + esc(key) + '</span>' +
+                '<span class="indicator-signal ' + cls + '">' + v.signal + '</span>' +
+              '</div>' +
+              '<div class="indicator-value mono">' + valDisplay + '</div>' +
+              '<div class="indicator-desc mono dim">' + esc(v.desc || "") + '</div>' +
+            '</div>';
+        });
+        grid.innerHTML = html || '<p class="dim">No custom indicator data available.</p>';
+      })
+      .catch(function () {
+        // Fallback: show static descriptions
+        var indicators = [
+          { name: "price_entropy", desc: "Shannon entropy of price changes", category: "Info Theory" },
+          { name: "directional_info_ratio", desc: "Directional vs total information ratio", category: "Info Theory" },
+          { name: "body_pressure_imbalance", desc: "Buy/sell pressure from body geometry", category: "Order Flow" },
+          { name: "wick_reversal_score", desc: "Reversal pressure from wick dominance", category: "Order Flow" },
+          { name: "volume_directional_flow", desc: "Net volume-weighted directional flow", category: "Order Flow" },
+          { name: "price_clustering_density", desc: "Price concentration around levels", category: "Microstructure" },
+          { name: "body_acceleration", desc: "Second derivative of body size", category: "Microstructure" },
+          { name: "gap_pressure", desc: "Gap pressure between candles", category: "Microstructure" },
+          { name: "candle_sequence_encoding", desc: "Candle pattern sequence score", category: "Pattern Recognition" },
+          { name: "micro_trend_break", desc: "Short-term trend break detection", category: "Pattern Recognition" },
+          { name: "volatility_phase", desc: "Volatility phase classification", category: "Adaptive Systems" },
+          { name: "efficiency_ratio_custom", desc: "Trend efficiency ratio", category: "Adaptive Systems" },
+          { name: "session_momentum_shift", desc: "Session boundary momentum shifts", category: "Adaptive Systems" },
+          { name: "vpin_proxy", desc: "VPIN informed trading proxy", category: "Microstructure" },
+          { name: "smart_money_index", desc: "Smart money accumulation/distribution", category: "Order Flow" },
+          { name: "flow_momentum", desc: "Flow acceleration/fading", category: "Order Flow" },
+          { name: "liquidity_gap_detector", desc: "Liquidity gap detection", category: "Microstructure" },
+          { name: "tick_volume_imbalance", desc: "Tick volume imbalance proxy", category: "Order Flow" },
+          { name: "session_velocity_shift", desc: "Session velocity momentum shift", category: "Adaptive Systems" },
+          { name: "kyle_lambda_proxy", desc: "Kyle's Lambda price impact proxy", category: "Microstructure" }
+        ];
+        var html = "";
+        indicators.forEach(function (ind) {
+          html +=
+            '<div class="indicator-card neutral">' +
+              '<div class="indicator-head">' +
+                '<span class="indicator-name mono">' + esc(ind.name) + '</span>' +
+                '<span class="indicator-signal neutral">' + esc(ind.category) + '</span>' +
+              '</div>' +
+              '<div class="indicator-value mono dim">—</div>' +
+              '<div class="indicator-desc mono dim">' + esc(ind.desc) + '</div>' +
+            '</div>';
+        });
+        grid.innerHTML = html;
+      });
+  }
+
+  /* ───────────────────── Win Streak Compounding ───────────────────── */
+  function loadWinStreak() {
+    var grid = document.getElementById("winstreak-grid");
+    var dotsEl = document.getElementById("winstreak-streak-dots");
+    var countEl = document.getElementById("winstreak-streak-count");
+    if (!grid) return;
+
+    grid.innerHTML = '<div class="empty-stage"><p class="empty-jp" lang="ja">勝率計算中</p><p class="empty-title">Loading win streak model…</p></div>';
+
+    fetch("api/winstreak")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok || !data.model_info) {
+          grid.innerHTML = '<div class="empty-stage"><p class="empty-title">Win streak model not available</p><p class="empty-sub">Run: python3 scripts/train_winstreak_model.py</p></div>';
+          return;
+        }
+
+        var mi = data.model_info;
+        var signals = data.signals || [];
+        var sc = data.streak_config || {};
+
+        // Update model info
+        var modelHtml =
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:1rem;">' +
+            '<div style="border:1px solid var(--border);padding:0.75rem;border-radius:6px;">' +
+              '<div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;">Main Model</div>' +
+              '<div class="mono" style="font-size:0.9rem;margin:0.25rem 0;">' + esc(mi.main_model) + '</div>' +
+              '<div style="font-size:0.75rem;color:var(--muted);">Dir Conf >= ' + mi.ml_conf_threshold + '</div>' +
+            '</div>' +
+            '<div style="border:1px solid var(--accent);padding:0.75rem;border-radius:6px;">' +
+              '<div style="font-size:0.75rem;color:var(--accent);text-transform:uppercase;">Win Streak Model</div>' +
+              '<div class="mono" style="font-size:0.9rem;margin:0.25rem 0;">' + esc(mi.winstreak_model) + '</div>' +
+              '<div style="font-size:0.75rem;color:var(--muted);">Win Prob >= ' + mi.win_prob_threshold + '</div>' +
+            '</div>' +
+          '</div>';
+
+        // Update streak display
+        var maxStreak = 0;
+        signals.forEach(function (s) { if (s.streak > maxStreak) maxStreak = s.streak; });
+        if (dotsEl) {
+          var dotsHtml = "";
+          for (var i = 0; i < 5; i++) {
+            var filled = i < maxStreak;
+            dotsHtml += '<span class="streak-dot' + (filled ? " filled" : "") + '"></span>';
+          }
+          dotsEl.innerHTML = dotsHtml;
+        }
+        if (countEl) countEl.textContent = maxStreak + " / 5";
+
+        // Render signals
+        var html = modelHtml;
+
+        if (signals.length === 0) {
+          html += '<div class="empty-stage"><p class="empty-title">No high-confidence signals in last 20 candles</p><p class="empty-sub">Waiting for: dir_conf >= ' + mi.ml_conf_threshold + ' AND win_prob >= ' + mi.win_prob_threshold + '</p></div>';
+        } else {
+          html += '<div style="display:grid;gap:0.5rem;">';
+          signals.forEach(function (s) {
+            var isStreak = s.streak >= 5;
+            var isWin = s.streak >= 1;
+            var cls = isStreak ? "winstreak-signal-banked" : (isWin ? "winstreak-signal-active" : "winstreak-signal");
+            html +=
+              '<div class="' + cls + '">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+                  '<div>' +
+                    '<span class="mono" style="font-weight:bold;">' + esc(s.side) + '</span> ' +
+                    '<span class="mono dim" style="font-size:0.8rem;">' + esc(s.timestamp.substring(11, 16)) + ' UTC</span> ' +
+                    '<span class="dim" style="font-size:0.8rem;">' + esc(s.session) + '</span>' +
+                  '</div>' +
+                  '<div style="text-align:right;">' +
+                    '<div class="mono">Streak ' + s.streak + '/5</div>' +
+                    '<div class="mono dim" style="font-size:0.75rem;">Size ' + s.size_pct.toFixed(2) + '%</div>' +
+                  '</div>' +
+                '</div>' +
+                '<div style="display:flex;gap:1rem;margin-top:0.25rem;font-size:0.8rem;">' +
+                  '<span class="dim">Dir: <span class="mono">' + s.direction_conf.toFixed(3) + '</span></span>' +
+                  '<span class="dim">Win: <span class="mono" style="color:' + (s.win_prob >= 0.65 ? "var(--accent)" : "var(--muted)") + ';">' + s.win_prob.toFixed(3) + '</span></span>' +
+                '</div>' +
+              '</div>';
+          });
+          html += '</div>';
+        }
+
+        // Add sizing table
+        html +=
+          '<div style="margin-top:1rem;border-top:1px solid var(--border);padding-top:0.75rem;">' +
+            '<div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;margin-bottom:0.5rem;">Compounding Scaling</div>' +
+            '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">' +
+              '<thead><tr style="text-align:left;border-bottom:1px solid var(--border);">' +
+                '<th style="padding:0.4rem;">Streak</th><th style="padding:0.4rem;">Size</th><th style="padding:0.4rem;">Status</th>' +
+              '</tr></thead><tbody>' +
+              '<tr style="border-bottom:1px solid var(--border);"><td style="padding:0.4rem;">1</td><td style="padding:0.4rem;">1.00%</td><td style="padding:0.4rem;color:var(--muted);">First win</td></tr>' +
+              '<tr style="border-bottom:1px solid var(--border);"><td style="padding:0.4rem;">2</td><td style="padding:0.4rem;">1.10%</td><td style="padding:0.4rem;color:var(--muted);">Building</td></tr>' +
+              '<tr style="border-bottom:1px solid var(--border);"><td style="padding:0.4rem;">3</td><td style="padding:0.4rem;">1.20%</td><td style="padding:0.4rem;color:var(--muted);">Building</td></tr>' +
+              '<tr style="border-bottom:1px solid var(--border);"><td style="padding:0.4rem;">4</td><td style="padding:0.4rem;">1.30%</td><td style="padding:0.4rem;color:var(--muted);">Almost there</td></tr>' +
+              '<tr><td style="padding:0.4rem;font-weight:bold;">5</td><td style="padding:0.4rem;font-weight:bold;">1.40%</td><td style="padding:0.4rem;color:var(--accent);font-weight:bold;">BANK THE DAY</td></tr>' +
+              '</tbody></table>' +
+          '</div>';
+
+        grid.innerHTML = html;
+      })
+      .catch(function (err) {
+        grid.innerHTML = '<div class="empty-stage"><p class="empty-title">Error loading win streak data</p><p class="empty-sub">' + esc(err.message) + '</p></div>';
       });
   }
 

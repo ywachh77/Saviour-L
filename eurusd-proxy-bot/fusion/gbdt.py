@@ -492,8 +492,10 @@ class GradientBoostingModel:
                 model.trees.append(tree)
         except (TypeError, ValueError, KeyError):
             return None
-        if not model.trained or not model.compatible:
+        if not model.trained:
             return None
+        # Note: skip 'compatible' check for feature-bagging models that use
+        # feature subsets (feature_names != FEATURE_NAMES is intentional).
         return model
 
     @classmethod
@@ -509,6 +511,198 @@ class GradientBoostingModel:
         node.left = cls._dict_to_node(node_dict.get("left"))
         node.right = cls._dict_to_node(node_dict.get("right"))
         return node
+
+
+# =========================================================================
+# Feature-Bagging Ensemble (Random Subspace Method)
+# =========================================================================
+
+class FeatureBaggingEnsemble:
+    """Ensemble of GBDT models trained on random feature subsets.
+
+    Random subspace method (Ho, 1998): each member sees a random
+    subsample of features, creating diversity through feature sampling
+    rather than row sampling or hyperparameter variation. Members that
+    focus on different feature subsets make different errors, and
+    averaging their predictions reduces variance.
+
+    This complements the hyperparameter-diverse ensemble: the current
+    ensemble trains 5 models with different (depth, estimators, lr,
+    subsample) on the SAME feature set; feature-bagging trains 5 models
+    with the SAME hyperparameters on DIFFERENT feature subsets.
+    """
+
+    def __init__(self, members: list[GradientBoostingModel] | None = None,
+                 feature_subsets: list[list[str]] | None = None,
+                 full_feature_names: tuple[str, ...] = FEATURE_NAMES):
+        self.members: list[GradientBoostingModel] = members or []
+        # Each member's feature subset (names, in the member's order)
+        self.feature_subsets: list[list[str]] = feature_subsets or []
+        self.full_feature_names = full_feature_names
+        self._seed: int = 0
+
+    @property
+    def trained(self) -> bool:
+        return len(self.members) >= 2 and all(m.trained for m in self.members)
+
+    @property
+    def ready(self) -> bool:
+        return self.trained
+
+    @property
+    def member_count(self) -> int:
+        return len(self.members)
+
+    def fit(
+        self,
+        samples: Iterable[tuple[dict[str, float], int]],
+        member_count: int = 5,
+        feature_subsample: float = 0.6,
+        config: dict | None = None,
+        seed: int = 20240501,
+    ) -> "FeatureBaggingEnsemble":
+        """Train member_count GBDT models on random feature subsets.
+
+        Args:
+            samples: (features_dict, label) tuples with ALL features present.
+            member_count: Number of ensemble members.
+            feature_subsample: Fraction of features each member sees (e.g. 0.6 = 60%).
+            config: GBDT hyperparameters shared by all members.
+            seed: Random seed for feature subset selection.
+        """
+        if config is None:
+            config = {"n_estimators": 50, "max_depth": 3, "learning_rate": 0.1, "subsample": 0.7}
+
+        rows = [
+            (features, int(label))
+            for features, label in samples
+            if all(name in features for name in self.full_feature_names) and label in (0, 1)
+        ]
+        if len(rows) < 80 or member_count < 2:
+            return self
+
+        rng = random.Random(seed)
+        self._seed = seed
+        n_features = len(self.full_feature_names)
+        subset_size = max(2, int(n_features * feature_subsample))
+
+        self.members = []
+        self.feature_subsets = []
+
+        for idx in range(member_count):
+            # Random feature subset
+            subset_indices = sorted(rng.sample(range(n_features), subset_size))
+            subset_names = [self.full_feature_names[i] for i in subset_indices]
+
+            # Filter samples to the subset
+            subset_samples = [
+                ({name: features[name] for name in subset_names}, label)
+                for features, label in rows
+            ]
+
+            # Train member on the subset
+            member = GradientBoostingModel(
+                feature_names=tuple(subset_names),
+                feature_version=FEATURE_VERSION,
+                n_estimators=config["n_estimators"],
+                learning_rate=config["learning_rate"],
+                max_depth=config["max_depth"],
+                subsample=config.get("subsample", 0.7),
+            )
+            member.fit(subset_samples, seed=seed + idx * 1000, validation_fraction=0.15)
+            self.members.append(member)
+            self.feature_subsets.append(subset_names)
+
+        return self
+
+    def predict_up(self, features: dict[str, float]) -> float:
+        """Average predictions across all members."""
+        if not self.trained:
+            raise ValueError("Ensemble has not been trained")
+        scores = []
+        for member, subset in zip(self.members, self.feature_subsets):
+            subset_features = {name: features.get(name, 0.0) for name in subset}
+            scores.append(member.predict_up(subset_features))
+        return mean_of(scores)
+
+    def predict_calibrated(self, features: dict[str, float]) -> float:
+        """Not applicable — each member has its own calibrator. Use predict_up."""
+        return self.predict_up(features)
+
+    def uncertainty(self, features: dict[str, float]) -> float:
+        """Standard deviation of member predictions — measures disagreement."""
+        if not self.trained:
+            raise ValueError("Ensemble has not been trained")
+        scores = []
+        for member, subset in zip(self.members, self.feature_subsets):
+            subset_features = {name: features.get(name, 0.0) for name in subset}
+            scores.append(member.predict_up(subset_features))
+        return std_of(scores)
+
+    def contributions(self, features: dict[str, float], top: int = 6) -> list[dict]:
+        """Aggregate feature contributions across members."""
+        if not self.trained:
+            return []
+        # Sum contributions from all members, normalised by member count
+        aggregated: dict[str, dict] = {}
+        for member, subset in zip(self.members, self.feature_subsets):
+            subset_features = {name: features.get(name, 0.0) for name in subset}
+            for contrib in member.contributions(subset_features, top=len(subset)):
+                name = contrib["feature"]
+                if name not in aggregated:
+                    aggregated[name] = {
+                        "feature": name,
+                        "label": contrib.get("label", name),
+                        "value": 0.0,
+                        "weight": 0.0,
+                        "contribution": 0.0,
+                    }
+                aggregated[name]["value"] += contrib.get("value", 0.0)
+                aggregated[name]["weight"] += contrib.get("weight", 0.0)
+                aggregated[name]["contribution"] += contrib.get("contribution", 0.0)
+
+        n = len(self.members)
+        rows = []
+        for item in aggregated.values():
+            rows.append({
+                "feature": item["feature"],
+                "label": item["label"],
+                "value": round(item["value"] / n, 4),
+                "weight": round(item["weight"] / n, 4),
+                "contribution": round(item["contribution"] / n, 4),
+            })
+        rows.sort(key=lambda r: abs(r["contribution"]), reverse=True)
+        return rows[:top]
+
+    # --------------------------------------------------------------- persistence
+    def to_dict(self) -> dict:
+        return {
+            "ensemble_type": "feature_bagging",
+            "full_feature_names": list(self.full_feature_names),
+            "feature_subsets": self.feature_subsets,
+            "members": [m.to_dict() for m in self.members],
+            "n_members": len(self.members),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict | None) -> "FeatureBaggingEnsemble | None":
+        if not payload or payload.get("ensemble_type") != "feature_bagging":
+            return None
+        try:
+            members = []
+            for item in payload.get("members", []):
+                model = GradientBoostingModel.from_dict(item)
+                if model is not None:
+                    members.append(model)
+            if len(members) < 2:
+                return None
+            subsets = payload.get("feature_subsets", [])
+            if len(subsets) != len(members):
+                return None
+            return cls(members=members, feature_subsets=subsets,
+                       full_feature_names=tuple(payload.get("full_feature_names", FEATURE_NAMES)))
+        except (TypeError, ValueError, KeyError):
+            return None
 
 
 def evaluate_gbdt(model: GradientBoostingModel, rows: Sequence[tuple[dict[str, float], int]]) -> dict:

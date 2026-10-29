@@ -2782,3 +2782,115 @@ body.is-unleashing .fuin-flash {
 }
 .combiner-vote-row .bull { color: var(--moss); }
 .combiner-vote-row .bear { color: var(--seal); }
+
+/* ───────────────────── Win Streak Compounding ───────────────────── */
+.winstreak-model-box {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+.winstreak-model-separate {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.winstreak-model-name {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.winstreak-model-separate .winstreak-model-name {
+  color: var(--accent);
+}
+.winstreak-model-desc {
+  font-family: var(--mono, monospace);
+  font-size: 0.85rem;
+  margin: 0.25rem 0;
+}
+.winstreak-model-role {
+  font-size: 0.75rem;
+  color: var(--moss);
+}
+.winstreak-model-meta {
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+.winstreak-flow {
+  padding: 0.5rem;
+  background: rgba(0,0,0,0.2);
+  border-radius: 4px;
+  border-left: 2px solid var(--accent);
+}
+.winstreak-rule {
+  text-align: center;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.winstreak-rule-value {
+  font-family: var(--mono, monospace);
+  font-size: 1.2rem;
+  font-weight: bold;
+  color: var(--accent);
+}
+.winstreak-rule-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+.winstreak-streak-display {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.winstreak-streak-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.winstreak-streak-dots {
+  display: flex;
+  gap: 0.25rem;
+}
+.streak-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+}
+.streak-dot.filled {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 6px rgba(139,148,158,0.4);
+}
+.winstreak-streak-count {
+  font-family: var(--mono, monospace);
+  font-size: 0.9rem;
+  font-weight: bold;
+  color: var(--accent);
+}
+.winstreak-loading, .winstreak-empty {
+  text-align: center;
+  padding: 2rem;
+  color: var(--muted);
+}
+.winstreak-signal {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.winstreak-signal-active {
+  border-color: var(--moss);
+  background: rgba(40,60,40,0.15);
+}
+.winstreak-signal-banked {
+  border-color: var(--accent);
+  background: rgba(139,148,158,0.1);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.winstreak-table th, .winstreak-table td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
