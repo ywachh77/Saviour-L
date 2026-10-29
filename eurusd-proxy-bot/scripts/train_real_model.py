@@ -24,18 +24,23 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from fusion.domain import Candle
 from fusion.features import compute_features, FEATURE_NAMES, FEATURE_VERSION
-from fusion.gbdt import GradientBoostingModel
+from fusion.gbdt import GradientBoostingModel, FeatureBaggingEnsemble
 
 CANDLE_DIR = PROJECT_ROOT / "var" / "real_candles"
 OUTPUT_JSON = CANDLE_DIR / "ensemble_model.json"
 OUTPUT_1BAR = CANDLE_DIR / "ensemble_model_1bar.json"
 OUTPUT_MR = CANDLE_DIR / "ensemble_model_mr.json"
+OUTPUT_FB = CANDLE_DIR / "ensemble_model_fb.json"
+OUTPUT_FB_1BAR = CANDLE_DIR / "ensemble_model_fb_1bar.json"
+OUTPUT_FB_MR = CANDLE_DIR / "ensemble_model_fb_mr.json"
 REPORT_JSON = CANDLE_DIR / "training_report.json"
 
 HORIZON = 5
 HORIZON_1BAR = 1
 MIN_BARS = 30
 N_MODELS = 5
+N_FB_MEMBERS = 5
+FB_FEATURE_SUBSAMPLE = 0.6
 
 
 def load_real_candles():
@@ -144,6 +149,55 @@ def train_model(samples, config, seed):
     return model, acc
 
 
+def train_fb_ensemble(samples, config, member_count, feature_subsample):
+    """Train a feature-bagging ensemble (random subspace method)."""
+    # Convert vector samples to dict format for FeatureBaggingEnsemble
+    def vec_to_dict(vec):
+        return {name: val for name, val in zip(FEATURE_NAMES, vec)}
+    dict_samples = [(vec_to_dict(f), l) for f, l in samples]
+
+    fb = FeatureBaggingEnsemble()
+    fb.fit(
+        dict_samples,
+        member_count=member_count,
+        feature_subsample=feature_subsample,
+        config=config,
+        seed=20240501,
+    )
+
+    # Evaluate on the last 20% as held-out test
+    n = len(samples)
+    split = int(n * 0.8)
+    test_set = samples[split:]
+
+    def vec_to_dict(vec):
+        return {name: val for name, val in zip(FEATURE_NAMES, vec)}
+
+    correct = 0
+    for x, y in test_set:
+        x_dict = vec_to_dict(x) if isinstance(x, list) else x
+        pred = fb.predict_up(x_dict)
+        if (pred > 0.5) == bool(y):
+            correct += 1
+    acc = correct / len(test_set) if test_set else 0.0
+
+    # Per-member accuracy
+    member_accs = []
+    for member, subset in zip(fb.members, fb.feature_subsets):
+        mc = 0
+        for x, y in test_set:
+            x_dict = vec_to_dict(x) if isinstance(x, list) else x
+            subset_features = {name: x_dict.get(name, 0.0) for name in subset}
+            pred = member.predict_up(subset_features)
+            if (pred > 0.5) == bool(y):
+                mc += 1
+        member_accs.append(mc / len(test_set) if test_set else 0.0)
+
+    print(f"    FB: {member_count} members x {len(subset)} features, "
+          f"ensemble acc {acc:.1%}, member accs {[f'{a:.1%}' for a in member_accs]}")
+    return fb, acc, member_accs
+
+
 def save_ensemble(models, samples, configs, accuracies, output_path, horizon, label):
     """Save ensemble model to JSON."""
     model_dicts = [m.to_dict() for m in models]
@@ -162,6 +216,22 @@ def save_ensemble(models, samples, configs, accuracies, output_path, horizon, la
     }
     output_path.write_text(json.dumps(data, indent=2))
     print(f"  Saved {label} to {output_path} ({len(models)} models, {sum(accuracies)/len(accuracies):.1%} avg acc)")
+
+
+def save_fb_ensemble(fb, output_path, horizon, label, config):
+    """Save feature-bagging ensemble to JSON."""
+    data = fb.to_dict()
+    data.update({
+        "version": "real_fb_v1",
+        "label": label,
+        "horizon": horizon,
+        "accuracy": round(fb._test_accuracy, 4) if hasattr(fb, '_test_accuracy') else None,
+        "config": config,
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+    })
+    output_path.write_text(json.dumps(data, indent=2))
+    print(f"  Saved FB {label} to {output_path} ({fb.member_count} members, "
+          f"{len(fb.feature_subsets[0]) if fb.feature_subsets else 0} features each)")
 
 
 def main():
@@ -245,6 +315,28 @@ def main():
         accs_mr.append(a)
     save_ensemble(models_mr, samples_mr, configs, accs_mr, OUTPUT_MR, HORIZON, "mr")
 
+    # ─── Step 4b: Feature-bagging ensemble ───
+    print("\n[4b] Training feature-bagging ensembles (random subspace)...")
+    fb_config = {"n_estimators": 50, "max_depth": 3, "learning_rate": 0.10, "subsample": 0.7}
+
+    # FB main
+    print("  Training FB main model (5-bar horizon)...")
+    fb_main, acc_fb_main, fb_member_accs_main = train_fb_ensemble(
+        samples, fb_config, N_FB_MEMBERS, FB_FEATURE_SUBSAMPLE)
+    save_fb_ensemble(fb_main, OUTPUT_FB, HORIZON, "main", fb_config)
+
+    # FB 1-bar
+    print("  Training FB 1-bar model (1-bar horizon)...")
+    fb_1bar, acc_fb_1bar, fb_member_accs_1bar = train_fb_ensemble(
+        samples_1bar, fb_config, N_FB_MEMBERS, FB_FEATURE_SUBSAMPLE)
+    save_fb_ensemble(fb_1bar, OUTPUT_FB_1BAR, HORIZON_1BAR, "1bar", fb_config)
+
+    # FB MR
+    print("  Training FB mean-reversion model...")
+    fb_mr, acc_fb_mr, fb_member_accs_mr = train_fb_ensemble(
+        samples_mr, fb_config, N_FB_MEMBERS, FB_FEATURE_SUBSAMPLE)
+    save_fb_ensemble(fb_mr, OUTPUT_FB_MR, HORIZON, "mr", fb_config)
+
     # ─── Step 5: Ensemble evaluation ───
     print("\n[5] Ensemble evaluation...")
 
@@ -268,6 +360,25 @@ def main():
     print(f"  1-bar ensemble: {acc_1bar:.1%}")
     print(f"  MR ensemble:    {acc_mr:.1%}")
 
+    # FB ensemble evaluation
+    def fb_eval(samples_list, fb):
+        correct = 0
+        for x, y in samples_list:
+            x_dict = vec_to_dict(x) if isinstance(x, list) else x
+            pred = fb.predict_up(x_dict)
+            if (pred > 0.5) == bool(y):
+                correct += 1
+        return correct / len(samples_list) if samples_list else 0.0
+
+    # Re-evaluate FB on full sample set for consistency
+    acc_fb_main = fb_eval(samples, fb_main)
+    acc_fb_1bar = fb_eval(samples_1bar, fb_1bar)
+    acc_fb_mr = fb_eval(samples_mr, fb_mr)
+
+    print(f"  FB Main:  {acc_fb_main:.1%}  ({fb_main.member_count} members x {len(fb_main.feature_subsets[0])} feats)")
+    print(f"  FB 1-bar: {acc_fb_1bar:.1%}  ({fb_1bar.member_count} members x {len(fb_1bar.feature_subsets[0])} feats)")
+    print(f"  FB MR:    {acc_fb_mr:.1%}  ({fb_mr.member_count} members x {len(fb_mr.feature_subsets[0])} feats)")
+
     # ─── Step 6: Save report ───
     print("\n[6] Saving report...")
     report = {
@@ -282,13 +393,28 @@ def main():
             "1bar": round(acc_1bar, 4),
             "mr": round(acc_mr, 4),
         },
+        "feature_bagging_accuracy": {
+            "main": round(acc_fb_main, 4),
+            "1bar": round(acc_fb_1bar, 4),
+            "mr": round(acc_fb_mr, 4),
+        },
         "per_model_accuracy": {
             "main": [round(a, 4) for a in accs_main],
             "1bar": [round(a, 4) for a in accs_1bar],
             "mr": [round(a, 4) for a in accs_mr],
         },
+        "fb_member_accuracy": {
+            "main": [round(a, 4) for a in fb_member_accs_main],
+            "1bar": [round(a, 4) for a in fb_member_accs_1bar],
+            "mr": [round(a, 4) for a in fb_member_accs_mr],
+        },
         "feature_version": FEATURE_VERSION,
         "n_features": len(FEATURE_NAMES),
+        "fb_config": {
+            "n_members": N_FB_MEMBERS,
+            "feature_subsample": FB_FEATURE_SUBSAMPLE,
+            "config": fb_config,
+        },
     }
     REPORT_JSON.write_text(json.dumps(report, indent=2))
     print(f"  Report saved to {REPORT_JSON}")
@@ -296,9 +422,12 @@ def main():
     print("\n" + "=" * 60)
     print("TRAINING COMPLETE")
     print("=" * 60)
-    print(f"Main:  {acc_main:.1%}  ({len(samples)} samples)")
-    print(f"1-bar: {acc_1bar:.1%}  ({len(samples_1bar)} samples)")
-    print(f"MR:    {acc_mr:.1%}  ({len(samples_mr)} samples)")
+    print(f"Main:       {acc_main:.1%}  ({len(samples)} samples)")
+    print(f"FB Main:    {acc_fb_main:.1%}  ({fb_main.member_count} members)")
+    print(f"1-bar:      {acc_1bar:.1%}  ({len(samples_1bar)} samples)")
+    print(f"FB 1-bar:   {acc_fb_1bar:.1%}  ({fb_1bar.member_count} members)")
+    print(f"MR:         {acc_mr:.1%}  ({len(samples_mr)} samples)")
+    print(f"FB MR:      {acc_fb_mr:.1%}  ({fb_mr.member_count} members)")
 
 
 if __name__ == "__main__":

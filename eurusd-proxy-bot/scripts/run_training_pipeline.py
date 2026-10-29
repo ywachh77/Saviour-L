@@ -194,11 +194,15 @@ def run_training(pair_slug_str: str, candle_dir: Path) -> dict:
         build_samples,
         build_mr_samples,
         train_model,
+        train_fb_ensemble,
         save_ensemble,
+        save_fb_ensemble,
         HORIZON,
         HORIZON_1BAR,
         MIN_BARS,
         N_MODELS,
+        N_FB_MEMBERS,
+        FB_FEATURE_SUBSAMPLE,
     )
     from fusion.features import FEATURE_NAMES, FEATURE_VERSION
 
@@ -278,6 +282,28 @@ def run_training(pair_slug_str: str, candle_dir: Path) -> dict:
                   candle_dir / "ensemble_model_mr.json", HORIZON, f"{pair_slug_str}_mr")
     results["mr_accuracy"] = round(sum(accs_mr) / len(accs_mr), 4)
 
+    # ─── Feature-bagging ensemble ───
+    print(f"  Training feature-bagging ensembles ({N_FB_MEMBERS} members, {FB_FEATURE_SUBSAMPLE:.0%} features)...")
+    fb_config = {"n_estimators": 50, "max_depth": 3, "learning_rate": 0.10, "subsample": 0.7}
+
+    fb_main, acc_fb_main, fb_member_accs_main = train_fb_ensemble(
+        samples, fb_config, N_FB_MEMBERS, FB_FEATURE_SUBSAMPLE)
+    save_fb_ensemble(fb_main, candle_dir / "ensemble_model_fb.json", HORIZON,
+                     f"{pair_slug_str}_fb_main", fb_config)
+    results["fb_main_accuracy"] = round(acc_fb_main, 4)
+
+    fb_1bar, acc_fb_1bar, fb_member_accs_1bar = train_fb_ensemble(
+        samples_1bar, fb_config, N_FB_MEMBERS, FB_FEATURE_SUBSAMPLE)
+    save_fb_ensemble(fb_1bar, candle_dir / "ensemble_model_fb_1bar.json", HORIZON_1BAR,
+                     f"{pair_slug_str}_fb_1bar", fb_config)
+    results["fb_1bar_accuracy"] = round(acc_fb_1bar, 4)
+
+    fb_mr, acc_fb_mr, fb_member_accs_mr = train_fb_ensemble(
+        samples_mr, fb_config, N_FB_MEMBERS, FB_FEATURE_SUBSAMPLE)
+    save_fb_ensemble(fb_mr, candle_dir / "ensemble_model_fb_mr.json", HORIZON,
+                     f"{pair_slug_str}_fb_mr", fb_config)
+    results["fb_mr_accuracy"] = round(acc_fb_mr, 4)
+
     # Ensemble evaluation
     def ensemble_eval(samples_list, models_list):
         correct = 0
@@ -293,6 +319,22 @@ def run_training(pair_slug_str: str, candle_dir: Path) -> dict:
         "1bar": round(ensemble_eval(samples_1bar, models_1bar), 4),
         "mr": round(ensemble_eval(samples_mr, models_mr), 4),
     }
+
+    # FB ensemble evaluation
+    def fb_eval(samples_list, fb):
+        correct = 0
+        for x, y in samples_list:
+            x_dict = vec_to_dict(x) if isinstance(x, list) else x
+            pred = fb.predict_up(x_dict)
+            if (pred > 0.5) == bool(y):
+                correct += 1
+        return correct / len(samples_list) if samples_list else 0.0
+
+    results["fb_ensemble_accuracy"] = {
+        "main": round(fb_eval(samples, fb_main), 4),
+        "1bar": round(fb_eval(samples_1bar, fb_1bar), 4),
+        "mr": round(fb_eval(samples_mr, fb_mr), 4),
+    }
     results["status"] = "ok"
 
     # Save training report
@@ -301,22 +343,35 @@ def run_training(pair_slug_str: str, candle_dir: Path) -> dict:
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "n_candles": len(candles),
         "ensemble_accuracy": results["ensemble_accuracy"],
+        "feature_bagging_accuracy": results["fb_ensemble_accuracy"],
         "per_model_accuracy": {
             "main": [round(a, 4) for a in accs_main],
             "1bar": [round(a, 4) for a in accs_1bar],
             "mr": [round(a, 4) for a in accs_mr],
         },
+        "fb_member_accuracy": {
+            "main": [round(a, 4) for a in fb_member_accs_main],
+            "1bar": [round(a, 4) for a in fb_member_accs_1bar],
+            "mr": [round(a, 4) for a in fb_member_accs_mr],
+        },
         "feature_version": FEATURE_VERSION,
         "n_features": len(FEATURE_NAMES),
+        "fb_config": {
+            "n_members": N_FB_MEMBERS,
+            "feature_subsample": FB_FEATURE_SUBSAMPLE,
+        },
     }
     (candle_dir / "training_report.json").write_text(json.dumps(report, indent=2))
 
     # Restore original dir
     train_real_model.CANDLE_DIR = original_dir
 
-    print(f"  Main:  {results['ensemble_accuracy']['main']:.1%}")
-    print(f"  1-bar: {results['ensemble_accuracy']['1bar']:.1%}")
-    print(f"  MR:    {results['ensemble_accuracy']['mr']:.1%}")
+    print(f"  Main:    {results['ensemble_accuracy']['main']:.1%}")
+    print(f"  FB Main: {results['fb_ensemble_accuracy']['main']:.1%}")
+    print(f"  1-bar:   {results['ensemble_accuracy']['1bar']:.1%}")
+    print(f"  FB 1-bar:{results['fb_ensemble_accuracy']['1bar']:.1%}")
+    print(f"  MR:      {results['ensemble_accuracy']['mr']:.1%}")
+    print(f"  FB MR:   {results['fb_ensemble_accuracy']['mr']:.1%}")
     return results
 
 
@@ -423,6 +478,9 @@ def generate_summary(results: list, output_dir: Path) -> dict:
                 "main_accuracy": (train.get("ensemble_accuracy", {}) or {}).get("main"),
                 "1bar_accuracy": (train.get("ensemble_accuracy", {}) or {}).get("1bar"),
                 "mr_accuracy": (train.get("ensemble_accuracy", {}) or {}).get("mr"),
+                "fb_main_accuracy": (train.get("fb_ensemble_accuracy", {}) or {}).get("main"),
+                "fb_1bar_accuracy": (train.get("fb_ensemble_accuracy", {}) or {}).get("1bar"),
+                "fb_mr_accuracy": (train.get("fb_ensemble_accuracy", {}) or {}).get("mr"),
             },
             "backtest": bt_report,
             "errors": {
@@ -445,12 +503,21 @@ def generate_summary(results: list, output_dir: Path) -> dict:
             main = info["training"]["main_accuracy"]
             bar = info["training"]["1bar_accuracy"]
             mr = info["training"]["mr_accuracy"]
+            fb_main = info["training"].get("fb_main_accuracy")
+            fb_bar = info["training"].get("fb_1bar_accuracy")
+            fb_mr = info["training"].get("fb_mr_accuracy")
             if main:
                 print(f"    Main: {main:.1%}")
+            if fb_main:
+                print(f"    FB Main: {fb_main:.1%}")
             if bar:
                 print(f"    1-bar: {bar:.1%}")
+            if fb_bar:
+                print(f"    FB 1-bar: {fb_bar:.1%}")
             if mr:
                 print(f"    MR: {mr:.1%}")
+            if fb_mr:
+                print(f"    FB MR: {fb_mr:.1%}")
             bt = info.get("backtest", {})
             if bt:
                 for exp, data in bt.items():
