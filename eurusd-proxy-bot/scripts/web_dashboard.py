@@ -805,7 +805,10 @@ class OperatorRuntime:
                 # Only emit high-confidence signals to improve win rate.
                 # Threshold: combiner score must exceed SURESHOT_THRESHOLD
                 # to be considered a "sureshot" trade.
-                SURESHOT_THRESHOLD = 0.45  # |combined| > 0.45
+                # Per-expiry thresholds from grid-search (2000 candles):
+                #   1-min: 0.45, 3-min: 0.35, 30-min: 0.35
+                SURESHOT_THRESHOLDS = {1: 0.45, 3: 0.35, 30: 0.35}
+                SURESHOT_THRESHOLD = SURESHOT_THRESHOLDS.get(expiry_minutes, 0.35)
                 combiner_pred = self._combiner_from_candles(eval_candles, expiry_minutes=expiry_minutes)
                 is_sureshot = False
                 if combiner_pred.get("available"):

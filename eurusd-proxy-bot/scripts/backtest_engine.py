@@ -171,7 +171,7 @@ def compute_indicator_votes(candles, index):
     }
 
 
-def run_backtest(candles, weights=None, expiry_minutes=30, confidence_threshold=0.0):
+def run_backtest(candles, weights=None, expiry_minutes=30, confidence_threshold=None):
     """Run walk-forward backtest.
 
     For each candle i (with enough history):
@@ -184,6 +184,10 @@ def run_backtest(candles, weights=None, expiry_minutes=30, confidence_threshold=
 
     Returns detailed results dict.
     """
+    # Per-expiry optimal thresholds from grid-search (2000 candles)
+    DEFAULT_THRESHOLDS = {1: 0.45, 3: 0.35, 30: 0.35}
+    if confidence_threshold is None:
+        confidence_threshold = DEFAULT_THRESHOLDS.get(expiry_minutes, 0.35)
     if weights is None:
         weights = DEFAULT_WEIGHTS
 
@@ -337,9 +341,10 @@ def run_backtest(candles, weights=None, expiry_minutes=30, confidence_threshold=
     best_trade = max(trades, key=lambda t: t["net_pips"]) if trades else None
     worst_trade = min(trades, key=lambda t: t["net_pips"]) if trades else None
 
-    # Sureshot analysis — what if we only traded high-confidence signals?
-    for threshold in [0.3, 0.4, 0.5, 0.6]:
-        high_conf_trades = [t for t in trades if t["confidence"] >= threshold]
+    # Sureshot analysis — grid-search thresholds 0.10 to 0.70 in 0.05 steps
+    sureshot_analysis = {}
+    for thresh in [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]:
+        high_conf_trades = [t for t in trades if t["confidence"] >= thresh]
         if len(high_conf_trades) > 0:
             hc_wins = sum(1 for t in high_conf_trades if t["win"])
             hc_wr = hc_wins / len(high_conf_trades)
@@ -347,6 +352,11 @@ def run_backtest(candles, weights=None, expiry_minutes=30, confidence_threshold=
         else:
             hc_wr = 0.0
             hc_pips = 0.0
+        sureshot_analysis[f"threshold_{thresh:.2f}"] = {
+            "trades": len(high_conf_trades),
+            "win_rate": round(hc_wr, 4),
+            "total_pips": round(hc_pips, 2),
+        }
 
     report = {
         "expiry_minutes": expiry_minutes,
@@ -375,14 +385,7 @@ def run_backtest(candles, weights=None, expiry_minutes=30, confidence_threshold=
             }
             for k in per_regime
         },
-        "sureshot_analysis": {
-            f"threshold_{t}": {
-                "trades": len([t2 for t2 in trades if t2["confidence"] >= t]),
-                "win_rate": round(sum(1 for t2 in trades if t2["confidence"] >= t and t2["win"]) / max(1, len([t2 for t2 in trades if t2["confidence"] >= t])), 4),
-                "total_pips": round(sum(t2["net_pips"] for t2 in trades if t2["confidence"] >= t), 2),
-            }
-            for t in [0.3, 0.4, 0.5, 0.6]
-        },
+        "sureshot_analysis": sureshot_analysis,
         "flipped_trades": sum(1 for t in trades if t["flipped"]),
         "flipped_win_rate": round(sum(1 for t in trades if t["flipped"] and t["win"]) / max(1, sum(1 for t in trades if t["flipped"])), 4),
     }
