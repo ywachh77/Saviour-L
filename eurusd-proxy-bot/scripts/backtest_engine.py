@@ -198,7 +198,7 @@ def run_backtest(candles, weights=None, expiry_minutes=30, confidence_threshold=
     print(f"Computing features for {len(candles)} candles...")
     feat_dicts = compute_features(candles)
 
-    horizon = 1 if expiry_minutes == 1 else 5
+    horizon = expiry_minutes
     min_bars = 60  # Need enough history for indicators
 
     trades = []
