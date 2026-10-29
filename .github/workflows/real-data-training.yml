@@ -26,7 +26,7 @@ on:
       candles:
         description: "Number of candles per pair"
         required: false
-        default: "2000"
+        default: "5000"
   push:
     branches: ["main"]
     paths:
