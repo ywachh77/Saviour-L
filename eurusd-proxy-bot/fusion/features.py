@@ -17,6 +17,7 @@ from typing import Sequence
 from . import charter, instruments
 from .domain import Candle
 from . import mtf
+from .custom_indicators import compute_custom_indicators, CUSTOM_INDICATOR_NAMES
 from .indicators import (
     adx,
     atr,
@@ -50,6 +51,7 @@ CCI_PERIOD = 20
 MICRO_PIVOT_BARS = 5
 
 FEATURE_VERSION = 7
+FEATURE_VERSION = 8
 
 # Higher-timeframe context. The feed is one-minute only, so these are resampled
 # from the bars we already hold rather than fetched: five one-minute bars are a
@@ -122,6 +124,23 @@ FEATURE_NAMES = (
     "vol_regime_low",
     "vol_regime_high",
     "vol_regime_cluster",
+    # --- custom novel indicators (v8) -------------------------------------
+    # 13 original indicators that capture patterns standard TA cannot.
+    # Information theory, order flow proxies, microstructure, pattern
+    # recognition, and adaptive systems. Not rehashes of RSI/MACD/etc.
+    "price_entropy",
+    "directional_info_ratio",
+    "body_pressure_imbalance",
+    "wick_reversal_score",
+    "volume_directional_flow",
+    "price_clustering_density",
+    "body_acceleration",
+    "gap_pressure",
+    "candle_sequence_encoding",
+    "micro_trend_break",
+    "volatility_phase",
+    "efficiency_ratio_custom",
+    "session_momentum_shift",
     # Higher-timeframe context is deliberately NOT here. The tilt is computed
     # and carried as strategy-facing values below (mtf_fast / mtf_slow, plus
     # mtf_bias_* and mtf_gap_*), but it does not enter the model vector:
@@ -184,6 +203,19 @@ FEATURE_LABELS = {
     "vol_regime_low": "Low volatility regime flag",
     "vol_regime_high": "High volatility regime flag",
     "vol_regime_cluster": "Volatility clustering flag",
+    "price_entropy": "Price change Shannon entropy",
+    "directional_info_ratio": "Directional information ratio",
+    "body_pressure_imbalance": "Body pressure imbalance",
+    "wick_reversal_score": "Wick reversal score",
+    "volume_directional_flow": "Volume directional flow",
+    "price_clustering_density": "Price clustering density",
+    "body_acceleration": "Body acceleration (2nd derivative)",
+    "gap_pressure": "Gap pressure",
+    "candle_sequence_encoding": "Candle sequence encoding",
+    "micro_trend_break": "Micro trend break detector",
+    "volatility_phase": "Volatility phase",
+    "efficiency_ratio_custom": "Custom efficiency ratio",
+    "session_momentum_shift": "Session momentum shift",
 }
 
 # How many bars are needed before a feature row is complete.
@@ -318,6 +350,9 @@ def compute_features(
         range_expansion_vals[i] = _safe_ratio(cur_range, avg_r5, 1.0)
     for index in range(1, len(closes)):
         returns.append(_safe_ratio(closes[index] - closes[index - 1], closes[index - 1]))
+
+    # Pre-compute custom indicators for all candles
+    custom_indicators_list = compute_custom_indicators(candles)
 
     result: list[dict[str, float] | None] = []
     for index, candle in enumerate(candles):
@@ -455,6 +490,10 @@ def compute_features(
             range_comp = _safe_ratio(micro_range, range_span, 1.0) if range_span > 0 else 1.0
             vol_regime_cluster = 1.0 if (vol_z > 1.5 and range_comp < 0.8) else 0.0
 
+        # --- custom novel indicators (v8) ---
+        # Pre-computed for all candles above
+        custom_row = custom_indicators_list[index] if index < len(custom_indicators_list) else None
+
         feature = {
             # model inputs (ordered in FEATURE_NAMES)
             "return_1": returns[index],
@@ -512,6 +551,20 @@ def compute_features(
             "vol_regime_low": vol_regime_low,
             "vol_regime_high": vol_regime_high,
             "vol_regime_cluster": vol_regime_cluster,
+            # custom novel indicators (v8)
+            "price_entropy": float(custom_row["price_entropy"]) if custom_row else 0.5,
+            "directional_info_ratio": float(custom_row["directional_info_ratio"]) if custom_row else 0.0,
+            "body_pressure_imbalance": float(custom_row["body_pressure_imbalance"]) if custom_row else 0.0,
+            "wick_reversal_score": float(custom_row["wick_reversal_score"]) if custom_row else 0.0,
+            "volume_directional_flow": float(custom_row["volume_directional_flow"]) if custom_row else 0.0,
+            "price_clustering_density": float(custom_row["price_clustering_density"]) if custom_row else 0.0,
+            "body_acceleration": float(custom_row["body_acceleration"]) if custom_row else 0.0,
+            "gap_pressure": float(custom_row["gap_pressure"]) if custom_row else 0.0,
+            "candle_sequence_encoding": float(custom_row["candle_sequence_encoding"]) if custom_row else 0.0,
+            "micro_trend_break": float(custom_row["micro_trend_break"]) if custom_row else 0.0,
+            "volatility_phase": float(custom_row["volatility_phase"]) if custom_row else 0.0,
+            "efficiency_ratio_custom": float(custom_row["efficiency_ratio_custom"]) if custom_row else 0.0,
+            "session_momentum_shift": float(custom_row["session_momentum_shift"]) if custom_row else 0.0,
             # higher-timeframe context
             "mtf_bias_5": float(mtf_fast[index].direction),
             "mtf_gap_5": _mtf_gap(mtf_fast[index], candle.close),
