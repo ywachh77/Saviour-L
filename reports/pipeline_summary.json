@@ -1,0 +1,22 @@
+{
+  "pipeline_version": "1.0",
+  "generated_at": "2026-10-29T08:23:13.002199+00:00",
+  "total_pairs": 1,
+  "pairs": {
+    "EURUSD": {
+      "status": "ok",
+      "candles": 2000,
+      "training": {
+        "main_accuracy": 0.6885,
+        "1bar_accuracy": 0.7826,
+        "mr_accuracy": 0.7858
+      },
+      "backtest": {},
+      "errors": {
+        "fetch": null,
+        "backtest": null,
+        "backtest_stderr": ""
+      }
+    }
+  }
+}

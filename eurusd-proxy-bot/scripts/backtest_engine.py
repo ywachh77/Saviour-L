@@ -458,10 +458,21 @@ def optimize_weights(candles, expiry_minutes=30):
 def main():
     parser = argparse.ArgumentParser(description="Walk-forward backtester + self-learning weight optimizer")
     parser.add_argument("--candles", type=int, default=0, help="Number of candles to use (0 = all)")
+    parser.add_argument("--candle-dir", type=str, default=None, help="Directory containing candle batch files")
     parser.add_argument("--weights", action="store_true", help="Run weight optimization only")
     parser.add_argument("--expiry", type=int, default=30, help="Expiry minutes (1, 3, or 30)")
     parser.add_argument("--all-expiries", action="store_true", help="Test all expiry options")
     args = parser.parse_args()
+
+    # Allow overriding CANDLE_DIR from CLI argument
+    global CANDLE_DIR, REPORT_JSON, WEIGHTS_JSON, MODEL_PATH, MODEL_1BAR_PATH, MODEL_MR_PATH
+    if args.candle_dir:
+        CANDLE_DIR = Path(args.candle_dir)
+        REPORT_JSON = CANDLE_DIR / "backtest_report.json"
+        WEIGHTS_JSON = CANDLE_DIR / "optimal_weights.json"
+        MODEL_PATH = CANDLE_DIR / "ensemble_model.json"
+        MODEL_1BAR_PATH = CANDLE_DIR / "ensemble_model_1bar.json"
+        MODEL_MR_PATH = CANDLE_DIR / "ensemble_model_mr.json"
 
     print("=" * 60)
     print("WALK-FORWARD BACKTESTER + SELF-LEARNING ENGINE")
