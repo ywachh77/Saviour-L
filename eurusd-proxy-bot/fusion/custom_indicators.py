@@ -501,6 +501,238 @@ def session_momentum_shift(candles: Sequence[Candle]) -> list[float | None]:
     return result
 
 
+# ─── 6. Market Microstructure (VPIN, Kyle's Lambda, Smart Money) ──────
+
+def vpin_proxy(candles: Sequence[Candle], window: int = 20, buckets: int = 5) -> list[float | None]:
+    """Volume-Synchronized Probability of Informed Trading (VPIN) proxy.
+
+    Adapted from Easley, Lopez de Prado & O'Hara (2012). Since we don't
+    have tick-level order flow, we approximate VPIN using candle geometry:
+    each candle is a "bucket" and we measure the directional imbalance
+    of body size vs range. High VPIN = informed trading active (potential
+    for sharp moves); low VPIN = noise trading (range-bound).
+
+    This is an ORIGINAL adaptation — we use OHLC geometry instead of
+    actual buy/sell volume data.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(buckets, n):
+        vpin_sum = 0.0
+        for j in range(i - buckets + 1, i + 1):
+            c = candles[j]
+            rng = c.high - c.low
+            if rng < 1e-15:
+                continue
+            body = c.close - c.open
+            body_frac = abs(body) / rng
+            # Directional imbalance: how decisively did price move?
+            # High body_frac = strong directional move (informed)
+            # Low body_frac = noise (uninformed)
+            vpin_sum += body_frac * body_frac  # Squared for penalty
+        result[i] = min(1.0, vpin_sum / buckets)
+    return result
+
+
+def smart_money_index(candles: Sequence[Candle], early: int = 5, late: int = 5) -> list[float | None]:
+    """Smart Money Index — late vs early session flow differential.
+
+    Compares price movement in the first `early` bars of a window to
+    the last `late` bars. Positive = smart money buying after initial
+    noise selling (accumulation). Negative = smart money selling after
+    initial noise buying (distribution).
+
+    Inspired by order flow research but implemented purely from OHLC.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    total_window = early + late
+    for i in range(total_window, n):
+        early_move = 0.0
+        for j in range(i - total_window + 1, i - total_window + 1 + early):
+            if j > 0:
+                early_move += candles[j].close - candles[j - 1].close
+        late_move = 0.0
+        for j in range(i - late + 1, i + 1):
+            if j > 0:
+                late_move += candles[j].close - candles[j - 1].close
+        total_range = 0.0
+        for j in range(i - total_window + 1, i + 1):
+            total_range += abs(candles[j].close - candles[j - 1].close) if j > 0 else 0
+        if total_range < 1e-15:
+            result[i] = 0.0
+        else:
+            result[i] = (late_move - early_move) / total_range
+    return result
+
+
+def flow_momentum(candles: Sequence[Candle], short: int = 3, long: int = 10) -> list[float | None]:
+    """Order flow momentum — short-window vs long-window flow differential.
+
+    Captures whether directional pressure is building (short > long) or
+    fading (short < long). Positive = accelerating flow; negative =
+    mean-reversion of flow.
+
+    Measured as the ratio of short-window net body direction to
+    long-window net body direction.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(long, n):
+        short_net = 0.0
+        for j in range(i - short + 1, i + 1):
+            c = candles[j]
+            short_net += (c.close - c.open)
+        long_net = 0.0
+        for j in range(i - long + 1, i + 1):
+            c = candles[j]
+            long_net += (c.close - c.open)
+        long_abs = sum(abs(candles[j].close - candles[j].open) for j in range(i - long + 1, i + 1))
+        if long_abs < 1e-15:
+            result[i] = 0.0
+        else:
+            # Normalize by long-window total body magnitude
+            result[i] = (short_net / short) / (long_net / long + 1e-15)
+            # Clamp to reasonable range
+            result[i] = max(-5.0, min(5.0, result[i]))
+    return result
+
+
+def liquidity_gap_detector(candles: Sequence[Candle], window: int = 10) -> list[float | None]:
+    """Detects liquidity gaps — abrupt price jumps between candles.
+
+    A gap between close[i-1] and open[i] that exceeds the average
+    candle range signals a liquidity void. Large gaps in the trend
+    direction = strong continuation. Large gaps against the trend =
+    potential exhaustion.
+
+    Returns the gap magnitude normalized by the average range.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(window, n):
+        # Compute average range
+        avg_range = 0.0
+        for j in range(i - window + 1, i + 1):
+            avg_range += candles[j].high - candles[j].low
+        avg_range /= window
+        if avg_range < 1e-15:
+            result[i] = 0.0
+            continue
+        # Check gap at this candle
+        gap = candles[i].open - candles[i - 1].close
+        gap_ratio = abs(gap) / avg_range
+        # Also check the gap direction relative to recent trend
+        recent_trend = 0.0
+        for j in range(i - 3, i):
+            if j > 0:
+                recent_trend += candles[j].close - candles[j - 1].close
+        if gap_ratio > 1.5 and recent_trend != 0:
+            # Gap is large and there's a recent trend
+            # Sign: positive gap in uptrend = continuation; positive gap in downtrend = exhaustion
+            result[i] = gap_ratio * (1.0 if (gap > 0) == (recent_trend > 0) else -1.0)
+        elif gap_ratio > 1.5:
+            result[i] = gap_ratio * (1.0 if gap > 0 else -1.0)
+        else:
+            result[i] = 0.0
+    return result
+
+
+def tick_volume_imbalance(candles: Sequence[Candle], window: int = 10) -> list[float | None]:
+    """Volume imbalance proxy using candle geometry.
+
+    Since we don't have true tick volume, we approximate order flow
+    imbalance using the ratio of body size to range across the window.
+    A high positive value = buyers dominate (up candles with large bodies);
+    a high negative value = sellers dominate.
+
+    This is different from standard volume indicators because it uses
+    the body-to-range ratio as a proxy for trade aggressiveness.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(window, n):
+        up_body = 0.0
+        down_body = 0.0
+        total_body = 0.0
+        for j in range(i - window + 1, i + 1):
+            c = candles[j]
+            rng = c.high - c.low
+            if rng < 1e-15:
+                continue
+            body = abs(c.close - c.open)
+            body_frac = body / rng
+            if c.close > c.open:
+                up_body += body_frac * c.volume
+            elif c.close < c.open:
+                down_body += body_frac * c.volume
+            total_body += body_frac * c.volume
+        if total_body < 1e-15:
+            result[i] = 0.0
+        else:
+            result[i] = (up_body - down_body) / total_body
+    return result
+
+
+def session_velocity_shift(candles: Sequence[Candle], window: int = 5) -> list[float | None]:
+    """Detects velocity shifts at session boundaries.
+
+    Computes the ratio of momentum in the last `window` bars to the
+    momentum in the previous `window` bars. A significant shift indicates
+    a change in market direction or tempo.
+
+    Useful for detecting London/NY session transitions and their impact
+    on momentum.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    total = 2 * window
+    for i in range(total, n):
+        recent_mom = 0.0
+        for j in range(i - window + 1, i + 1):
+            if j > 0:
+                recent_mom += candles[j].close - candles[j - 1].close
+        prev_mom = 0.0
+        for j in range(i - total + 1, i - window + 1):
+            if j > 0:
+                prev_mom += candles[j].close - candles[j - 1].close
+        prev_abs = 0.0
+        for j in range(i - total + 1, i - window + 1):
+            if j > 0:
+                prev_abs += abs(candles[j].close - candles[j - 1].close)
+        if prev_abs < 1e-15:
+            result[i] = 0.0
+        else:
+            result[i] = recent_mom / (prev_abs + 1e-15)
+    return result
+
+
+def kyle_lambda_proxy(candles: Sequence[Candle], window: int = 20) -> list[float | None]:
+    """Kyle's Lambda proxy — price impact per unit of flow.
+
+    Original adaptation: measures how much price moves per unit of
+    directional body pressure. High lambda = high price impact (strong
+    market, informed trading); low lambda = low impact (weak market,
+    noise trading).
+
+    lambda = |net_body_direction| / total_range
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(window, n):
+        net_flow = 0.0
+        total_range = 0.0
+        for j in range(i - window + 1, i + 1):
+            c = candles[j]
+            net_flow += (c.close - c.open)
+            total_range += c.high - c.low
+        if total_range < 1e-15:
+            result[i] = 0.0
+        else:
+            result[i] = abs(net_flow) / total_range
+    return result
+
+
 # ─── Combined Export ───────────────────────────────────────────────────
 
 CUSTOM_INDICATOR_NAMES = (
@@ -517,6 +749,13 @@ CUSTOM_INDICATOR_NAMES = (
     "volatility_phase",
     "efficiency_ratio_custom",
     "session_momentum_shift",
+    "vpin_proxy",
+    "smart_money_index",
+    "flow_momentum",
+    "liquidity_gap_detector",
+    "tick_volume_imbalance",
+    "session_velocity_shift",
+    "kyle_lambda_proxy",
 )
 
 
@@ -545,6 +784,13 @@ def compute_custom_indicators(candles: Sequence[Candle]) -> list[dict[str, float
         "volatility_phase": volatility_phase(candles, 10),
         "efficiency_ratio_custom": efficiency_ratio_custom(candles, 10),
         "session_momentum_shift": session_momentum_shift(candles),
+        "vpin_proxy": vpin_proxy(candles, 20, 5),
+        "smart_money_index": smart_money_index(candles, 5, 5),
+        "flow_momentum": flow_momentum(candles, 3, 10),
+        "liquidity_gap_detector": liquidity_gap_detector(candles, 10),
+        "tick_volume_imbalance": tick_volume_imbalance(candles, 10),
+        "session_velocity_shift": session_velocity_shift(candles, 5),
+        "kyle_lambda_proxy": kyle_lambda_proxy(candles, 20),
     }
 
     for i in range(n):

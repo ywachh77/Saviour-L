@@ -184,7 +184,8 @@
     risk:        { code: "DIVISION 06 // DISCIPLINE",  title: "Risk & Charter",      jp: "規律", sig: "鉄則 · MONOLITH DESCENT", fx: "fx-risk",        stamp: "鉄則 · 規律", manga: "assets/manga/shunsui-bankai.jpg",      plate: "CHRONICLE PLATE 06 // IRON CHARTER",       quote: "Full spread deducted on every trade — zero broker orders, zero OTC feeds, zero fabrication." },
     combiner:    { code: "DIVISION 07 // FUSION",      title: "Combiner Fusion",     jp: "融合", sig: "融合 · FUSION REACTOR",  fx: "fx-combiner",   stamp: "融合 · 結合", manga: "assets/manga/vasto-ulquiorra.jpg",      plate: "CHRONICLE PLATE 07 // INFINITE FUSION",  quote: "21 indicators fused with ML ensemble into a single directional vote." },
     generator:   { code: "DIVISION 08 // GENERATION",  title: "Signal Generator",    jp: "生成", sig: "生成 · SIGNAL FORGE",    fx: "fx-generator",  stamp: "生成 · 未来", manga: "assets/manga/bankai-clash.jpg",         plate: "CHRONICLE PLATE 08 // FUTURE FORGE",      quote: "Predicts upcoming candle direction across 1-min, 3-min, and 30-min horizons." },
-    indicators:  { code: "DIVISION 09 // INDICATORS",  title: "Indicator Library",   jp: "指標", sig: "指標 · COMPASS ROSE",    fx: "fx-indicators", stamp: "指標 · 羅針", manga: "assets/manga/zangetsu-cleave.jpg",       plate: "CHRONICLE PLATE 09 // 21-STAR COMPASS",  quote: "Every indicator value rendered with directional interpretation in real time." }
+    indicators:  { code: "DIVISION 09 // INDICATORS",  title: "Indicator Library",   jp: "指標", sig: "指標 · COMPASS ROSE",    fx: "fx-indicators",  stamp: "指標 · 羅針", manga: "assets/manga/zangetsu-cleave.jpg",       plate: "CHRONICLE PLATE 09 // 21-STAR COMPASS",  quote: "Every indicator value rendered with directional interpretation in real time." },
+    surveillance:{ code: "DIVISION 10 // SURVEILLANCE", title: "Market Surveillance", jp: "監視", sig: "監視 · EYE OF SENTINEL", fx: "fx-surveillance", stamp: "監視 · 眼光", manga: "assets/manga/gotei-captains.webp",       plate: "CHRONICLE PLATE 10 // SENTINEL WATCH",   quote: "20 original microstructure indicators and 7 expiry-aware scalping methods surveilling the market." }
   };
 
   var MARKETS_STATIC = {
@@ -285,6 +286,7 @@
     if (pageId === "combiner") loadCombiner();
     if (pageId === "generator") loadGenerator();
     if (pageId === "indicators") loadIndicators();
+    if (pageId === "surveillance") loadSurveillance();
   }
 
   Array.prototype.forEach.call(document.querySelectorAll("[data-nav]"), function (btn) {
@@ -1921,6 +1923,111 @@
       })
       .catch(function () {
         grid.innerHTML = '<div class="empty-stage"><p class="empty-title">Failed to load indicators.</p></div>';
+      });
+  }
+
+  function loadSurveillance() {
+    var grid = document.getElementById("surveillance-grid");
+    if (!grid) return;
+    grid.innerHTML = '<div class="empty-stage"><p class="empty-jp" lang="ja">監視中</p><p class="empty-title">Scanning custom indicators…</p></div>';
+    fetch("api/surveillance")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok || !data.indicators) {
+          // Fallback: show static descriptions of all 20 custom indicators
+          var indicators = [
+            { name: "price_entropy", desc: "Shannon entropy of price changes — high = chaotic, low = ordered", category: "Information Theory" },
+            { name: "directional_info_ratio", desc: "Ratio of directional to total information — 1.0 = perfectly directional", category: "Information Theory" },
+            { name: "body_pressure_imbalance", desc: "Buy/sell pressure from candle body geometry — order flow proxy", category: "Order Flow" },
+            { name: "wick_reversal_score", desc: "Reversal pressure from wick dominance — long lower wick = bullish", category: "Order Flow" },
+            { name: "volume_directional_flow", desc: "Net volume-weighted directional flow", category: "Order Flow" },
+            { name: "price_clustering_density", desc: "How concentrated recent prices are around specific levels", category: "Microstructure" },
+            { name: "body_acceleration", desc: "Second derivative of body size — momentum acceleration/deceleration", category: "Microstructure" },
+            { name: "gap_pressure", desc: "Gap pressure between consecutive candles", category: "Microstructure" },
+            { name: "candle_sequence_encoding", desc: "Encodes recent candle patterns as directional sequence score", category: "Pattern Recognition" },
+            { name: "micro_trend_break", desc: "Detects when short-term trend breaks against longer trend", category: "Pattern Recognition" },
+            { name: "volatility_phase", desc: "Classifies volatility phase: expanding, contracting, or stable", category: "Adaptive Systems" },
+            { name: "efficiency_ratio_custom", desc: "Net displacement vs total path — trend efficiency", category: "Adaptive Systems" },
+            { name: "session_momentum_shift", desc: "Momentum shifts at session boundaries (London/NY open)", category: "Adaptive Systems" },
+            { name: "vpin_proxy", desc: "VPIN proxy — informed trading probability from candle geometry", category: "Microstructure" },
+            { name: "smart_money_index", desc: "Late vs early session flow differential — accumulation/distribution", category: "Order Flow" },
+            { name: "flow_momentum", desc: "Short vs long window flow differential — accelerating or fading", category: "Order Flow" },
+            { name: "liquidity_gap_detector", desc: "Detects liquidity gaps — abrupt price jumps exceeding average range", category: "Microstructure" },
+            { name: "tick_volume_imbalance", desc: "Volume imbalance proxy using body-to-range ratio", category: "Order Flow" },
+            { name: "session_velocity_shift", desc: "Momentum ratio across session windows", category: "Adaptive Systems" },
+            { name: "kyle_lambda_proxy", desc: "Kyle's Lambda — price impact per unit of directional flow", category: "Microstructure" }
+          ];
+          var html = "";
+          indicators.forEach(function (ind) {
+            html +=
+              '<div class="indicator-card neutral">' +
+                '<div class="indicator-head">' +
+                  '<span class="indicator-name mono">' + esc(ind.name) + '</span>' +
+                  '<span class="indicator-signal neutral">' + esc(ind.category) + '</span>' +
+                '</div>' +
+                '<div class="indicator-value mono dim">—</div>' +
+                '<div class="indicator-desc mono dim">' + esc(ind.desc) + '</div>' +
+              '</div>';
+          });
+          grid.innerHTML = html;
+          return;
+        }
+        var ind = data.indicators;
+        var html = "";
+        Object.keys(ind).forEach(function (key) {
+          var v = ind[key];
+          if (!v || v.value === null || v.value === undefined) return;
+          var cls = v.signal === "BULLISH" ? "bull" : (v.signal === "BEARISH" ? "bear" : "neutral");
+          var valDisplay = (typeof v.value === "number") ? v.value.toFixed(4) : String(v.value);
+          html +=
+            '<div class="indicator-card ' + cls + '">' +
+              '<div class="indicator-head">' +
+                '<span class="indicator-name">' + esc(key) + '</span>' +
+                '<span class="indicator-signal ' + cls + '">' + v.signal + '</span>' +
+              '</div>' +
+              '<div class="indicator-value mono">' + valDisplay + '</div>' +
+              '<div class="indicator-desc mono dim">' + esc(v.desc || "") + '</div>' +
+            '</div>';
+        });
+        grid.innerHTML = html || '<p class="dim">No custom indicator data available.</p>';
+      })
+      .catch(function () {
+        // Fallback: show static descriptions
+        var indicators = [
+          { name: "price_entropy", desc: "Shannon entropy of price changes", category: "Info Theory" },
+          { name: "directional_info_ratio", desc: "Directional vs total information ratio", category: "Info Theory" },
+          { name: "body_pressure_imbalance", desc: "Buy/sell pressure from body geometry", category: "Order Flow" },
+          { name: "wick_reversal_score", desc: "Reversal pressure from wick dominance", category: "Order Flow" },
+          { name: "volume_directional_flow", desc: "Net volume-weighted directional flow", category: "Order Flow" },
+          { name: "price_clustering_density", desc: "Price concentration around levels", category: "Microstructure" },
+          { name: "body_acceleration", desc: "Second derivative of body size", category: "Microstructure" },
+          { name: "gap_pressure", desc: "Gap pressure between candles", category: "Microstructure" },
+          { name: "candle_sequence_encoding", desc: "Candle pattern sequence score", category: "Pattern Recognition" },
+          { name: "micro_trend_break", desc: "Short-term trend break detection", category: "Pattern Recognition" },
+          { name: "volatility_phase", desc: "Volatility phase classification", category: "Adaptive Systems" },
+          { name: "efficiency_ratio_custom", desc: "Trend efficiency ratio", category: "Adaptive Systems" },
+          { name: "session_momentum_shift", desc: "Session boundary momentum shifts", category: "Adaptive Systems" },
+          { name: "vpin_proxy", desc: "VPIN informed trading proxy", category: "Microstructure" },
+          { name: "smart_money_index", desc: "Smart money accumulation/distribution", category: "Order Flow" },
+          { name: "flow_momentum", desc: "Flow acceleration/fading", category: "Order Flow" },
+          { name: "liquidity_gap_detector", desc: "Liquidity gap detection", category: "Microstructure" },
+          { name: "tick_volume_imbalance", desc: "Tick volume imbalance proxy", category: "Order Flow" },
+          { name: "session_velocity_shift", desc: "Session velocity momentum shift", category: "Adaptive Systems" },
+          { name: "kyle_lambda_proxy", desc: "Kyle's Lambda price impact proxy", category: "Microstructure" }
+        ];
+        var html = "";
+        indicators.forEach(function (ind) {
+          html +=
+            '<div class="indicator-card neutral">' +
+              '<div class="indicator-head">' +
+                '<span class="indicator-name mono">' + esc(ind.name) + '</span>' +
+                '<span class="indicator-signal neutral">' + esc(ind.category) + '</span>' +
+              '</div>' +
+              '<div class="indicator-value mono dim">—</div>' +
+              '<div class="indicator-desc mono dim">' + esc(ind.desc) + '</div>' +
+            '</div>';
+        });
+        grid.innerHTML = html;
       });
   }
 
