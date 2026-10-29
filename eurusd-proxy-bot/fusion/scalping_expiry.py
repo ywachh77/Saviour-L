@@ -34,10 +34,10 @@ from .domain import Candle, Decision
 
 EXPIRY_CONFIGS = {
     1: {
-        "min_atr_pips": 1.0,       # Tight: need at least 1 pip ATR
-        "spread_cover": 1.5,       # 1.5x spread minimum
-        "confidence_min": 0.15,    # Lower bar for fast signals
-        "body_frac_min": 0.30,     # Body must fill 30% of range
+        "min_atr_pips": 0.8,        # Tight: need at least 0.8 pip ATR
+        "spread_cover": 1.2,        # 1.2x spread minimum
+        "confidence_min": 0.15,     # Lower bar for fast signals
+        "body_frac_min": 0.25,      # Body must fill 25% of range
         "imbalance_threshold": 0.15,
         "vpin_threshold": 0.35,
         "gap_ratio_min": 1.5,
@@ -46,10 +46,10 @@ EXPIRY_CONFIGS = {
         "tick_imbalance_min": 0.15,
     },
     3: {
-        "min_atr_pips": 1.5,       # Moderate
-        "spread_cover": 1.3,
+        "min_atr_pips": 1.0,        # Moderate
+        "spread_cover": 1.1,
         "confidence_min": 0.20,
-        "body_frac_min": 0.35,
+        "body_frac_min": 0.30,
         "imbalance_threshold": 0.20,
         "vpin_threshold": 0.40,
         "gap_ratio_min": 1.8,
@@ -58,10 +58,10 @@ EXPIRY_CONFIGS = {
         "tick_imbalance_min": 0.20,
     },
     30: {
-        "min_atr_pips": 3.0,       # Wider: need more movement
+        "min_atr_pips": 1.5,        # Wider: need more movement
         "spread_cover": 1.0,
         "confidence_min": 0.25,
-        "body_frac_min": 0.40,
+        "body_frac_min": 0.35,
         "imbalance_threshold": 0.25,
         "vpin_threshold": 0.50,
         "gap_ratio_min": 2.0,
