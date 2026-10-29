@@ -34,19 +34,37 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from fusion.domain import Candle
 from fusion.features import compute_features, FEATURE_NAMES
 from fusion.indicators import atr as calc_atr
+from fusion.gbdt import GradientBoostingModel
 from backtest_engine import load_candles, load_models
 
 CANDLE_DIR = PROJECT_ROOT / "var" / "real_candles"
+WINSTREAK_MODEL_PATH = CANDLE_DIR / "ensemble_model_winstreak.json"
 PIPS_PER_MOVE = 0.0001
 SPREAD_PIPS = 1.2
 HORIZON = 5  # 5-bar = 30-min expiry
+
+
+def load_winstreak_model():
+    """Load the SEPARATE win streak model (not the main signal generator model)."""
+    if not WINSTREAK_MODEL_PATH.exists():
+        print(f"ERROR: Win streak model not found at {WINSTREAK_MODEL_PATH}")
+        print("Run: python3 scripts/train_winstreak_model.py")
+        return []
+    data = json.loads(WINSTREAK_MODEL_PATH.read_text())
+    models = []
+    for member in data["members"]:
+        m = GradientBoostingModel.from_dict(member)
+        if m:
+            models.append(m)
+    return models
 
 # ─── Win Streak Configuration ───────────────────────────────────────
 # Optimized from backtest on 2000 EUR/USD candles (3 days):
 #   conf=0.68, no session filter: 62.5% WR, 2/3 days with 5-streak, +$152.20
 #   conf=0.70, session filter:    85.7% WR, 1/1 days with 5-streak, +$39.37
 #   conf=0.65, no session filter: 53.2% WR, 2/3 days with 5-streak, +$141.78
-ML_CONF_THRESHOLD = 0.68      # ML ensemble confidence floor (62.5% WR, 2/3 days)
+ML_CONF_THRESHOLD = 0.68      # Main model direction confidence floor
+WIN_PROB_THRESHOLD = 0.55     # Win streak model win-probability floor (SEPARATE filter)
 ADX_MIN = 0                    # No ADX filter
 SESSION_FILTER = False         # Trade any time (more trades = more streak chances)
 TARGET_STREAK = 5              # 5 consecutive wins to bank the day
@@ -74,8 +92,17 @@ def get_session_name(dt):
         return "Off-hours"
 
 
-def generate_signals(candles, feats, models):
-    """Generate win-streak signals with compounding sizing."""
+def generate_signals(candles, feats, main_models, winstreak_models):
+    """Generate win-streak signals with compounding sizing.
+
+    Uses TWO separate models:
+      1. Main model (ensemble_model_fb.json) → predicts direction (buy/sell)
+      2. Win streak model (ensemble_model_winstreak.json) → predicts WIN probability
+
+    Trade only when: main model confidence >= threshold AND win streak model
+    win probability >= threshold. This is a separate filter from the signal
+    generator — the win streak model answers "will this trade WIN?" not "which direction?"
+    """
     trades = []
     equity = STARTING_EQUITY
     daily_streak = 0
@@ -102,19 +129,28 @@ def generate_signals(candles, feats, models):
             if adx_val < ADX_MIN:
                 continue
 
-        # ML prediction
-        ml_up = sum(m.predict_up(feat) for m in models) / len(models)
-        confidence = max(ml_up, 1 - ml_up)
+        # --- MAIN MODEL: predict direction ---
+        ml_up = sum(m.predict_up(feat) for m in main_models) / len(main_models)
+        direction_confidence = max(ml_up, 1 - ml_up)
 
-        # Confidence threshold
-        if confidence < ML_CONF_THRESHOLD:
+        if direction_confidence < ML_CONF_THRESHOLD:
             continue
 
-        # Signal direction
-        if ml_up > 0.5:
-            side = "BUY"
+        side = "BUY" if ml_up > 0.5 else "SELL"
+
+        # --- WIN STREAK MODEL: predict win probability ---
+        # This is the SEPARATE model — trained on high-confidence setups only
+        # It answers "will this trade be profitable?" not "which direction?"
+        if winstreak_models:
+            win_prob = sum(m.predict_up(feat) for m in winstreak_models) / len(winstreak_models)
+            # Win streak model predicts 1=win, 0=loss
+            # Use win_prob as the primary filter (different from direction confidence)
+            if win_prob < WIN_PROB_THRESHOLD:
+                continue
+            confidence = win_prob  # Use win probability as the displayed confidence
         else:
-            side = "SELL"
+            # Fallback: use direction confidence if win streak model not available
+            confidence = direction_confidence
 
         # Compounding position size
         day_key = dt.strftime('%Y-%m-%d')
@@ -233,13 +269,18 @@ def run_backtest():
 
     candles = load_candles(2000)
     feats = compute_features(candles)
-    models = load_models(30)
+    main_models = load_models(30)
+    winstreak_models = load_winstreak_model()
 
-    if not models:
-        print("ERROR: Could not load models")
+    if not main_models:
+        print("ERROR: Could not load main models")
         return
 
-    trades, final_equity = generate_signals(candles, feats, models)
+    print(f"Main model: {len(main_models)} members")
+    print(f"Win streak model: {len(winstreak_models)} members (separate model)")
+    print()
+
+    trades, final_equity = generate_signals(candles, feats, main_models, winstreak_models)
 
     # Summary stats
     wins = sum(1 for t in trades if t['win'])
@@ -361,10 +402,11 @@ def generate_live_signals():
 
     candles = load_candles(2000)
     feats = compute_features(candles)
-    models = load_models(30)
+    main_models = load_models(30)
+    winstreak_models = load_winstreak_model()
 
-    if not models:
-        print("ERROR: Could not load models")
+    if not main_models:
+        print("ERROR: Could not load main models")
         return
 
     # Find the latest candle
@@ -377,6 +419,7 @@ def generate_live_signals():
     now = datetime.now(tz=timezone.utc)
     print(f"Current time: {now.isoformat()}")
     print(f"Session: {get_session_name(now)}")
+    print(f"Main model: {len(main_models)} members | Win streak model: {len(winstreak_models)} members")
     print()
 
     signals_found = False
@@ -387,22 +430,30 @@ def generate_live_signals():
 
         dt = candles[i].timestamp
 
-        if not is_london_or_ny(dt):
-            print(f"  [{dt.strftime('%H:%M UTC')}] {get_session_name(dt)} — off-hours, no trade")
+        if SESSION_FILTER and not is_london_or_ny(dt):
+            print(f"  [{dt.strftime('%H:%M UTC')}] {get_session_name(dt):12s} off-hours, no trade")
             continue
 
-        ml_up = sum(m.predict_up(feat) for m in models) / len(models)
-        confidence = max(ml_up, 1 - ml_up)
+        # Direction from main model
+        ml_up = sum(m.predict_up(feat) for m in main_models) / len(main_models)
+        direction_conf = max(ml_up, 1 - ml_up)
 
-        if confidence >= ML_CONF_THRESHOLD:
+        # Win probability from SEPARATE win streak model
+        if winstreak_models:
+            win_prob = sum(m.predict_up(feat) for m in winstreak_models) / len(winstreak_models)
+        else:
+            win_prob = direction_conf
+
+        if direction_conf >= ML_CONF_THRESHOLD and win_prob >= WIN_PROB_THRESHOLD:
             side = "BUY" if ml_up > 0.5 else "SELL"
-            signal = "*** TRADE ***" if confidence >= 0.70 else "* watch *"
+            signal = "*** TRADE ***" if win_prob >= 0.65 else "* watch *"
             print(f"  [{dt.strftime('%H:%M UTC')}] {get_session_name(dt):12s} "
-                  f"{side:4s} conf={confidence:.3f} prob_up={ml_up:.3f} {signal}")
+                  f"{side:4s} dir_conf={direction_conf:.3f} win_prob={win_prob:.3f} {signal}")
             signals_found = True
         else:
             print(f"  [{dt.strftime('%H:%M UTC')}] {get_session_name(dt):12s} "
-                  f"conf={confidence:.3f} prob_up={ml_up:.3f} (below {ML_CONF_THRESHOLD})")
+                  f"dir_conf={direction_conf:.3f} win_prob={win_prob:.3f} "
+                  f"(need dir>={ML_CONF_THRESHOLD} AND win>={WIN_PROB_THRESHOLD})")
 
     if not signals_found:
         print("\nNo high-confidence signals in last 5 candles.")

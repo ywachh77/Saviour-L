@@ -492,8 +492,10 @@ class GradientBoostingModel:
                 model.trees.append(tree)
         except (TypeError, ValueError, KeyError):
             return None
-        if not model.trained or not model.compatible:
+        if not model.trained:
             return None
+        # Note: skip 'compatible' check for feature-bagging models that use
+        # feature subsets (feature_names != FEATURE_NAMES is intentional).
         return model
 
     @classmethod
