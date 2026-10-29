@@ -105,6 +105,11 @@
         <span class="nav-name">Surveillance</span>
         <span class="nav-jp" lang="ja">監視</span>
       </button>
+      <button type="button" class="nav-item" data-nav="winstreak">
+        <span class="nav-idx mono">11</span>
+        <span class="nav-name">Win Streak</span>
+        <span class="nav-jp" lang="ja">勝率連続</span>
+      </button>
     </nav>
 
     <div class="rail-footer">
@@ -1103,6 +1108,113 @@
         </div>
       </div>
     </section>
+
+    <!-- ════════════════════════════════════════════════════════════════════
+         PAGE 11 : WIN STREAK COMPOUNDING (勝率連続)
+         ───────────────────────────────────────────────────────────────────
+         Separate model, separate signals, separate from the signal generator.
+         Uses the win streak model (ensemble_model_winstreak.json) which
+         predicts WIN/LOSS on high-confidence setups — completely independent
+         from the main signal generator model.
+
+         Target: 5 consecutive wins per day with compounding position sizing.
+         ─────────────────────────────────────────────────────────────────── -->
+    <section class="page" id="page-winstreak" data-page="winstreak">
+      <div class="page-inner">
+        <header class="page-header">
+          <h2 class="panel-title">WIN STREAK COMPOUNDING</h2>
+          <p class="panel-subtitle">Separate model · 5 consecutive wins · Daily compounding</p>
+        </header>
+
+        <div class="card">
+          <div class="card-title">MODEL ARCHITECTURE</div>
+          <div class="winstreak-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:0.75rem;">
+            <div class="winstreak-model-box">
+              <div class="winstreak-model-name">MAIN MODEL</div>
+              <div class="winstreak-model-desc">ensemble_model_fb.json</div>
+              <div class="winstreak-model-role">Predicts DIRECTION (buy/sell)</div>
+              <div class="winstreak-model-meta">5 GBDT members · 42 features each</div>
+            </div>
+            <div class="winstreak-model-box winstreak-model-separate">
+              <div class="winstreak-model-name">WIN STREAK MODEL</div>
+              <div class="winstreak-model-desc">ensemble_model_winstreak.json</div>
+              <div class="winstreak-model-role">Predicts WIN PROBABILITY</div>
+              <div class="winstreak-model-meta">3 GBDT members · 49 features each</div>
+            </div>
+          </div>
+          <div class="winstreak-flow" style="margin-top:0.75rem;font-size:0.85rem;color:var(--muted);">
+            Direction from main model → Win probability from separate win streak model → Trade if BOTH pass thresholds
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">COMPOUNDING RULES</div>
+          <div class="winstreak-rules" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0.75rem;margin-top:0.75rem;">
+            <div class="winstreak-rule">
+              <div class="winstreak-rule-value">1.0%</div>
+              <div class="winstreak-rule-label">Base Risk</div>
+            </div>
+            <div class="winstreak-rule">
+              <div class="winstreak-rule-value">+10%</div>
+              <div class="winstreak-rule-label">Size per Win</div>
+            </div>
+            <div class="winstreak-rule">
+              <div class="winstreak-rule-value">3.0%</div>
+              <div class="winstreak-rule-label">Max Size</div>
+            </div>
+            <div class="winstreak-rule">
+              <div class="winstreak-rule-value">5</div>
+              <div class="winstreak-rule-label">Target Streak</div>
+            </div>
+            <div class="winstreak-rule">
+              <div class="winstreak-rule-value">1.2</div>
+              <div class="winstreak-rule-label">Spread (pips)</div>
+            </div>
+            <div class="winstreak-rule">
+              <div class="winstreak-rule-value">5-bar</div>
+              <div class="winstreak-rule-label">Horizon</div>
+            </div>
+          </div>
+          <div class="winstreak-streak-display" id="winstreak-streak-bar" style="margin-top:0.75rem;">
+            <span class="winstreak-streak-label">Current Streak:</span>
+            <span class="winstreak-streak-dots" id="winstreak-streak-dots">
+              <span class="streak-dot"></span><span class="streak-dot"></span><span class="streak-dot"></span><span class="streak-dot"></span><span class="streak-dot"></span>
+            </span>
+            <span class="winstreak-streak-count" id="winstreak-streak-count">0 / 5</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            LIVE SIGNALS
+            <button type="button" class="btn btn-sm btn-ghost" onclick="loadWinStreak()">Refresh</button>
+          </div>
+          <div id="winstreak-grid" class="winstreak-grid" style="margin-top:0.75rem;">
+            <div class="winstreak-loading">Click Refresh to load signals from the win streak model...</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">SIZE SCALING TABLE</div>
+          <table class="winstreak-table" style="width:100%;border-collapse:collapse;margin-top:0.75rem;">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid var(--border);">
+                <th style="padding:0.5rem;font-size:0.8rem;">Streak</th>
+                <th style="padding:0.5rem;font-size:0.8rem;">Size %</th>
+                <th style="padding:0.5rem;font-size:0.8rem;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.5rem;">1</td><td style="padding:0.5rem;">1.00%</td><td style="padding:0.5rem;color:var(--muted);">First win</td></tr>
+              <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.5rem;">2</td><td style="padding:0.5rem;">1.10%</td><td style="padding:0.5rem;color:var(--muted);">Building</td></tr>
+              <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.5rem;">3</td><td style="padding:0.5rem;">1.20%</td><td style="padding:0.5rem;color:var(--muted);">Building</td></tr>
+              <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.5rem;">4</td><td style="padding:0.5rem;">1.30%</td><td style="padding:0.5rem;color:var(--muted);">Almost there</td></tr>
+              <tr><td style="padding:0.5rem;font-weight:bold;">5</td><td style="padding:0.5rem;font-weight:bold;">1.40%</td><td style="padding:0.5rem;color:var(--accent);font-weight:bold;">★ BANK THE DAY ★</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </div>
 
   <!-- ───────────────────── MOBILE BOTTOM APP TAB BAR ──────────────────── -->
@@ -1173,6 +1285,12 @@
         <line x1="1" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="23" y2="12"/>
       </svg>
       <span>Surv</span>
+    </button>
+    <button type="button" class="tab-btn" data-nav="winstreak">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <polyline points="17 3 21 3 21 7"/><polyline points="3 17 7 17 7 21"/><polyline points="14 4 17 7 20 4"/><polyline points="10 20 7 17 10 14"/>
+      </svg>
+      <span>Streak</span>
     </button>
   </nav>
 </div>

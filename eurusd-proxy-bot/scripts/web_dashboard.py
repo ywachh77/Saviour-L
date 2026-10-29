@@ -1728,6 +1728,18 @@ class OperatorRuntime:
                 continue
         return candles[-300:] if candles else []
 
+    def _session_name(self, dt) -> str:
+        """Get session name from datetime."""
+        h = dt.hour
+        if 7 <= h < 12:
+            return "London"
+        elif 12 <= h < 16:
+            return "London/NY"
+        elif 16 <= h < 20:
+            return "NY"
+        else:
+            return "Off-hours"
+
     def _compute_indicators(self, candles: list[dict[str, float]]) -> dict[str, Any]:
         """Compute all fusion indicators on the latest candle."""
         try:
@@ -2152,6 +2164,128 @@ class OperatorRuntime:
             "candle_count": len(candles),
             "last_close": candles[-1].close,
             "indicators": indicators,
+        }
+
+    def winstreak_payload(self) -> dict[str, Any]:
+        """Payload for the Win Streak page: separate model, separate signals.
+
+        Uses the SEPARATE win streak model (ensemble_model_winstreak.json)
+        which predicts WIN/LOSS on high-confidence setups — completely
+        independent from the main signal generator model.
+        """
+        candles_dicts = self._load_real_candles()
+        if not candles_dicts or len(candles_dicts) < 60:
+            return {"ok": False, "error": "Not enough candle data"}
+
+        from datetime import datetime, timezone
+        candles = []
+        for d in candles_dicts:
+            dt = datetime.fromtimestamp(d["ts"], tz=timezone.utc)
+            candles.append(Candle(timestamp=dt, open=d["open"], high=d["high"],
+                                   low=d["low"], close=d["close"], volume=d["volume"]))
+        candles.sort(key=lambda c: c.timestamp)
+
+        feats = feat_mod.compute_features(candles)
+
+        # Load both models: main (direction) + win streak (win probability)
+        from fusion.gbdt import GradientBoostingModel
+        from backtest_engine import load_models
+
+        main_models = load_models(30)
+        winstreak_models = []
+        ws_path = BOT_ROOT / "var" / "real_candles" / "ensemble_model_winstreak.json"
+        if ws_path.exists():
+            data = json.loads(ws_path.read_text())
+            for member in data.get("members", []):
+                m = GradientBoostingModel.from_dict(member)
+                if m:
+                    winstreak_models.append(m)
+
+        if not main_models:
+            return {"ok": False, "error": "Main model not available"}
+
+        ML_CONF_THRESHOLD = 0.68
+        WIN_PROB_THRESHOLD = 0.55
+        HORIZON = 5
+        PIPS_PER_MOVE = 0.0001
+        SPREAD_PIPS = 1.2
+        TARGET_STREAK = 5
+
+        # Generate signals from the last 20 candles
+        recent_signals = []
+        streak = 0
+        day_key = None
+        banked = False
+
+        for i in range(max(60, len(candles) - 20), len(candles)):
+            feat = feats[i]
+            if feat is None:
+                continue
+
+            dt = candles[i].timestamp
+            this_day = dt.strftime('%Y-%m-%d')
+
+            # Reset streak on new day
+            if this_day != day_key:
+                day_key = this_day
+                streak = 0
+                banked = False
+
+            # Main model: direction
+            ml_up = sum(m.predict_up(feat) for m in main_models) / len(main_models)
+            direction_conf = max(ml_up, 1 - ml_up)
+
+            if direction_conf < ML_CONF_THRESHOLD:
+                continue
+
+            side = "BUY" if ml_up > 0.5 else "SELL"
+
+            # Win streak model: win probability
+            if winstreak_models:
+                win_prob = sum(m.predict_up(feat) for m in winstreak_models) / len(winstreak_models)
+            else:
+                win_prob = direction_conf
+
+            if win_prob < WIN_PROB_THRESHOLD:
+                continue
+
+            if banked:
+                continue
+
+            # Compute compounding size
+            size_pct = min(1.0 + streak * 0.1, 3.0)
+
+            signal = {
+                "timestamp": dt.isoformat(),
+                "session": self._session_name(dt),
+                "side": side,
+                "direction_conf": round(direction_conf, 4),
+                "win_prob": round(win_prob, 4),
+                "size_pct": round(size_pct, 3),
+                "streak": streak + 1,
+                "target_streak": TARGET_STREAK,
+            }
+
+            recent_signals.append(signal)
+
+        return {
+            "ok": True,
+            "candle_count": len(candles),
+            "last_close": candles[-1].close,
+            "model_info": {
+                "main_model": f"ensemble_model_fb.json ({len(main_models)} members)",
+                "winstreak_model": f"ensemble_model_winstreak.json ({len(winstreak_models)} members)" if winstreak_models else "not available",
+                "ml_conf_threshold": ML_CONF_THRESHOLD,
+                "win_prob_threshold": WIN_PROB_THRESHOLD,
+                "target_streak": TARGET_STREAK,
+            },
+            "signals": recent_signals,
+            "streak_config": {
+                "base_risk_pct": 1.0,
+                "size_increase_pct": 10.0,
+                "max_size_pct": 3.0,
+                "spread_pips": SPREAD_PIPS,
+            },
         }
 
     def _combiner_from_candles(self, candles: list, expiry_minutes: int = 30) -> dict[str, Any]:
@@ -2644,6 +2778,10 @@ def make_handler(runtime: OperatorRuntime):
 
             if route == "/api/surveillance":
                 self._send_json(runtime.surveillance_payload())
+                return
+
+            if route == "/api/winstreak":
+                self._send_json(runtime.winstreak_payload())
                 return
 
             super().do_GET()

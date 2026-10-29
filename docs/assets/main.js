@@ -287,6 +287,7 @@
     if (pageId === "generator") loadGenerator();
     if (pageId === "indicators") loadIndicators();
     if (pageId === "surveillance") loadSurveillance();
+    if (pageId === "winstreak") loadWinStreak();
   }
 
   Array.prototype.forEach.call(document.querySelectorAll("[data-nav]"), function (btn) {
@@ -2028,6 +2029,111 @@
             '</div>';
         });
         grid.innerHTML = html;
+      });
+  }
+
+  /* ───────────────────── Win Streak Compounding ───────────────────── */
+  function loadWinStreak() {
+    var grid = document.getElementById("winstreak-grid");
+    var dotsEl = document.getElementById("winstreak-streak-dots");
+    var countEl = document.getElementById("winstreak-streak-count");
+    if (!grid) return;
+
+    grid.innerHTML = '<div class="empty-stage"><p class="empty-jp" lang="ja">勝率計算中</p><p class="empty-title">Loading win streak model…</p></div>';
+
+    fetch("api/winstreak")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok || !data.model_info) {
+          grid.innerHTML = '<div class="empty-stage"><p class="empty-title">Win streak model not available</p><p class="empty-sub">Run: python3 scripts/train_winstreak_model.py</p></div>';
+          return;
+        }
+
+        var mi = data.model_info;
+        var signals = data.signals || [];
+        var sc = data.streak_config || {};
+
+        // Update model info
+        var modelHtml =
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:1rem;">' +
+            '<div style="border:1px solid var(--border);padding:0.75rem;border-radius:6px;">' +
+              '<div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;">Main Model</div>' +
+              '<div class="mono" style="font-size:0.9rem;margin:0.25rem 0;">' + esc(mi.main_model) + '</div>' +
+              '<div style="font-size:0.75rem;color:var(--muted);">Dir Conf >= ' + mi.ml_conf_threshold + '</div>' +
+            '</div>' +
+            '<div style="border:1px solid var(--accent);padding:0.75rem;border-radius:6px;">' +
+              '<div style="font-size:0.75rem;color:var(--accent);text-transform:uppercase;">Win Streak Model</div>' +
+              '<div class="mono" style="font-size:0.9rem;margin:0.25rem 0;">' + esc(mi.winstreak_model) + '</div>' +
+              '<div style="font-size:0.75rem;color:var(--muted);">Win Prob >= ' + mi.win_prob_threshold + '</div>' +
+            '</div>' +
+          '</div>';
+
+        // Update streak display
+        var maxStreak = 0;
+        signals.forEach(function (s) { if (s.streak > maxStreak) maxStreak = s.streak; });
+        if (dotsEl) {
+          var dotsHtml = "";
+          for (var i = 0; i < 5; i++) {
+            var filled = i < maxStreak;
+            dotsHtml += '<span class="streak-dot' + (filled ? " filled" : "") + '"></span>';
+          }
+          dotsEl.innerHTML = dotsHtml;
+        }
+        if (countEl) countEl.textContent = maxStreak + " / 5";
+
+        // Render signals
+        var html = modelHtml;
+
+        if (signals.length === 0) {
+          html += '<div class="empty-stage"><p class="empty-title">No high-confidence signals in last 20 candles</p><p class="empty-sub">Waiting for: dir_conf >= ' + mi.ml_conf_threshold + ' AND win_prob >= ' + mi.win_prob_threshold + '</p></div>';
+        } else {
+          html += '<div style="display:grid;gap:0.5rem;">';
+          signals.forEach(function (s) {
+            var isStreak = s.streak >= 5;
+            var isWin = s.streak >= 1;
+            var cls = isStreak ? "winstreak-signal-banked" : (isWin ? "winstreak-signal-active" : "winstreak-signal");
+            html +=
+              '<div class="' + cls + '">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+                  '<div>' +
+                    '<span class="mono" style="font-weight:bold;">' + esc(s.side) + '</span> ' +
+                    '<span class="mono dim" style="font-size:0.8rem;">' + esc(s.timestamp.substring(11, 16)) + ' UTC</span> ' +
+                    '<span class="dim" style="font-size:0.8rem;">' + esc(s.session) + '</span>' +
+                  '</div>' +
+                  '<div style="text-align:right;">' +
+                    '<div class="mono">Streak ' + s.streak + '/5</div>' +
+                    '<div class="mono dim" style="font-size:0.75rem;">Size ' + s.size_pct.toFixed(2) + '%</div>' +
+                  '</div>' +
+                '</div>' +
+                '<div style="display:flex;gap:1rem;margin-top:0.25rem;font-size:0.8rem;">' +
+                  '<span class="dim">Dir: <span class="mono">' + s.direction_conf.toFixed(3) + '</span></span>' +
+                  '<span class="dim">Win: <span class="mono" style="color:' + (s.win_prob >= 0.65 ? "var(--accent)" : "var(--muted)") + ';">' + s.win_prob.toFixed(3) + '</span></span>' +
+                '</div>' +
+              '</div>';
+          });
+          html += '</div>';
+        }
+
+        // Add sizing table
+        html +=
+          '<div style="margin-top:1rem;border-top:1px solid var(--border);padding-top:0.75rem;">' +
+            '<div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;margin-bottom:0.5rem;">Compounding Scaling</div>' +
+            '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">' +
+              '<thead><tr style="text-align:left;border-bottom:1px solid var(--border);">' +
+                '<th style="padding:0.4rem;">Streak</th><th style="padding:0.4rem;">Size</th><th style="padding:0.4rem;">Status</th>' +
+              '</tr></thead><tbody>' +
+              '<tr style="border-bottom:1px solid var(--border);"><td style="padding:0.4rem;">1</td><td style="padding:0.4rem;">1.00%</td><td style="padding:0.4rem;color:var(--muted);">First win</td></tr>' +
+              '<tr style="border-bottom:1px solid var(--border);"><td style="padding:0.4rem;">2</td><td style="padding:0.4rem;">1.10%</td><td style="padding:0.4rem;color:var(--muted);">Building</td></tr>' +
+              '<tr style="border-bottom:1px solid var(--border);"><td style="padding:0.4rem;">3</td><td style="padding:0.4rem;">1.20%</td><td style="padding:0.4rem;color:var(--muted);">Building</td></tr>' +
+              '<tr style="border-bottom:1px solid var(--border);"><td style="padding:0.4rem;">4</td><td style="padding:0.4rem;">1.30%</td><td style="padding:0.4rem;color:var(--muted);">Almost there</td></tr>' +
+              '<tr><td style="padding:0.4rem;font-weight:bold;">5</td><td style="padding:0.4rem;font-weight:bold;">1.40%</td><td style="padding:0.4rem;color:var(--accent);font-weight:bold;">BANK THE DAY</td></tr>' +
+              '</tbody></table>' +
+          '</div>';
+
+        grid.innerHTML = html;
+      })
+      .catch(function (err) {
+        grid.innerHTML = '<div class="empty-stage"><p class="empty-title">Error loading win streak data</p><p class="empty-sub">' + esc(err.message) + '</p></div>';
       });
   }
 
