@@ -50,8 +50,8 @@ CCI_PERIOD = 20
 # swing the swing strategies use, because a scalp targets a few pips, not a leg.
 MICRO_PIVOT_BARS = 5
 
-FEATURE_VERSION = 7
 FEATURE_VERSION = 8
+FEATURE_VERSION = 9
 
 # Higher-timeframe context. The feed is one-minute only, so these are resampled
 # from the bars we already hold rather than fetched: five one-minute bars are a
@@ -141,6 +141,17 @@ FEATURE_NAMES = (
     "volatility_phase",
     "efficiency_ratio_custom",
     "session_momentum_shift",
+    # --- custom novel indicators v2 (v9) --------------------------------
+    # 7 new microstructure indicators inspired by market microstructure
+    # research: VPIN, Kyle's Lambda, Smart Money Index, flow momentum,
+    # liquidity gaps, tick imbalance, session velocity.
+    "vpin_proxy",
+    "smart_money_index",
+    "flow_momentum",
+    "liquidity_gap_detector",
+    "tick_volume_imbalance",
+    "session_velocity_shift",
+    "kyle_lambda_proxy",
     # Higher-timeframe context is deliberately NOT here. The tilt is computed
     # and carried as strategy-facing values below (mtf_fast / mtf_slow, plus
     # mtf_bias_* and mtf_gap_*), but it does not enter the model vector:
@@ -216,6 +227,13 @@ FEATURE_LABELS = {
     "volatility_phase": "Volatility phase",
     "efficiency_ratio_custom": "Custom efficiency ratio",
     "session_momentum_shift": "Session momentum shift",
+    "vpin_proxy": "VPIN informed trading proxy",
+    "smart_money_index": "Smart money index (late vs early flow)",
+    "flow_momentum": "Flow momentum (short vs long window)",
+    "liquidity_gap_detector": "Liquidity gap detector",
+    "tick_volume_imbalance": "Tick volume imbalance proxy",
+    "session_velocity_shift": "Session velocity shift",
+    "kyle_lambda_proxy": "Kyle's Lambda price impact proxy",
 }
 
 # How many bars are needed before a feature row is complete.
@@ -565,6 +583,14 @@ def compute_features(
             "volatility_phase": float(custom_row["volatility_phase"]) if custom_row else 0.0,
             "efficiency_ratio_custom": float(custom_row["efficiency_ratio_custom"]) if custom_row else 0.0,
             "session_momentum_shift": float(custom_row["session_momentum_shift"]) if custom_row else 0.0,
+            # custom novel indicators v2 (v9)
+            "vpin_proxy": float(custom_row["vpin_proxy"]) if custom_row else 0.0,
+            "smart_money_index": float(custom_row["smart_money_index"]) if custom_row else 0.0,
+            "flow_momentum": float(custom_row["flow_momentum"]) if custom_row else 0.0,
+            "liquidity_gap_detector": float(custom_row["liquidity_gap_detector"]) if custom_row else 0.0,
+            "tick_volume_imbalance": float(custom_row["tick_volume_imbalance"]) if custom_row else 0.0,
+            "session_velocity_shift": float(custom_row["session_velocity_shift"]) if custom_row else 0.0,
+            "kyle_lambda_proxy": float(custom_row["kyle_lambda_proxy"]) if custom_row else 0.0,
             # higher-timeframe context
             "mtf_bias_5": float(mtf_fast[index].direction),
             "mtf_gap_5": _mtf_gap(mtf_fast[index], candle.close),

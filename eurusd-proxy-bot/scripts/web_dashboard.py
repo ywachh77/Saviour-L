@@ -50,6 +50,7 @@ from fusion import (  # noqa: E402
 )
 from fusion.cognitive import SaviourCognitivePartner, build_trade_reflection  # noqa: E402
 from fusion.config import Config, load_config  # noqa: E402
+from fusion.custom_indicators import compute_custom_indicators, CUSTOM_INDICATOR_NAMES  # noqa: E402
 from fusion.domain import Candle, Settlement, Signal, closed_before  # noqa: E402
 from fusion.indicators import atr as calc_atr  # noqa: E402
 from fusion.keypool import MAX_SLOTS, mask_key  # noqa: E402
@@ -2063,6 +2064,93 @@ class OperatorRuntime:
             "errors": indicators.get("error"),
         }
 
+    def surveillance_payload(self) -> dict[str, Any]:
+        """Payload for the Market Surveillance page: all 20 custom novel indicators."""
+        candles_dicts = self._load_real_candles()
+        if not candles_dicts or len(candles_dicts) < 50:
+            return {"ok": False, "error": "Not enough candle data for surveillance"}
+        # Convert dict candles to Candle objects for custom_indicators
+        from datetime import datetime, timezone
+        candles = []
+        for d in candles_dicts:
+            dt = datetime.fromtimestamp(d["ts"], tz=timezone.utc)
+            candles.append(Candle(timestamp=dt, open=d["open"], high=d["high"], low=d["low"], close=d["close"], volume=d["volume"]))
+        candles.sort(key=lambda c: c.timestamp)
+        custom = compute_custom_indicators(candles)
+        # Get the last row of custom indicators
+        last_row = custom[-1] if custom else {}
+        # Build indicator descriptions from CUSTOM_INDICATOR_NAMES
+        INDICATOR_DESCRIPTIONS = {
+            "price_acceleration": "Price acceleration (EoS) — rate of change of momentum",
+            "session_contrarian_index": "Session contrarian index — divergence between session change and close-position",
+            "liquidity_regime_score": "Liquidity regime score — 0–1, higher = tighter spreads",
+            "tick_velocity_accel": "Tick velocity acceleration — changes in tick rate",
+            "momentum_exhaustion_proxy": "Momentum exhaustion proxy — approaching channel edge",
+            "adx_nonlinearity": "ADX nonlinearity — trend strength degradation",
+            "volume_phase_cycle": "Volume phase cycle — stacked cycle embedding",
+            "bull_bear_divergence_custom": "Bull/Bear divergence (custom) — oscillator vs price divergence",
+            "session_open_rejection": "Session open rejection — close position vs session range",
+            "wick_ratio_custom": "Wick ratio (custom) — directional vs total wick",
+            "microstructure_impulse": "Microstructure impulse — fast EMA slope vs mean",
+            "spectral_entropy_ratio": "Spectral entropy ratio — trend purity vs noise",
+            "efficiency_ratio_custom": "Efficiency ratio (custom) — absolute net change / total path",
+            "session_momentum_shift": "Session momentum shift — current vs prior 30-bar momentum",
+            "vpin_proxy": "VPIN informed trading proxy — volume-classified flow",
+            "smart_money_index": "Smart money index — late vs early flow divergence",
+            "flow_momentum": "Flow momentum — short vs long window volume divergence",
+            "liquidity_gap_detector": "Liquidity gap detector — directional gap occurrence",
+            "tick_volume_imbalance": "Tick volume imbalance proxy — directional vs total tick volume",
+            "session_velocity_shift": "Session velocity shift — short-term vs long-term momentum",
+            "kyle_lambda_proxy": "Kyle's Lambda price impact proxy — price change per volume unit",
+        }
+        indicators = {}
+        for name in CUSTOM_INDICATOR_NAMES:
+            val = last_row.get(name)
+            if val is None:
+                indicators[name] = {"value": None, "desc": INDICATOR_DESCRIPTIONS.get(name, name)}
+            else:
+                if name in ("liquidity_regime_score", "volume_phase_cycle",
+                          "momentum_exhaustion_proxy", "wick_ratio_custom",
+                          "microstructure_impulse", "spectral_entropy_ratio",
+                          "efficiency_ratio_custom", "vpin_proxy", "flow_momentum",
+                          "tick_volume_imbalance"):
+                    val = float(val)
+                    if val > 0.6:
+                        signal = "BULLISH"
+                    elif val < 0.4:
+                        signal = "BEARISH"
+                    else:
+                        signal = "NEUTRAL"
+                elif name == "vpin_proxy":
+                    signal = "HIGH INFORMED FLOW" if val > 0.6 else "LOW INFORMED FLOW"
+                elif name == "smart_money_index":
+                    signal = "SMART MONEY BUYING" if val > 0.3 else "SMART MONEY SELLING"
+                elif name == "kyle_lambda_proxy":
+                    signal = "HIGH IMPACT" if val > 0.5 else "LOW IMPACT"
+                elif name == "liquidity_gap_detector":
+                    signal = "GAP DETECTED" if val != 0 else "NO GAP"
+                elif name == "session_velocity_shift":
+                    signal = "VELOCITY ACCELERATION" if val > 0.3 else "VELOCITY DECELERATION"
+                elif name == "session_contrarian_index":
+                    signal = "CONTRARIAN" if val > 0.7 else "MOMENTUM"
+                elif name == "adx_nonlinearity":
+                    signal = "DEGRADING" if val < 0.5 else "STRONG"
+                elif name == "bull_bear_divergence_custom":
+                    signal = "BULLISH DIVERGENCE" if val > 0.3 else "BEARISH DIVERGENCE"
+                else:
+                    signal = "NEUTRAL"
+                indicators[name] = {
+                    "value": round(float(val), 4),
+                    "signal": signal,
+                    "desc": INDICATOR_DESCRIPTIONS.get(name, name),
+                }
+        return {
+            "ok": True,
+            "candle_count": len(candles),
+            "last_close": candles[-1].close,
+            "indicators": indicators,
+        }
+
     def _combiner_from_candles(self, candles: list, expiry_minutes: int = 30) -> dict[str, Any]:
         """Compute combiner score + ML prediction from Candle objects (used in signal cards)."""
         try:
@@ -2549,6 +2637,10 @@ def make_handler(runtime: OperatorRuntime):
 
             if route == "/api/indicators":
                 self._send_json(runtime.indicators_payload())
+                return
+
+            if route == "/api/surveillance":
+                self._send_json(runtime.surveillance_payload())
                 return
 
             super().do_GET()
