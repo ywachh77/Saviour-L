@@ -7,6 +7,7 @@ refunds it if the call never reached the provider.
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,6 +17,41 @@ from . import instruments
 from .domain import Candle
 from .keypool import KeyPool
 from .timeutil import parse_datetime
+
+
+def _ipv4_urlopen(request, timeout=8.0):
+    """urllib opener that forces IPv4 resolution.
+
+    Cloudflare CDNs (Twelve Data) resolve to IPv6 first. On networks
+    where IPv6 is broken (Termux, some mobile carriers), urllib hangs
+    on the IPv6 attempt before falling back. Forcing IPv4 avoids the
+    hang entirely.
+    """
+    host = request.host
+    # Strip port for DNS resolution
+    if ':' in host:
+        host_only = host.rsplit(':', 1)[0]
+    else:
+        host_only = host
+
+    # Resolve to IPv4 addresses only
+    try:
+        addrinfo = socket.getaddrinfo(host_only, None, family=socket.AF_INET)
+        if addrinfo:
+            ipv4_addr = addrinfo[0][4][0]
+            # Rewrite the URL to use the IPv4 address directly
+            original_host = request.host
+            port_part = ''
+            if ':' in original_host:
+                port_part = original_host.rsplit(':', 1)[1]
+            new_host = f"{ipv4_addr}:{port_part}" if port_part else ipv4_addr
+            request.host = new_host
+            # Add Host header for virtual hosting
+            request.add_header("Host", original_host)
+    except socket.gaierror:
+        pass  # Fall through to default resolution
+
+    return urllib.request.urlopen(request, timeout=timeout)
 
 
 class ProviderError(Exception):
@@ -35,7 +71,7 @@ class TwelveDataProvider:
         base_url: str = "https://api.twelvedata.com",
         timeout: float = 8.0,
         pool: KeyPool | None = None,
-        opener=urllib.request.urlopen,
+        opener=_ipv4_urlopen,
     ):
         self.keys = [key for key in keys if key]
         self.base_url = base_url.rstrip("/")
