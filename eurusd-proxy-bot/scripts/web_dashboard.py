@@ -180,6 +180,7 @@ class OperatorRuntime:
         self._cloud_supabase_url = ""
         self._cloud_synced_at: datetime | None = None
         self._synced_pairs: set[str] = set()
+        self._paper_candle_pairs: set[str] = set()
         self._cloud_key_slots: list[dict[str, Any]] = []
         self._cloud_telegram_offset = 0
         self._auto_settle_interval_s = max(1.0, float(auto_settle_interval_s))
@@ -335,7 +336,11 @@ class OperatorRuntime:
         return None
 
     def _has_real_candles(self, member: FusionBot) -> bool:
-        return member.config.pair in self._synced_pairs and len(member.candles) >= 60
+        return (
+            member.config.pair in self._synced_pairs
+            and member.config.pair not in self._paper_candle_pairs
+            and len(member.candles) >= 60
+        )
 
     @property
     def live_feed_configured(self) -> bool:
@@ -380,12 +385,12 @@ class OperatorRuntime:
         return "local_jsonl"
 
     def _ensure_paper_candles_if_offline(self, target_stamp: datetime | None = None) -> None:
-        if self.live_feed_configured:
-            return
         anchor = floor_minute(target_stamp or utcnow()) - timedelta(minutes=1)
         for member in self._all_members():
-            if target_stamp is None and self._has_real_candles(member):
+            # Skip only when real candles are already loaded and fresh.
+            if target_stamp is None and self._has_real_candles(member) and member.candles:
                 continue
+            # If candles are empty or target_stamp forces refresh, build paper series.
             if not member.candles or target_stamp is not None:
                 member.candles = _build_scaled_paper_series(
                     member.config.pair,
@@ -393,6 +398,7 @@ class OperatorRuntime:
                     end_minute=anchor,
                     seed_offset=self._sim_step,
                 )
+                self._paper_candle_pairs.add(member.config.pair)
 
     def _market_snapshot(self, member: FusionBot) -> dict[str, Any]:
         inst = instruments.for_symbol(member.config.pair)
@@ -641,6 +647,21 @@ class OperatorRuntime:
                         list(pool.map(lambda m: m.ingest(at=base_now), live_targets))
                 self.bot.flush_key_pool()
                 base_now = utcnow()
+                # Verify live feed actually produced fresh candles; fall back to
+                # synced real candles when the provider is unreachable (e.g.
+                # sandboxed network without outbound access to the data API).
+                # Paper candles are always "fresh" (generated at current time)
+                # so they must be excluded from this check.
+                fresh_count = 0
+                for m in live_targets:
+                    if (
+                        m.candles
+                        and m.config.pair not in self._paper_candle_pairs
+                        and (base_now - m.candles[-1].timestamp).total_seconds() <= m.config.max_candle_age_seconds
+                    ):
+                        fresh_count += 1
+                if fresh_count == 0:
+                    is_live = False
 
             # Always target the upcoming future M1 candle (> base_now) — never
             # the currently forming candle and never historical past bars.
@@ -688,6 +709,7 @@ class OperatorRuntime:
                             ensemble=member.ensemble,
                             weights=member.weights,
                             source=member_source_tag,
+                            quote={"spread_pips": member.config.spread_pips},
                             at=future_entry,
                             observed_at=base_now,
                             mistakes=member.mistakes,
@@ -705,6 +727,7 @@ class OperatorRuntime:
                         ensemble=member.ensemble,
                         weights=member.weights,
                         source=member_source_tag,
+                        quote={"spread_pips": member.config.spread_pips},
                         at=future_entry,
                         observed_at=base_now,
                         mistakes=member.mistakes,
@@ -719,7 +742,7 @@ class OperatorRuntime:
                     member_source_tag = "SYNTHETIC"
                     feed_label = "PAPER_SIMULATION"
                     anchor_closed = causal_cutoff - timedelta(minutes=1)
-                    max_paper_steps = 140 if mode == "scan" else 1
+                    max_paper_steps = 140 if mode == "scan" else 50
                     for _ in range(max_paper_steps):
                         self._sim_step += 1
                         steps_scanned += 1
@@ -735,12 +758,13 @@ class OperatorRuntime:
                             ensemble=member.ensemble,
                             weights=member.weights,
                             source="SYNTHETIC",
+                            quote={"spread_pips": member.config.spread_pips},
                             at=future_entry,
                             observed_at=base_now,
                             mistakes=member.mistakes,
                             family_fusion=member.family_fusion,
                         )
-                        if result.actionable or mode != "scan":
+                        if result.actionable:
                             break
                         # If FX off-hours/weekend blocks this market at the real wall-clock hour,
                         # stop immediately rather than spinning through seeds that share the same timestamp.
@@ -2334,12 +2358,12 @@ class OperatorRuntime:
                     pass
 
             # Load MR model for regime blending
+            mr_models: list = []
             if mr_model_path.is_file():
                 try:
                     with open(mr_model_path, encoding="utf-8") as f:
                         mr_data = json.load(f)
                     if last_feat and mr_data.get("models"):
-                        mr_models = []
                         for m_dict in mr_data["models"]:
                             m = GBDTModel.from_dict(m_dict)
                             if m is not None:
