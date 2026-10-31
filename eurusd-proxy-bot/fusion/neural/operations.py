@@ -100,6 +100,9 @@ class NeuralOperations:
         self.registry = ModelRegistry(registry_path, checkpoint_dir)
         self.memory = NeuralMemory()
         self.state = self._load_state()
+        # Predictor cache — avoid reloading model every cycle
+        self._cached_predictor: NeuralPredictor | None = None
+        self._cached_prod_version: str | None = None
 
     def _load_state(self) -> DaemonState:
         if self.state_path.exists():
@@ -241,16 +244,96 @@ class NeuralOperations:
             return True
 
     def _evaluate_outcomes(self) -> int:
-        """Evaluate settled outcomes and update learning."""
+        """Evaluate settled outcomes and update learning.
+
+        Fetches current price for each unresolved signal, settles the
+        outcome, and saves it to memory. Only settles signals whose
+        expiry time has passed — never trains on unresolved outcomes.
+        """
         unresolved = self.memory.get_unresolved_outcomes(limit=50)
         count = 0
         for signal in unresolved:
-            # In production, this would fetch the current price and settle
-            # For now, just count
+            # Check if the signal has expired
+            signal_ts = signal.get("timestamp", "")
+            horizon = signal.get("horizon_minutes", 5)
+            if signal_ts:
+                try:
+                    signal_time = datetime.fromisoformat(signal_ts)
+                    expiry = signal_time + timedelta(minutes=horizon)
+                    if datetime.now(timezone.utc) < expiry:
+                        continue  # Not yet expired
+                except (ValueError, TypeError):
+                    continue  # Bad timestamp, skip
+
+            # Get the entry price and side
+            entry_price = signal.get("entry_price")
+            side = signal.get("side", "BUY")
+            signal_id = signal.get("signal_id", "")
+            pair = signal.get("pair", "EUR/USD")
+
+            if entry_price is None:
+                continue
+
+            # Fetch current price from candle data
+            current_price = self._get_current_price()
+            if current_price is None:
+                continue  # No price data available
+
+            # Calculate PnL
+            spread_pips = signal.get("spread_pips", 1.2)
+            if side == "BUY":
+                pnl_pips = (current_price - entry_price) / 0.0001 - spread_pips
+            else:
+                pnl_pips = (entry_price - current_price) / 0.0001 - spread_pips
+
+            # Determine outcome
+            if pnl_pips > 0:
+                outcome = "WIN"
+            elif pnl_pips < 0:
+                outcome = "LOSS"
+            else:
+                outcome = "BREAKEVEN"
+
+            # Create settlement
+            from ..domain import Settlement
+            settlement = Settlement(
+                signal_id=signal_id,
+                pair=pair,
+                resolved=True,
+                outcome=outcome,
+                pnl=pnl_pips,
+                settled_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            # Save outcome to memory
+            signal_data = {
+                "signal_id": signal_id,
+                "pair": pair,
+                "timestamp": signal_ts,
+                "entry_price": entry_price,
+                "side": side,
+                "spread_pips": spread_pips,
+                "horizon_minutes": horizon,
+            }
+            self.memory.save_outcome(signal_data, settlement)
             count += 1
 
         self.state.last_outcome_eval_at = datetime.now(timezone.utc).isoformat()
         return count
+
+    def _get_current_price(self) -> float | None:
+        """Get the latest close price from candle data."""
+        try:
+            if not os.path.exists(self.candles_path):
+                return None
+            with open(self.candles_path) as f:
+                rows = json.load(f)
+            if not rows:
+                return None
+            # rows are newest-first from Supabase, so [0] is latest
+            return float(rows[0].get("c", 0))
+        except (ValueError, KeyError, OSError, json.JSONDecodeError):
+            return None
 
     def _trigger_training(self) -> TrainingReport | None:
         """Trigger a new training run."""
@@ -306,7 +389,14 @@ class NeuralOperations:
         if prod is None:
             return None
 
-        predictor = NeuralPredictor.from_checkpoint(prod.checkpoint_path)
+        # Use cached predictor if production version hasn't changed
+        cached_version = getattr(self, "_cached_prod_version", None)
+        if self._cached_predictor is not None and cached_version == prod.version:
+            predictor = self._cached_predictor
+        else:
+            predictor = NeuralPredictor.from_checkpoint(prod.checkpoint_path)
+            self._cached_predictor = predictor
+            self._cached_prod_version = prod.version
 
         # Load recent candles
         if not os.path.exists(self.candles_path):
