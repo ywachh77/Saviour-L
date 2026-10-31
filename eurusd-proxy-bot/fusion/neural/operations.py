@@ -298,11 +298,15 @@ class NeuralOperations:
             from ..domain import Settlement
             settlement = Settlement(
                 signal_id=signal_id,
-                pair=pair,
-                resolved=True,
                 outcome=outcome,
-                pnl=pnl_pips,
-                settled_at=datetime.now(timezone.utc).isoformat(),
+                entry_price=entry_price,
+                exit_price=current_price,
+                gross_pips=pnl_pips + spread_pips,
+                move_pips=pnl_pips + spread_pips,
+                net_pips=pnl_pips,
+                spread_pips=spread_pips,
+                settled_at=datetime.now(timezone.utc),
+                source="neural_operations",
             )
 
             # Save outcome to memory
