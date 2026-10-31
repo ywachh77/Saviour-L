@@ -100,10 +100,15 @@ def real_outcome_label(label: str | None) -> bool:
 # can be smaller than the spread it has to pay. A scalping setup may only speak
 # when the move it projects is at least this many times the cost of taking it.
 # Below that the setup is not a trade, it is a donation.
-SCALP_MIN_REWARD_TO_COST = 1.5
-# A one-minute scalp realistically captures this fraction of the current ATR rather
-# than all of it. Used to project the gross move a setup can hope for, so the
-# projection is pessimistic on purpose.
+# With DEFAULT_SPREAD_PIPS=1.2 and SCALP_ATR_CAPTURE=0.5:
+#   projected = 0.5 * ATR must beat 1.0 * 1.2 = 1.2 pips
+#   ATR must be >= 2.4 pips for a scalp to fire.
+# This is a real floor: EUR/USD M1 ATR below 2.4 pips means the move is too
+# small to pay for the round-turn spread.
+SCALP_MIN_REWARD_TO_COST = 1.0
+# A one-minute scalp realistically captures this fraction of the current ATR.
+# 0.5 means we expect to catch half the bar's range, which is pessimistic
+# on purpose — better to underestimate the move than overestimate.
 SCALP_ATR_CAPTURE = 0.5
 
 

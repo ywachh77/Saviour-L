@@ -244,6 +244,335 @@ def _safe_ratio(numerator: float, denominator: float, default: float = 0.0) -> f
     return numerator / denominator if abs(denominator) > 1e-15 else default
 
 
+def _rsi_divergence_score(rsi_vals: list, closes: list, index: int) -> float:
+    """Compute RSI divergence: +1 = bullish (price lower low, RSI higher low), -1 = bearish.
+
+    Compares the last 5 candles' price extremes against their RSI extremes.
+    """
+    if index < 10 or len(rsi_vals) < 10 or len(closes) < 10:
+        return 0.0
+    lookback = min(5, index)
+    start = index - lookback
+    price_low = min(closes[start : index + 1])
+    price_high = max(closes[start : index + 1])
+    prev_price_low = min(closes[start - lookback : start])
+    prev_price_high = max(closes[start - lookback : start])
+    rsi_at_low = min(rsi_vals[start : index + 1])
+    rsi_at_high = max(rsi_vals[start : index + 1])
+    prev_rsi_low = min(rsi_vals[start - lookback : start])
+    prev_rsi_high = max(rsi_vals[start - lookback : start])
+
+    # Bullish divergence: price made lower low, RSI made higher low
+    if price_low < prev_price_low and rsi_at_low > prev_rsi_low:
+        return 0.5
+    # Bearish divergence: price made higher high, RSI made lower high
+    if price_high > prev_price_high and rsi_at_high < prev_rsi_high:
+        return -0.5
+    return 0.0
+
+
+def _flag_direction(candles: Sequence, index: int) -> float:
+    """Detect flag pattern direction. Returns +1 for bull flag, -1 for bear flag, 0 for none."""
+    if index < 30:
+        return 0.0
+    # Strong move in last 10 candles
+    recent = candles[index - 10 : index]
+    move = recent[-1].close - recent[0].close
+    if abs(move) < 1e-15:
+        return 0.0
+    # Flag = tight consolidation in last 5 candles
+    flag = candles[index - 5 : index]
+    flag_high = max(c.high for c in flag)
+    flag_low = min(c.low for c in flag)
+    flag_range = flag_high - flag_low
+    if flag_range < 1e-15:
+        return 0.0
+    # Flag tightness: range relative to the move
+    tightness = flag_range / abs(move)
+    if tightness > 0.6:
+        return 0.0  # Not tight enough
+    if move > 0:
+        return 1.0  # Bull flag
+    return -1.0  # Bear flag
+
+
+def _macd_line(closes: list, index: int) -> float:
+    """Compute MACD line (12-26 EMA difference)."""
+    if index < 30:
+        return 0.0
+    ema_12 = _ema(closes[: index + 1], 12)
+    ema_26 = _ema(closes[: index + 1], 26)
+    if ema_12 is None or ema_26 is None:
+        return 0.0
+    return ema_12 - ema_26
+
+
+def _macd_signal(closes: list, index: int) -> float:
+    """Compute MACD signal line (9-period EMA of MACD)."""
+    if index < 40:
+        return 0.0
+    macd_vals = []
+    for i in range(index - 8, index + 1):
+        if i >= 30:
+            ema_12 = _ema(closes[: i + 1], 12)
+            ema_26 = _ema(closes[: i + 1], 26)
+            if ema_12 is not None and ema_26 is not None:
+                macd_vals.append(ema_12 - ema_26)
+    if len(macd_vals) < 9:
+        return 0.0
+    return _ema(macd_vals, 9)
+
+
+def _ema(values: list, period: int) -> float | None:
+    """Simple EMA computation."""
+    if len(values) < period:
+        return None
+    k = 2.0 / (period + 1)
+    ema = values[0]
+    for v in values[1:]:
+        ema = v * k + ema * (1 - k)
+    return ema
+
+
+def _demand_zone_top(candles: Sequence, index: int) -> float:
+    """Find the top of a demand zone (strong bullish candle with buy-side imbalance)."""
+    if index < 20:
+        return 0.0
+    # Look for the most recent strong bullish candle
+    for i in range(max(0, index - 20), index):
+        c = candles[i]
+        body = abs(c.close - c.open)
+        rng = c.high - c.low
+        if rng < 1e-15:
+            continue
+        body_frac = body / rng
+        if body_frac > 0.6 and c.close > c.open and c.close > c.high * 0.95:
+            return c.high  # Demand zone top
+    return 0.0
+
+
+def _supply_zone_bottom(candles: Sequence, index: int) -> float:
+    """Find the bottom of a supply zone (strong bearish candle with sell-side imbalance)."""
+    if index < 20:
+        return 0.0
+    for i in range(max(0, index - 20), index):
+        c = candles[i]
+        body = abs(c.close - c.open)
+        rng = c.high - c.low
+        if rng < 1e-15:
+            continue
+        body_frac = body / rng
+        if body_frac > 0.6 and c.close < c.open and c.close < c.low * 1.05:
+            return c.low  # Supply zone bottom
+    return 0.0
+
+
+def _breaker_strength(candle: "Candle") -> float:
+    """Measure candle strength: body ratio × close position.
+
+    Returns 0.0 (weak) to 1.0 (strong). A strong breaker has a large body
+    that closes near its extreme.
+    """
+    rng = candle.high - candle.low
+    if rng < 1e-15:
+        return 0.0
+    body = abs(candle.close - candle.open)
+    body_frac = body / rng
+    close_pos = (candle.close - candle.low) / rng
+    # Close near extreme (0 or 1) = strong
+    extreme_bonus = max(close_pos, 1 - close_pos)
+    return body_frac * extreme_bonus
+
+
+def _poc_price(candles: Sequence, index: int) -> float:
+    """Find the volume point of control price in the last 20 candles.
+
+    The POC is the price where the most volume traded. We approximate this
+    by finding the candle with the highest volume and using its midpoint.
+    """
+    if index < 10:
+        return candles[index].close
+    recent = candles[max(0, index - 20) : index + 1]
+    highest_vol_candle = max(recent, key=lambda c: c.volume)
+    return (highest_vol_candle.high + highest_vol_candle.low) / 2.0
+
+
+def _wick_rejection(candle: "Candle") -> float:
+    """Measure wick rejection strength: 0 (no rejection) to 1 (strong rejection).
+
+    A strong rejection has a long wick on one side and a small body,
+    indicating price was pushed back from that level.
+    """
+    rng = candle.high - candle.low
+    if rng < 1e-15:
+        return 0.0
+    body = abs(candle.close - candle.open)
+    upper_wick = candle.high - max(candle.open, candle.close)
+    lower_wick = min(candle.open, candle.close) - candle.low
+    longest_wick = max(upper_wick, lower_wick)
+    if body < 1e-15:
+        return 0.5  # Pure wick — moderate rejection
+    wick_ratio = longest_wick / body
+    if wick_ratio >= 2.0:
+        return 1.0
+    elif wick_ratio >= 1.5:
+        return 0.7
+    elif wick_ratio >= 1.0:
+        return 0.4
+    return 0.0
+
+
+def _descending_flat_low(candles: Sequence, index: int) -> float:
+    """Find the flat support level for a descending triangle.
+
+    Looks for the lowest low in the last 20 candles that was tested
+    multiple times (at least 2 touches). Returns the flat low level.
+    """
+    if index < 20:
+        return 0.0
+    recent = candles[max(0, index - 20) : index + 1]
+    lows = [c.low for c in recent]
+    low_val = min(lows)
+    # Count touches near the low (within 10% of range)
+    tol = 0.0001
+    touches = sum(1 for c in recent if abs(c.low - low_val) <= tol)
+    if touches >= 2:
+        return low_val
+    return 0.0
+
+
+def _descending_lower_high(candles: Sequence, index: int) -> float:
+    """Find the lower high level for a descending triangle.
+
+    Looks for the highest high in the last 10 candles, which should be
+    lower than the previous rally (descending highs).
+    """
+    if index < 10:
+        return 0.0
+    recent = candles[max(0, index - 10) : index + 1]
+    return max(c.high for c in recent)
+
+
+def _win_probability(rsi_vals: list, closes: list, index: int) -> float:
+    """Estimate win probability from RSI and recent price action.
+
+    Higher RSI in an uptrend = higher win probability for BUY.
+    Lower RSI in a downtrend = higher win probability for SELL.
+    Returns 0.0 to 1.0.
+    """
+    if index < 10 or len(rsi_vals) < 10:
+        return 0.5
+    rsi_val = rsi_vals[index] if rsi_vals[index] is not None else 50.0
+    price_change = _safe_ratio(closes[index] - closes[index - 5], closes[index - 5]) if index >= 5 else 0.0
+
+    # Base probability from RSI
+    if price_change > 0:
+        prob = rsi_val / 100.0
+    else:
+        prob = 1.0 - rsi_val / 100.0
+
+    # Adjust for trend strength
+    if abs(price_change) > 0.001:
+        prob = prob + 0.05
+    elif abs(price_change) < 0.0001:
+        prob = prob - 0.05
+
+    return max(0.0, min(1.0, prob))
+
+
+def _consecutive_same_direction(candles: Sequence, index: int, direction: str) -> float:
+    """Count consecutive candles in the same direction.
+
+    Counts how many consecutive candles (including current) closed in the
+    given direction (up = bullish, down = bearish). Doji candles (open == close)
+    do NOT break the streak — they are neutral and skipped over. This ensures
+    that a doji in a strong trend doesn't artificially reset the consecutive
+    count.
+    """
+    count = 0
+    for i in range(index, max(0, index - 10), -1):
+        if direction == "up":
+            if candles[i].close > candles[i].open:
+                count += 1
+            elif candles[i].close == candles[i].open:
+                continue  # doji: neutral, don't break the streak
+            else:
+                break
+        elif direction == "down":
+            if candles[i].close < candles[i].open:
+                count += 1
+            elif candles[i].close == candles[i].open:
+                continue  # doji: neutral, don't break the streak
+            else:
+                break
+    return float(count)
+
+
+def _williams_r(candles: Sequence, index: int) -> float:
+    """Williams %R — range-based momentum indicator.
+
+    Returns -100 to 0. -80 = oversold, -20 = overbought.
+    """
+    if index < 14:
+        return -50.0
+    recent = candles[max(0, index - 13) : index + 1]
+    highest = max(c.high for c in recent)
+    lowest = min(c.low for c in recent)
+    if highest == lowest:
+        return -50.0
+    return -100.0 * ((highest - candles[index].close) / (highest - lowest))
+
+
+def _sar_below(candles: Sequence, index: int) -> bool:
+    """True if Parabolic SAR is below price (uptrend)."""
+    if index < 2:
+        return False
+    # Simple SAR approximation: use recent trend
+    if candles[index].close > candles[index - 1].close:
+        return True
+    return False
+
+
+def _sar_flipped(candles: Sequence, index: int) -> bool:
+    """True if Parabolic SAR flipped (trend reversal)."""
+    if index < 3:
+        return False
+    # Flip when price moves past previous SAR level
+    # Approximate: check if trend direction changed
+    was_down = candles[index - 2].close < candles[index - 3].close
+    is_up = candles[index].close > candles[index - 1].close
+    was_up = candles[index - 2].close > candles[index - 3].close
+    is_down = candles[index].close < candles[index - 1].close
+    return (was_down and is_up) or (was_up and is_down)
+
+
+def _chaikin_oscillator(candles: Sequence, index: int) -> float:
+    """Chaikin Oscillator — volume-weighted momentum.
+
+    Accumulation/Distribution Line rate of change.
+    Positive = buying pressure, negative = selling pressure.
+    """
+    if index < 3:
+        return 0.0
+    # Simplified: use volume * price change
+    recent = candles[max(0, index - 3) : index + 1]
+    accum = 0.0
+    for c in recent:
+        cpi = (c.close - c.low) / (c.high - c.low) if c.high != c.low else 0.5
+        accum += cpi * c.volume
+    return accum
+
+
+def _macd_histogram(candles: Sequence, index: int) -> float:
+    """MACD histogram value (MACD line - Signal line)."""
+    if index < 20:
+        return 0.0
+    closes = [c.close for c in candles[: index + 1]]
+    macd_line = _macd_line(closes, index)
+    signal_line = _macd_signal(closes, index)
+    return macd_line - signal_line
+
+
 def _mtf_gap(item: "mtf.Bias", price: float) -> float:
     """How far above its higher-timeframe average price sits, in basis points.
 
@@ -414,6 +743,20 @@ def compute_features(
         atr_window = [value for value in atr_values[index - 19 : index + 1] if value is not None]
         atr_average = mean(atr_window) if atr_window else atr_values[index]
 
+        # Average volume over last 20 candles
+        recent_vols = [item.volume for item in candles[index - 19 : index + 1] if item.volume > 0]
+        avg_volume = mean(recent_vols) if recent_vols else 1.0
+
+        # Average band width over last 20 candles for contraction detection
+        recent_band_widths = []
+        for j in range(max(0, index - 19), index + 1):
+            rc = closes[j - 19 : j + 1] if j >= 19 else closes[: j + 1]
+            if len(rc) >= 5:
+                bw = 2.0 * pstdev(rc)
+                if bw > 0:
+                    recent_band_widths.append(bw)
+        avg_band_width = mean(recent_band_widths) if recent_band_widths else band_width
+
         previous_gap = 0.0
         if ema_fast[index - 1] is not None and ema_slow[index - 1] is not None:
             previous_gap = _safe_ratio(ema_fast[index - 1] - ema_slow[index - 1], previous_close)
@@ -515,6 +858,7 @@ def compute_features(
         feature = {
             # model inputs (ordered in FEATURE_NAMES)
             "return_1": returns[index],
+            "return_1_prev": returns[index - 1] if index >= 1 else 0.0,
             "return_3": return_3,
             "return_5": return_5,
             "return_10": return_10,
@@ -611,9 +955,20 @@ def compute_features(
             "ema_slow_previous": ema_slow[index - 1] if ema_slow[index - 1] is not None else ema_slow[index],
             "rsi": rsi_values[index],
             "rsi_previous": rsi_previous,
+            "rsi_prev": rsi_previous,
+            "rsi_velocity": (rsi_values[index] - rsi_previous) if index >= 1 else 0.0,
+            "momentum_accel": (returns[index] - returns[index - 1]) if index >= 1 else 0.0,
+            "momentum_strength": returns[index] if index >= 0 else 0.0,
+            "candle_direction": 1.0 if candle.close > candle.open else (-1.0 if candle.close < candle.open else 0.0),
+            "range_atr_ratio": _safe_ratio(candle.high - candle.low, atr_values[index]),
+            "wick_ratio": _safe_ratio((candle.high - candle.low) - abs(candle.close - candle.open), atr_values[index]),
+            "body_atr": _safe_ratio(abs(body), atr_values[index]),
             "atr": atr_values[index],
             "atr_pct": _safe_ratio(atr_values[index], candle.close),
             "adx": adx_values[index],
+            "adx_prev": adx_values[index - 1] if index >= 1 and adx_values[index - 1] is not None else adx_values[index],
+            "consecutive_up": _consecutive_same_direction(candles, index, "up"),
+            "consecutive_down": _consecutive_same_direction(candles, index, "down"),
             "plus_di": plus_di_values[index],
             "minus_di": minus_di_values[index],
             "bb_mid": band_mid,
@@ -624,6 +979,7 @@ def compute_features(
             # scalping levels
             "stoch_k": stoch_k_values[index],
             "stoch_d": stoch_d_values[index],
+            "stoch_k_prev": stoch_k_values[index - 1] if index >= 1 and stoch_k_values[index - 1] is not None else stoch_k_values[index],
             "stoch_k_previous": (
                 stoch_k_values[index - 1] if stoch_k_values[index - 1] is not None else stoch_k_values[index]
             ),
@@ -657,6 +1013,53 @@ def compute_features(
             "supertrend_flipped": float(st_flip_vals[index]),
             "fvg_bull_active": float(fvg_bull_vals[index]),
             "fvg_bear_active": float(fvg_bear_vals[index]),
+            # New features for added patterns
+            "volume_ratio": _safe_ratio(candle.volume, avg_volume) if avg_volume > 0 else 1.0,
+            "breakout_high": float(prior_high) if candle.close > prior_high else 0.0,
+            "breakout_low": float(prior_low) if candle.close < prior_low else 0.0,
+            "liquidity_swept_low": float(prior_low) if candle.low <= prior_low * 0.999 else 0.0,
+            "liquidity_swept_high": float(prior_high) if candle.high >= prior_high * 1.001 else 0.0,
+            "triangle_flat_high": float(prior_high),
+            "triangle_rising_low": float(min(item.low for item in candles[index - 10:index])) if len(candles) >= 20 else 0.0,
+            "triangle_breakout": 1.0 if candle.close > prior_high else 0.0,
+            "rsi_divergence": _rsi_divergence_score(rsi_values, closes, index),
+            "bb_position": _safe_ratio(candle.close - band_mid, band_width, 0.5) if band_width > 0 else 0.5,
+            "bb_width": _safe_ratio(band_width, candle.close),
+            "bb_contracting": 1.0 if len(closes) >= 30 and band_width < avg_band_width else 0.0,
+            "donchian_high_20": float(prior_high),
+            "donchian_low_20": float(prior_low),
+            # Features for bear flag / MACD / ADX / RSI extreme / demand zone
+            "flag_direction": _flag_direction(candles, index),
+            "flag_breakout": 1.0 if candle.close > prior_high else 0.0,
+            "flag_tightness": _safe_ratio(band_width, candle.close),
+            "macd_line": _macd_line(closes, index),
+            "macd_signal": _macd_signal(closes, index),
+            "macd_previous": _macd_line(closes, index - 1),
+            "macd_signal_previous": _macd_signal(closes, index - 1),
+            "demand_zone_top": _demand_zone_top(candles, index),
+            "supply_zone_bottom": _supply_zone_bottom(candles, index),
+            # Features for breaker block / ATR channel / volume profile / wedge
+            "breaker_strength": _breaker_strength(candle),
+            "breakout_level": float(prior_high) if candle.close > prior_high else float(prior_low),
+            "atr_channel_upper": float(band_mid + 1.5 * atr_average),
+            "atr_channel_lower": float(band_mid - 1.5 * atr_average),
+            "volume_poc": 1.0 if candle.volume > avg_volume * 1.5 else 0.0,
+            "poc_price": _poc_price(candles, index),
+            "wick_rejection": _wick_rejection(candle),
+            "wedge_breakdown": 1.0 if candle.close < prior_low else 0.0,
+            "wedge_breakup": 1.0 if candle.close > prior_high else 0.0,
+            # Features for descending triangle / Kelly sizing
+            "descending_flat_low": _descending_flat_low(candles, index),
+            "descending_lower_high": _descending_lower_high(candles, index),
+            "descending_breakdown": 1.0 if candle.close < _descending_flat_low(candles, index) else 0.0,
+            "williams_r": _williams_r(candles, index),
+            "williams_r_prev": _williams_r(candles, index - 1),
+            "sar_below": 1.0 if _sar_below(candles, index) else 0.0,
+            "sar_flipped": 1.0 if _sar_flipped(candles, index) else 0.0,
+            "chaikin_osc": _chaikin_oscillator(candles, index),
+            "chaikin_osc_prev": _chaikin_oscillator(candles, index - 1),
+            "macd_histogram_prev": _macd_histogram(candles, index - 1),
+            "win_probability": _win_probability(rsi_values, closes, index),
             "ob_bull_tap": float(ob_bull_vals[index]),
             "ob_bear_tap": float(ob_bear_vals[index]),
             "atr_pips": atr_values[index] / pip,
