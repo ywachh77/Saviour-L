@@ -1366,6 +1366,65 @@ class OperatorRuntime:
                 "store_errors": self.store.errors[-8:],
             }
 
+    def neural_train_action(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Trigger neural AI training from dashboard."""
+        import tempfile
+        import os
+
+        try:
+            from fusion.neural.trainer import NeuralTrainer, TrainingConfig
+            from fusion.neural.architecture import NeuralConfig
+            from fusion.neural.registry import ModelRegistry
+            from fusion.neural.memory import NeuralMemory
+            from fusion.domain import Candle
+
+            # Load candles
+            candles_path = body.get("candles_path", "var/real_candles/eurusd_real_20261030.json")
+            if not os.path.exists(candles_path):
+                return {"ok": False, "error": f"Candles file not found: {candles_path}"}
+
+            import json
+            with open(candles_path) as f:
+                rows = json.load(f)
+            rows.reverse()
+
+            candles = []
+            for r in rows:
+                ts = Candle.from_mapping(r).timestamp
+                candles.append(Candle(
+                    timestamp=ts, open=float(r["o"]), high=float(r["h"]),
+                    low=float(r["l"]), close=float(r["c"]),
+                    volume=float(r.get("v", 0)),
+                ))
+
+            # Train
+            neural_dir = getattr(self.config, "neural_dir", "neural")
+            checkpoint_dir = os.path.join(neural_dir, "checkpoints")
+            epochs = int(body.get("epochs", 30))
+            trainer = NeuralTrainer(
+                TrainingConfig(epochs=epochs, patience=5, checkpoint_dir=checkpoint_dir),
+                NeuralConfig(),
+            )
+            report = trainer.train(candles)
+
+            # Register candidate
+            registry = ModelRegistry(
+                os.path.join(neural_dir, "registry.json"), checkpoint_dir
+            )
+            registry.register_candidate(
+                report.model_version, report,
+                f"{checkpoint_dir}/{report.model_version}.pt",
+            )
+
+            return {
+                "ok": True,
+                "model_version": report.model_version,
+                "epochs": report.total_epochs,
+                "test_metrics": report.test_metrics,
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def needle_status_payload(self) -> dict[str, Any]:
         with self.lock:
             partner = self.bot._get_cognitive_partner()
@@ -1375,6 +1434,45 @@ class OperatorRuntime:
                 "cognitive": partner.status_summary(self.bot),
                 **self.needle.status(),
             }
+
+    def neural_payload(self) -> dict[str, Any]:
+        """Neural AI dashboard snapshot — model health, training, and predictions."""
+        with self.lock:
+            try:
+                from fusion.neural.registry import ModelRegistry
+                from fusion.neural.predictor import NeuralPredictor
+                from fusion.neural.architecture import NeuralConfig
+
+                neural_dir = getattr(self.config, "neural_dir", "neural")
+                registry_path = os.path.join(neural_dir, "registry.json")
+                checkpoint_dir = os.path.join(neural_dir, "checkpoints")
+
+                registry = ModelRegistry(registry_path, checkpoint_dir)
+                prod = registry.get_production_version()
+
+                payload: dict[str, Any] = {
+                    "ok": True,
+                    "has_model": prod is not None,
+                    "production_version": prod.version if prod else None,
+                    "version_count": len(registry.versions),
+                    "candidates": [
+                        v.to_dict() for v in registry.versions
+                        if v.status == "CANDIDATE"
+                    ],
+                    "history": [v.to_dict() for v in registry.versions],
+                }
+
+                if prod is not None:
+                    try:
+                        predictor = NeuralPredictor.from_checkpoint(prod.checkpoint_path)
+                        health = predictor.get_health()
+                        payload["model_health"] = health
+                    except Exception as e:
+                        payload["model_health"] = {"error": str(e)}
+
+                return payload
+            except Exception as e:
+                return {"ok": False, "error": str(e), "has_model": False}
 
     def learning_payload(self) -> dict[str, Any]:
         """Full self-improvement, 6-family fusion, auto-backtest, and cognitive memory snapshot."""
@@ -3041,6 +3139,10 @@ def make_handler(runtime: OperatorRuntime):
                 self._send_json(runtime.needle_status_payload())
                 return
 
+            if route == "/api/neural":
+                self._send_json(runtime.neural_payload())
+                return
+
             if route == "/api/learning":
                 self._send_json(runtime.learning_payload())
                 return
@@ -3132,6 +3234,10 @@ def make_handler(runtime: OperatorRuntime):
 
                 if route == "/api/control":
                     self._send_json(runtime.control_action(str(body.get("action", ""))))
+                    return
+
+                if route == "/api/neural/train":
+                    self._send_json(runtime.neural_train_action(body))
                     return
 
                 if route == "/api/telegram/command":
