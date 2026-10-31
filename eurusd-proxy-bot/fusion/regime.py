@@ -122,20 +122,101 @@ ALLOWED = {
     # while passive mean-reversion scalps sit out.
     VOLATILE: frozenset({"orbix_confluence", "breakout", "smc_liquidity_sweep"})
     | CONTINUATION_SCALPS
-    | frozenset({"smc_fvg_displacement", "ttm_keltner_squeeze", "supertrend_flip", "session_box_breakout"}),
+    | frozenset({"scalp_momentum_burst", "scalp_adx_surge", "scalp_candle_cluster", "scalp_ema_cross_scalp"})
+    | frozenset({"smc_fvg_displacement", "ttm_keltner_squeeze", "supertrend_flip", "session_box_breakout"})
+    | frozenset({
+        "smc_liquidity_grab", "smc_ascending_triangle", "smc_bear_flag", "smc_bull_flag",
+        "smc_demand_zone", "smc_breaker_block", "smc_ascending_wedge", "smc_descending_triangle",
+        "viral_rsi_divergence", "viral_macd_cross", "viral_adx_trend", "viral_rsi_trend",
+        "viral_macd_histogram", "viral_volume_profile", "viral_ema_cross", "viral_stochastic_trend",
+        "viral_williams_r",
+        "quant_bollinger_bounce", "quant_donchian_breakout", "quant_rsi_extreme",
+        "quant_atr_channel", "quant_vwap_trend", "quant_kelly_sizing",
+        "quant_parabolic_sar", "quant_chaikin_oscillator",
+        "smc_short_trend", "smc_micro_fvg",
+        "smc_wick_continuation", "smc_order_flow",
+        "viral_rsi_velocity", "viral_momentum_convergence",
+        "quant_range_breakout",
+        "smc_trend_micro", "smc_sweep_reversal", "viral_stoch_velocity", "viral_close_momentum", "quant_ema_slope",
+        "smc_trend_follow", "smc_candle_direction", "viral_momentum_burst", "viral_price_action", "quant_donchian_slope",
+        "smc_trend_streak", "smc_order_flow_imbalance", "viral_rsi_extreme_follow", "viral_price_velocity", "quant_breakout_volume",
+        "smc_micro_trend", "smc_candle_cluster_trend", "viral_ema_slope_momentum", "viral_donchian_trend", "quant_rsi_momentum",
+        "smc_close_extreme", "smc_doji_trend", "viral_momentum_continuation", "viral_range_position", "quant_trend_strength",
+        "smc_vwap_position", "smc_trend_pullback_micro", "viral_rsi_zone", "viral_candle_velocity", "quant_price_action_swing",
+        "smc_trend_resilience", "smc_order_block_micro", "viral_momentum_persistence", "viral_close_position_momentum", "quant_ema_separation",
+        "smc_trend_override", "smc_wick_direction", "viral_trend_channel", "viral_volume_position", "quant_adx_threshold",
+        "smc_moderate_trend", "smc_moderate_candle", "viral_moderate_momentum", "viral_moderate_confluence", "quant_moderate_range",
+        "smc_low_atr_trend", "smc_low_atr_candle", "viral_low_atr_momentum", "viral_low_atr_confluence", "quant_low_atr_range",
+        "viral_momentum_sprint", "viral_stoch_momentum",
+        "quant_ema_velocity",
+        "flow_imbalance_scalp", "vpin_breakout_scalp", "smart_money_scalp", "liquidity_gap_scalp", "kyle_impact_scalp", "session_velocity_scalp", "tick_imbalance_scalp",
+    }),
     # Directional pressure present: continuation plus pullback-to-value & order blocks.
     TREND: frozenset(
         {"orbix_confluence", "ml_consensus", "trend_pullback", "breakout", "orbix_cadence"}
     )
     | CONTINUATION_SCALPS
     | TREND_SCALPS
+    | frozenset({"scalp_momentum_burst", "scalp_rsi_sprint", "scalp_adx_surge", "scalp_candle_cluster", "scalp_ema_cross_scalp"})
     | CONTINUATION_METHODS
-    | frozenset({"scalp_vwap_reversion", "smc_order_block", "connors_rsi2_reversion"}),
+    | frozenset({"scalp_vwap_reversion", "smc_order_block", "connors_rsi2_reversion"})
+    | frozenset({
+        "smc_liquidity_grab", "smc_ascending_triangle", "smc_bear_flag", "smc_bull_flag",
+        "smc_demand_zone", "smc_breaker_block", "smc_ascending_wedge", "smc_descending_triangle",
+        "viral_rsi_divergence", "viral_macd_cross", "viral_adx_trend", "viral_rsi_trend",
+        "viral_macd_histogram", "viral_volume_profile", "viral_ema_cross", "viral_stochastic_trend",
+        "viral_williams_r",
+        "quant_bollinger_bounce", "quant_donchian_breakout", "quant_rsi_extreme",
+        "quant_atr_channel", "quant_vwap_trend", "quant_kelly_sizing",
+        "quant_parabolic_sar", "quant_chaikin_oscillator",
+        "smc_short_trend", "smc_micro_fvg",
+        "smc_wick_continuation", "smc_order_flow",
+        "viral_rsi_velocity", "viral_momentum_convergence",
+        "quant_range_breakout",
+        "smc_trend_micro", "smc_sweep_reversal", "viral_stoch_velocity", "viral_close_momentum", "quant_ema_slope",
+        "smc_trend_follow", "smc_candle_direction", "viral_momentum_burst", "viral_price_action", "quant_donchian_slope",
+        "smc_trend_streak", "smc_order_flow_imbalance", "viral_rsi_extreme_follow", "viral_price_velocity", "quant_breakout_volume",
+        "smc_micro_trend", "smc_candle_cluster_trend", "viral_ema_slope_momentum", "viral_donchian_trend", "quant_rsi_momentum",
+        "smc_close_extreme", "smc_doji_trend", "viral_momentum_continuation", "viral_range_position", "quant_trend_strength",
+        "smc_vwap_position", "smc_trend_pullback_micro", "viral_rsi_zone", "viral_candle_velocity", "quant_price_action_swing",
+        "smc_trend_resilience", "smc_order_block_micro", "viral_momentum_persistence", "viral_close_position_momentum", "quant_ema_separation",
+        "smc_trend_override", "smc_wick_direction", "viral_trend_channel", "viral_volume_position", "quant_adx_threshold",
+        "smc_moderate_trend", "smc_moderate_candle", "viral_moderate_momentum", "viral_moderate_confluence", "quant_moderate_range",
+        "smc_low_atr_trend", "smc_low_atr_candle", "viral_low_atr_momentum", "viral_low_atr_confluence", "quant_low_atr_range",
+        "viral_momentum_sprint", "viral_stoch_momentum",
+        "quant_ema_velocity",
+        "flow_imbalance_scalp", "vpin_breakout_scalp", "smart_money_scalp", "liquidity_gap_scalp", "kyle_impact_scalp", "session_velocity_scalp", "tick_imbalance_scalp",
+    }),
     # No directional pressure: this is where fading the edges & liquidity sweeps belong.
     RANGE: frozenset({"orbix_confluence", "ml_consensus", "range_reversal", "orbix_cadence"})
     | REVERSION_SCALPS
     | TREND_SCALPS
-    | REVERSION_METHODS,
+    | frozenset({"scalp_momentum_burst", "scalp_rsi_sprint", "scalp_candle_cluster", "scalp_ema_cross_scalp"})
+    | REVERSION_METHODS
+    | frozenset({
+        "smc_liquidity_grab", "smc_ascending_triangle", "smc_demand_zone", "smc_breaker_block",
+        "smc_descending_triangle",
+        "viral_rsi_divergence", "viral_macd_histogram", "viral_volume_profile", "viral_williams_r",
+        "quant_bollinger_bounce", "quant_rsi_extreme", "quant_vwap_trend", "quant_kelly_sizing",
+        "quant_parabolic_sar", "quant_chaikin_oscillator",
+        "smc_short_trend", "smc_micro_fvg",
+        "smc_wick_continuation", "smc_order_flow",
+        "viral_rsi_velocity", "viral_momentum_convergence",
+        "quant_range_breakout",
+        "smc_trend_micro", "smc_sweep_reversal", "viral_stoch_velocity", "viral_close_momentum", "quant_ema_slope",
+        "smc_trend_follow", "smc_candle_direction", "viral_momentum_burst", "viral_price_action", "quant_donchian_slope",
+        "smc_trend_streak", "smc_order_flow_imbalance", "viral_rsi_extreme_follow", "viral_price_velocity", "quant_breakout_volume",
+        "smc_micro_trend", "smc_candle_cluster_trend", "viral_ema_slope_momentum", "viral_donchian_trend", "quant_rsi_momentum",
+        "smc_close_extreme", "smc_doji_trend", "viral_momentum_continuation", "viral_range_position", "quant_trend_strength",
+        "smc_vwap_position", "smc_trend_pullback_micro", "viral_rsi_zone", "viral_candle_velocity", "quant_price_action_swing",
+        "smc_trend_resilience", "smc_order_block_micro", "viral_momentum_persistence", "viral_close_position_momentum", "quant_ema_separation",
+        "smc_trend_override", "smc_wick_direction", "viral_trend_channel", "viral_volume_position", "quant_adx_threshold",
+        "smc_moderate_trend", "smc_moderate_candle", "viral_moderate_momentum", "viral_moderate_confluence", "quant_moderate_range",
+        "smc_low_atr_trend", "smc_low_atr_candle", "viral_low_atr_momentum", "viral_low_atr_confluence", "quant_low_atr_range",
+        "viral_momentum_sprint", "viral_stoch_momentum",
+        "quant_ema_velocity",
+        "flow_imbalance_scalp", "vpin_breakout_scalp", "smart_money_scalp", "liquidity_gap_scalp", "kyle_impact_scalp", "session_velocity_scalp", "tick_imbalance_scalp",
+    }),
 }
 
 

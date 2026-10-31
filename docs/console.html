@@ -60,53 +60,23 @@
         <span class="nav-name">Signals</span>
         <span class="nav-jp" lang="ja">信号</span>
       </button>
-      <button type="button" class="nav-item" data-nav="telegram">
-        <span class="nav-idx mono">02</span>
-        <span class="nav-name">Telegram</span>
-        <span class="nav-jp" lang="ja">電信</span>
-      </button>
       <button type="button" class="nav-item" data-nav="health">
-        <span class="nav-idx mono">03</span>
+        <span class="nav-idx mono">02</span>
         <span class="nav-name">Health</span>
         <span class="nav-jp" lang="ja">健全</span>
       </button>
-      <button type="button" class="nav-item" data-nav="strategies">
-        <span class="nav-idx mono">04</span>
-        <span class="nav-name">Strategies</span>
-        <span class="nav-jp" lang="ja">戦術</span>
-      </button>
-      <button type="button" class="nav-item" data-nav="credentials">
-        <span class="nav-idx mono">05</span>
-        <span class="nav-name">Credentials</span>
-        <span class="nav-jp" lang="ja">機密</span>
-      </button>
       <button type="button" class="nav-item" data-nav="risk">
-        <span class="nav-idx mono">06</span>
+        <span class="nav-idx mono">03</span>
         <span class="nav-name">Risk &amp; Charter</span>
         <span class="nav-jp" lang="ja">規律</span>
       </button>
-      <button type="button" class="nav-item" data-nav="combiner">
-        <span class="nav-idx mono">07</span>
-        <span class="nav-name">Combiner</span>
-        <span class="nav-jp" lang="ja">融合</span>
-      </button>
-      <button type="button" class="nav-item" data-nav="generator">
-        <span class="nav-idx mono">08</span>
-        <span class="nav-name">Generator</span>
-        <span class="nav-jp" lang="ja">生成</span>
-      </button>
       <button type="button" class="nav-item" data-nav="indicators">
-        <span class="nav-idx mono">09</span>
+        <span class="nav-idx mono">04</span>
         <span class="nav-name">Indicators</span>
         <span class="nav-jp" lang="ja">指標</span>
       </button>
-      <button type="button" class="nav-item" data-nav="surveillance">
-        <span class="nav-idx mono">10</span>
-        <span class="nav-name">Surveillance</span>
-        <span class="nav-jp" lang="ja">監視</span>
-      </button>
       <button type="button" class="nav-item" data-nav="winstreak">
-        <span class="nav-idx mono">11</span>
+        <span class="nav-idx mono">05</span>
         <span class="nav-name">Win Streak</span>
         <span class="nav-jp" lang="ja">勝率連続</span>
       </button>
@@ -187,10 +157,8 @@
           <div class="field-group">
             <span class="field-label">Target Market</span>
             <div class="seg-group" id="sig-pair-tabs" role="group" aria-label="Select market">
-              <button type="button" class="seg is-active" data-pair="ALL">ALL (3)</button>
+              <button type="button" class="seg is-active" data-pair="ALL">ALL</button>
               <button type="button" class="seg" data-pair="EUR/USD">EUR/USD</button>
-              <button type="button" class="seg" data-pair="BTC/USD">BTC/USD</button>
-              <button type="button" class="seg" data-pair="ETH/USD">ETH/USD</button>
             </div>
           </div>
 
@@ -237,8 +205,21 @@
         <div class="empty-stage">
           <p class="empty-jp" lang="ja">待機中</p>
           <p class="empty-title">Press <strong>Generate Signal</strong> to evaluate the upcoming next candle in <strong>UTC+05:30</strong>.</p>
-          <p class="empty-sub">Choose your expiry period (1m / 3m / 30m) above. Every evaluation uses strictly completed bars to target the next future candle open (never an ongoing or past bar), with 5m/15m/60m MTF alignment and 1% ATR sizing.</p>
+          <p class="empty-sub">EUR/USD only. Every evaluation uses strictly completed bars to target the next future candle open (never an ongoing or past bar), with 5m/15m/60m MTF alignment and 1% ATR sizing.</p>
         </div>
+      </div>
+
+      <!-- Signal Results — Instant Outcomes + Auto-Learning -->
+      <div class="panel" id="results-panel" style="display:none;">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">SIGNAL RESULTS // AUTO-SETTLED // SELF-LEARNING</p>
+            <h2 class="panel-title">Outcome Tracker &amp; Loss Analyzer</h2>
+          </div>
+          <div class="mono dim" id="results-summary">—</div>
+        </div>
+        <div id="results-learning" class="learning-banner" style="display:none;"></div>
+        <div id="results-list" class="results-table-wrap"></div>
       </div>
 
       <!-- Live 3-Market Tape -->
@@ -286,190 +267,7 @@
     <!-- =================================================================
          PAGE 02 : TELEGRAM (電信)
          ================================================================= -->
-    <section class="page" id="page-telegram" data-page="telegram">
-      <div class="grid-2">
-        <div class="panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow mono">OWNER-ONLY TRANSPORT</p>
-              <h2 class="panel-title">Telegram Dispatch Status</h2>
-            </div>
-            <span class="pill" id="tg-conn-pill">CHECKING</span>
-          </div>
-          <dl class="kv-list">
-            <div class="kv"><dt>Bot Token</dt><dd class="mono" id="tg-token-mask">Not set</dd></div>
-            <div class="kv"><dt>Owner Chat ID</dt><dd class="mono" id="tg-owner-mask">Not set</dd></div>
-            <div class="kv"><dt>Update Offset Cursor</dt><dd class="mono" id="tg-offset">0</dd></div>
-            <div class="kv"><dt>Pending Outbox</dt><dd class="mono" id="tg-pending">0</dd></div>
-            <div class="kv"><dt>Output Format</dt><dd class="mono" id="tg-active-style">standard / standard</dd></div>
-            <div class="kv"><dt>Delivery Law</dt><dd>SENT recorded only on confirmed message_id</dd></div>
-          </dl>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow mono">DIRECT COMMAND CONSOLE</p>
-              <h2 class="panel-title">Execute Bot Commands</h2>
-            </div>
-          </div>
-          <p class="panel-desc">Run any of the six owner commands directly inside the web console. Enable chat mirror only when you also want a copy sent to your phone.</p>
-          <div class="cmd-grid" id="tg-cmd-buttons">
-            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/status">/status</button>
-            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/signals">/signals</button>
-            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/pause">/pause</button>
-            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/resume">/resume</button>
-            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/start">/start</button>
-            <button type="button" class="btn btn-ghost mono cmd-btn" data-cmd="/help">/help</button>
-          </div>
-          <label class="check-field mt-sm">
-            <input type="checkbox" id="tg-mirror-chat">
-            <span>Also send reply to Telegram chat (requires token)</span>
-          </label>
-          <pre class="terminal-box mono" id="tg-terminal-output">Select a command above to inspect the live bot response.</pre>
-        </div>
-      </div>
-
-      <div class="panel" id="needle-router-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">SAVIOUR &times; CACTUS NEEDLE 3 // HUMAN COGNITIVE STRATEGIST &amp; SELF-HEALING AI</p>
-            <h2 class="panel-title">Autonomous Partner, Tool Router &amp; Error Rectifier</h2>
-          </div>
-          <div class="btn-row">
-            <span class="pill" id="cog-stage-pill">SENTINEL</span>
-            <span class="pill pill-live" id="needle-engine-pill">READY</span>
-          </div>
-        </div>
-        <p class="panel-desc">Converse naturally with SAVIOUR like a human quant researcher, route plain-English commands across all 9 fine-tuned Needle 3 tools (<span class="mono">NEEDLE_TELEMETRY=0</span>), trigger walk-forward backtests, or run autonomous error detection &amp; self-rectification. Every settled trade updates SAVIOUR's post-mortem memory.</p>
-
-        <div class="config-grid">
-          <label class="field" style="grid-column: 1 / -1;">
-            <span class="field-label">Talk to SAVIOUR, Issue a Command, or Paste a Macro Headline</span>
-            <input type="text" id="needle-query-input" class="input mono" placeholder="e.g. Hey SAVIOUR, how are our trades?  |  find any errors and fix them  |  run walk-forward backtest">
-          </label>
-        </div>
-
-        <div class="action-bar mt-sm">
-          <button type="button" class="btn btn-primary" id="btn-needle-run">Send to SAVIOUR</button>
-          <button type="button" class="btn btn-ghost" id="btn-self-heal">Self-Heal &amp; Rectify</button>
-          <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="Hey SAVIOUR, how are our trades looking and what did you learn recently?">Ask Human Reflection</button>
-          <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="run walk-forward backtest across all markets">Run Auto-Backtest</button>
-          <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="find any errors or flaws and fix them automatically">Detect &amp; Fix Flaws</button>
-          <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="scan btc/usd right now">Scan BTC/USD</button>
-          <button type="button" class="btn btn-ghost mono needle-sample-btn" data-query="Breaking headline: US CPI inflation comes in hot at 3.8%, USD spikes across majors">Test CPI Shock</button>
-        </div>
-
-        <pre class="terminal-box mono mt-sm" id="needle-terminal-output">SAVIOUR × Needle 3 Cognitive Partner ready. Ask how trades are performing, run a backtest, or command any subsystem above.</pre>
-      </div>
-
-      <div class="panel" id="tg-format-studio-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">CUSTOMISABLE MESSAGE TEMPLATES</p>
-            <h2 class="panel-title">Telegram Output Format Studio</h2>
-          </div>
-          <div class="btn-row">
-            <button type="button" class="btn btn-sm btn-ghost" id="btn-reset-tg-format">Reset Default</button>
-            <button type="button" class="btn btn-sm btn-primary" id="btn-save-tg-format">Save Output Format</button>
-          </div>
-        </div>
-        <p class="panel-desc">Choose a clean preset or compose your own <span class="mono">{placeholder}</span> layout for live signal dispatches and cost-charged <span class="mono">RESULT</span> settlements. Saved settings persist to runtime state and sync across scheduled runs while keeping all six Telegram commands unchanged.</p>
-
-        <div class="config-grid">
-          <label class="field">
-            <span class="field-label">Signal Dispatch Style</span>
-            <select id="tg-sig-style" class="input mono">
-              <option value="standard">standard — Full Audit (8 lines)</option>
-              <option value="brief">brief — 4-Field Phone Read</option>
-              <option value="tactical">tactical — Structured Desk Seal</option>
-              <option value="compact">compact — Single-Line Ticker</option>
-              <option value="custom">custom — User {placeholder} Template</option>
-            </select>
-          </label>
-
-          <label class="field">
-            <span class="field-label">Settlement (RESULT) Style</span>
-            <select id="tg-res-style" class="input mono">
-              <option value="standard">standard — Full Ledger Verdict</option>
-              <option value="compact">compact — Single-Line Result</option>
-              <option value="custom">custom — User {placeholder} Template</option>
-            </select>
-          </label>
-
-          <div class="config-block">
-            <span class="field-label">Format Scope &amp; Charter Guard</span>
-            <div class="inline-checks">
-              <label class="check-field">
-                <input type="checkbox" id="tg-apply-cmd">
-                <span>Apply signal style to <span class="mono">/signals</span> command too</span>
-              </label>
-              <label class="check-field">
-                <input type="checkbox" id="tg-paper-footer" checked>
-                <span>Ensure paper-research notice on custom templates</span>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <div class="grid-2 mt-md" id="tg-custom-editors">
-          <div class="fmt-editor-box">
-            <div class="fmt-editor-head">
-              <span class="field-label">Custom Signal Template</span>
-              <span class="mono dim fmt-hint">Click token to insert</span>
-            </div>
-            <div class="token-bar" id="tg-sig-tokens"></div>
-            <textarea id="tg-sig-template" class="input mono fmt-textarea" rows="5" spellcheck="false" placeholder="{pair} {side} ({horizon}m) #{short_id}&#10;Entry: {entry_hm} UTC+05:30 -> Expiry: {expiry_hm} UTC+05:30&#10;Regime: {regime} | Model: {probability}&#10;Gate: {reason}"></textarea>
-          </div>
-
-          <div class="fmt-editor-box">
-            <div class="fmt-editor-head">
-              <span class="field-label">Custom Settlement (RESULT) Template</span>
-              <span class="mono dim fmt-hint">UNRESOLVED honesty enforced</span>
-            </div>
-            <div class="token-bar" id="tg-res-tokens"></div>
-            <textarea id="tg-res-template" class="input mono fmt-textarea" rows="5" spellcheck="false" placeholder="RESULT {pair} {side} #{short_id} -> {verdict}&#10;Fill: {entry_price} -> {exit_price}&#10;Gross {gross_pips}p | Cost {spread_pips}p | Net {net_pips}p"></textarea>
-          </div>
-        </div>
-
-        <div class="grid-2 mt-md">
-          <div class="preview-pane">
-            <span class="field-label mono">LIVE SIGNAL PREVIEW</span>
-            <pre class="terminal-box mono preview-box" id="tg-preview-signal"></pre>
-          </div>
-          <div class="preview-pane">
-            <span class="field-label mono">LIVE SETTLEMENT (RESULT) PREVIEW</span>
-            <pre class="terminal-box mono preview-box" id="tg-preview-result"></pre>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">AUDIT TRAIL</p>
-            <h2 class="panel-title">Outbox Delivery Queue</h2>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Message Key</th>
-                <th>Kind</th>
-                <th>State</th>
-                <th>Attempts</th>
-                <th>Detail</th>
-              </tr>
-            </thead>
-            <tbody id="tg-outbox-tbody">
-              <tr><td colspan="5" class="dim">Outbox is clean.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
+    
     <!-- =================================================================
          PAGE 03 : HEALTH (健全)
          ================================================================= -->
@@ -527,298 +325,11 @@
     <!-- =================================================================
          PAGE 04 : STRATEGIES (戦術)
          ================================================================= -->
-    <section class="page" id="page-strategies" data-page="strategies">
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">LIVE RUNTIME GATES</p>
-            <h2 class="panel-title">Engine Filter Configuration</h2>
-          </div>
-          <button type="button" class="btn btn-sm btn-primary" id="btn-save-config">Apply Changes</button>
-        </div>
-
-        <div class="config-grid" id="strat-config-form">
-          <div class="config-block">
-            <span class="field-label">Enabled Spot Markets</span>
-            <div class="inline-checks">
-              <label class="check-field"><input type="checkbox" name="cfg-pair" value="EUR/USD" checked><span>EUR/USD</span></label>
-              <label class="check-field"><input type="checkbox" name="cfg-pair" value="BTC/USD" checked><span>BTC/USD</span></label>
-              <label class="check-field"><input type="checkbox" name="cfg-pair" value="ETH/USD" checked><span>ETH/USD</span></label>
-            </div>
-          </div>
-
-          <div class="config-block">
-            <span class="field-label">Higher-Timeframe MTF Filter</span>
-            <div class="inline-checks">
-              <label class="check-field"><input type="checkbox" id="cfg-mtf" checked><span>Require MTF Trend Agreement</span></label>
-              <select id="cfg-mtf-min" class="input input-sm mono">
-                <option value="15" selected>15m Structure</option>
-                <option value="5">5m Structure</option>
-              </select>
-              <select id="cfg-mtf-gap" class="input input-sm mono" aria-label="MTF Clear-Trend Dead-Zone">
-                <option value="0">Dead-Zone: 0.0 bps</option>
-                <option value="1.5">Dead-Zone: 1.5 bps</option>
-                <option value="2.0" selected>Dead-Zone: 2.0 bps (-39% MDD)</option>
-                <option value="3.0">Dead-Zone: 3.0 bps</option>
-              </select>
-              <label class="check-field"><input type="checkbox" id="cfg-mtf-macro"><span>60m Macro Slope Gate</span></label>
-            </div>
-          </div>
-
-          <div class="config-block">
-            <span class="field-label">Execution Shields</span>
-            <div class="inline-checks">
-              <label class="check-field"><input type="checkbox" id="cfg-news" checked><span>Macro / US NFP Blackout</span></label>
-              <label class="check-field"><input type="checkbox" id="cfg-adaptive" checked><span>Adaptive Cost Horizon</span></label>
-              <label class="check-field"><input type="checkbox" id="cfg-session"><span>FX Session Filter</span></label>
-              <label class="check-field"><input type="checkbox" id="cfg-rollover" checked><span>FX Friday 21:55Z Rollover Guard</span></label>
-            </div>
-          </div>
-
-          <div class="config-block">
-            <span class="field-label">Drawdown &amp; De-Clustering Protections</span>
-            <div class="inline-checks">
-              <select id="cfg-cooldown" class="input input-sm mono" aria-label="Signal Cooldown">
-                <option value="0">Cooldown: Off (0m)</option>
-                <option value="15" selected>Cooldown: 15m (-73% MDD)</option>
-                <option value="30">Cooldown: 30m</option>
-                <option value="60">Cooldown: 60m</option>
-              </select>
-              <select id="cfg-loss-streak" class="input input-sm mono" aria-label="Stoploss Streak Guard">
-                <option value="0">StoplossGuard: Off</option>
-                <option value="2">2 Losses -&gt; 60m Pause</option>
-                <option value="3" selected>3 Losses -&gt; 60m Pause</option>
-                <option value="4">4 Losses -&gt; 60m Pause</option>
-              </select>
-              <label class="check-field"><input type="checkbox" id="cfg-shadow-recovery" checked><span>Shadow-Win Streak Recovery</span></label>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel" id="family-fusion-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">HIERARCHICAL ENSEMBLE // 6 MERGED FAMILIES + 10 PAIRWISE SYNERGIES</p>
-            <h2 class="panel-title">Merged Strategic Family Fusion Matrix</h2>
-          </div>
-          <div class="seg-group" id="fam-pair-tabs" role="group" aria-label="Select family fusion market">
-            <button type="button" class="seg is-active" data-fam-pair="EUR/USD">EUR/USD</button>
-            <button type="button" class="seg" data-fam-pair="BTC/USD">BTC/USD</button>
-            <button type="button" class="seg" data-fam-pair="ETH/USD">ETH/USD</button>
-          </div>
-        </div>
-        <p class="panel-desc">Fuses <span class="mono">CORE_GATE</span>, <span class="mono">CLASSIC_COUNCIL</span>, <span class="mono">MICRO_SCALPING</span>, <span class="mono">SMC_ICT</span>, <span class="mono">VIRAL_MOMENTUM</span>, and <span class="mono">QUANT_SCALP</span> via empirical-Bayes shrinkage, cross-family confluence synergy, and multi-family veto protection when opposing families exceed <span class="mono">0.30</span> mass.</p>
-        <div class="family-matrix-grid" id="family-matrix-grid"></div>
-        <div class="synergy-strip mt-sm" id="synergy-strip"></div>
-      </div>
-
-      <div class="panel" id="auto-backtest-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">PURGED WALK-FORWARD ENGINE // EVERY-TRADE POST-MORTEM MEMORY</p>
-            <h2 class="panel-title">Automatic Backtesting &amp; Self-Improvement Ledger</h2>
-          </div>
-          <div class="btn-row">
-            <button type="button" class="btn btn-sm btn-ghost" id="btn-refresh-learning">Refresh Memory</button>
-            <button type="button" class="btn btn-sm btn-primary" id="btn-run-backtest">Run Walk-Forward Backtest</button>
-          </div>
-        </div>
-        <p class="panel-desc">Executes purged 4-fold walk-forward backtests automatically as candles and settlements arrive, deducts full round-turn spread on every trade, tunes merged family weights on real market candles, and records SAVIOUR's trade-by-trade learning journal.</p>
-
-        <div class="grid-3" id="backtest-summary-cards"></div>
-
-        <div class="mt-md">
-          <span class="field-label mono">TRADE-BY-TRADE LEARNING JOURNAL &amp; RECTIFICATION LOG</span>
-          <div class="learning-journal-list mt-sm" id="learning-journal-list">
-            <p class="dim mono">Loading trade reflections and walk-forward telemetry...</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Archival Bleach Manga Chronicle Gallery -->
-      <div class="panel" id="manga-gallery-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">SEIREITEI ARCHIVE // THOUSAND-YEAR BLOOD WAR PLATES</p>
-            <h2 class="panel-title">Shinigami Tactical Chronicle</h2>
-          </div>
-          <span class="mono dim">SUMI-INK &amp; CINNABAR REGISTER</span>
-        </div>
-        <div class="console-manga-gallery">
-          <figure class="console-manga-item">
-            <img src="assets/manga/gotei-captains.webp" alt="Gotei 13 Captains Council" loading="lazy">
-            <figcaption class="mono">GOTEI XIII // 22-MEMBER COUNCIL</figcaption>
-          </figure>
-          <figure class="console-manga-item">
-            <img src="assets/manga/vasto-ulquiorra.jpg" alt="Resurreccion Cold Discipline" loading="lazy">
-            <figcaption class="mono">COLD VETO // ZERO EMOTION</figcaption>
-          </figure>
-          <figure class="console-manga-item">
-            <img src="assets/manga/shunsui-bankai.jpg" alt="Katen Kyokotsu Karamatsu Shinju" loading="lazy">
-            <figcaption class="mono">CAPTAIN-COMMANDER // RISK SEAL</figcaption>
-          </figure>
-          <figure class="console-manga-item">
-            <img src="assets/manga/bankai-clash.jpg" alt="Bankai Horizon Strike" loading="lazy">
-            <figcaption class="mono">BANKAI // CONFLUENCE STRIKE</figcaption>
-          </figure>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">101,803 REAL EUR/USD M1 BARS // AUG – OCT 2026</p>
-            <h2 class="panel-title">Out-of-Sample Empirical Benchmark</h2>
-          </div>
-        </div>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Configuration (London/NY 07–17Z, 1.20p spread charged)</th>
-                <th>Train WR (Aug–Sep)</th>
-                <th>Train Net / Trade</th>
-                <th>OOS WR (Oct)</th>
-                <th>OOS Net / Trade</th>
-              </tr>
-            </thead>
-            <tbody id="strat-bench-tbody">
-              <tr>
-                <td>Core Confluence (unfiltered 60m)</td>
-                <td class="mono">51.49%</td>
-                <td class="mono">-0.513 pips</td>
-                <td class="mono">57.47%</td>
-                <td class="mono">-0.116 pips</td>
-              </tr>
-              <tr>
-                <td><strong>Core + 15m MTF Alignment (active)</strong></td>
-                <td class="mono">52.21%</td>
-                <td class="mono">-0.312 pips</td>
-                <td class="mono">58.51%</td>
-                <td class="mono pos">+0.338 pips</td>
-              </tr>
-              <tr>
-                <td><strong>scalp_expansion Prototype (active)</strong></td>
-                <td class="mono">54.86%</td>
-                <td class="mono pos">+0.378 pips</td>
-                <td class="mono">55.02%</td>
-                <td class="mono pos">+0.382 pips</td>
-              </tr>
-              <tr>
-                <td><strong>Adaptive-Horizon Label Alignment + Cooldown Guard (80k 2026)</strong></td>
-                <td class="mono">51.30%</td>
-                <td class="mono">-0.910 pips</td>
-                <td class="mono">53.39%</td>
-                <td class="mono">+0.47p lift / -73% MDD</td>
-              </tr>
-              <tr>
-                <td><strong>MTF 2.0 bps Clear-Trend Dead-Zone + Shadow-Win Hold (260k 2025–26)</strong></td>
-                <td class="mono">48.67%</td>
-                <td class="mono">-30.6% MDD</td>
-                <td class="mono">52.04%</td>
-                <td class="mono pos">+0.48p gross / -38.6% MDD</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono" id="strat-registry-eyebrow">1 CORE GATE + 21 MULTI-FAMILY PROTOTYPES</p>
-            <h2 class="panel-title">Council &amp; Strategy Family Registry</h2>
-          </div>
-          <div class="mono dim" id="strat-family-summary">SMC/ICT · Viral Momentum · Quant Scalp · Micro Scalp · Classic</div>
-        </div>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Strategy ID</th>
-                <th>Family</th>
-                <th>Rule Summary</th>
-                <th>Allowed Regimes</th>
-                <th>Weight</th>
-                <th>Seen</th>
-              </tr>
-            </thead>
-            <tbody id="strat-members-tbody"></tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
+    
     <!-- =================================================================
          PAGE 05 : CREDENTIALS (機密)
          ================================================================= -->
-    <section class="page" id="page-credentials" data-page="credentials">
-      <div class="grid-3">
-        <div class="stat-card">
-          <span class="stat-label mono">TWELVE DATA POOL</span>
-          <strong class="stat-val mono" id="cred-td-count">0 / 30</strong>
-          <span class="stat-sub" id="cred-td-detail">Legitimate slots configured</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label mono">SUPABASE RLS STORE</span>
-          <strong class="stat-val mono" id="cred-sb-state">UNSET</strong>
-          <span class="stat-sub" id="cred-sb-url">Local JSONL active</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label mono">TELEGRAM OWNER</span>
-          <strong class="stat-val mono" id="cred-tg-state">UNSET</strong>
-          <span class="stat-sub" id="cred-tg-chat">Web console active</span>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">LOCAL VAULT // .ENV (GIT-IGNORED, CHMOD 600)</p>
-            <h2 class="panel-title">Configure Service Credentials</h2>
-          </div>
-        </div>
-        <p class="panel-desc">Values entered below are written atomically to your local git-ignored <span class="mono">.env</span> file with <span class="mono">0600</span> owner-only permissions and never echoed back in plaintext. Leave any field blank to keep its existing value.</p>
-
-        <form id="cred-form" class="cred-form" autocomplete="off">
-          <div class="grid-2">
-            <div class="cred-box">
-              <h3 class="subhead">Twelve Data Key Pool (1 to 30 Slots)</h3>
-              <p class="field-hint">One key per line. One free key (800 credits/day) covers all 3 markets (~312 credits/day). Do not register multiple free accounts to bypass provider rate limits.</p>
-              <textarea id="in-td-keys" class="input mono textarea" rows="4" placeholder="Paste primary key on line 1 (optional legitimate extra keys on lines 2..30)"></textarea>
-              <div class="slot-chips" id="cred-slot-chips"></div>
-            </div>
-
-            <div class="cred-box">
-              <h3 class="subhead">Supabase &amp; Telegram</h3>
-              <label class="field">
-                <span class="field-label">SUPABASE_URL</span>
-                <input type="url" id="in-sb-url" class="input mono" placeholder="https://your-project.supabase.co">
-              </label>
-              <label class="field">
-                <span class="field-label">SUPABASE_SERVICE_ROLE_KEY</span>
-                <input type="password" id="in-sb-key" class="input mono" placeholder="service_role secret (never anon)">
-              </label>
-              <label class="field">
-                <span class="field-label">TELEGRAM_BOT_TOKEN</span>
-                <input type="password" id="in-tg-token" class="input mono" placeholder="123456789:AAH...">
-              </label>
-              <label class="field">
-                <span class="field-label">TELEGRAM_OWNER_CHAT_ID</span>
-                <input type="text" id="in-tg-chat" class="input mono" placeholder="Numeric owner chat ID">
-              </label>
-            </div>
-          </div>
-
-          <div class="action-bar mt-md">
-            <button type="submit" class="btn btn-primary">Save to Local Vault</button>
-            <button type="button" class="btn btn-ghost" id="btn-clear-td">Clear Twelve Data Slots</button>
-          </div>
-        </form>
-      </div>
-    </section>
-
+    
     <!-- =================================================================
          PAGE 06 : RISK & CHARTER (規律)
          ================================================================= -->
@@ -918,83 +429,11 @@
     <!-- =================================================================
          PAGE 07 : COMBINER (融合)
          ================================================================= -->
-    <section class="page" id="page-combiner" data-page="combiner">
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">MULTI-INDICATOR FUSION // COMBINED SCORE</p>
-            <h2 class="panel-title">Combiner Score Engine</h2>
-          </div>
-          <div class="action-bar" style="margin:0">
-            <button type="button" class="btn btn-sm btn-ghost" onclick="loadCombiner()">Refresh</button>
-            <button type="button" class="btn btn-sm btn-primary" onclick="goToSignals()">Generate Signal</button>
-          </div>
-        </div>
-        <div id="combiner-score-board" class="combiner-score-board">
-          <div class="empty-stage"><p class="empty-jp" lang="ja">待機中</p><p class="empty-title">Loading combiner data…</p></div>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">INDICATOR VOTES // WEIGHTED FUSED</p>
-            <h2 class="panel-title">Signal Vote Matrix</h2>
-          </div>
-        </div>
-        <div id="combiner-votes" class="vote-grid"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">ML ENSEMBLE // GBDT PREDICTION</p>
-            <h2 class="panel-title">Model Prediction</h2>
-          </div>
-        </div>
-        <div id="combiner-ml" class="ml-prediction-box"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">RECENT PRICE ACTION // 60 CANDLES</p>
-            <h2 class="panel-title">Price Tape</h2>
-          </div>
-        </div>
-        <div id="combiner-tape" class="price-tape"></div>
-      </div>
-    </section>
-
+    
     <!-- =================================================================
          PAGE 08 : GENERATOR (生成)
          ================================================================= -->
-    <section class="page" id="page-generator" data-page="generator">
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">FUTURE SIGNAL PREDICTION // ALL HORIZONS</p>
-            <h2 class="panel-title">Signal Generator — Upcoming Candles</h2>
-          </div>
-          <div class="action-bar" style="margin:0">
-            <button type="button" class="btn btn-sm btn-ghost" onclick="loadGenerator()">Refresh</button>
-            <button type="button" class="btn btn-sm btn-primary" onclick="goToSignals()">Generate Signal</button>
-          </div>
-        </div>
-        <div id="generator-summary" class="generator-summary"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">EXPIRY HORIZONS // 1-MIN · 3-MIN · 30-MIN</p>
-            <h2 class="panel-title">Predicted Signals per Horizon</h2>
-          </div>
-        </div>
-        <div id="generator-horizons" class="horizon-grid"></div>
-      </div>
-    </section>
-
+    
     <!-- =================================================================
          PAGE 09 : INDICATORS (指標)
          ================================================================= -->
@@ -1014,101 +453,7 @@
     <!-- =================================================================
          PAGE 10 : MARKET SURVEILLANCE (監視)
          ================================================================= -->
-    <section class="page" id="page-surveillance" data-page="surveillance">
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">CUSTOM MICROSTRUCTURE INDICATORS // 20 ORIGINAL METRICS</p>
-            <h2 class="panel-title">Saviour Custom Indicator Surveillance</h2>
-          </div>
-          <button type="button" class="btn btn-sm btn-ghost" onclick="loadSurveillance()">Refresh</button>
-        </div>
-        <p class="panel-desc">Original indicators not based on RSI/MACD/Bollinger — derived from candle geometry, order flow proxies, and market microstructure theory (VPIN, Kyle's Lambda, Smart Money Index).</p>
-        <div id="surveillance-grid" class="surveillance-grid">
-          <div class="empty-stage">
-            <p class="empty-jp" lang="ja">監視中</p>
-            <p class="empty-title">Click <strong>Refresh</strong> to load live custom indicator values.</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">EXPIRY-AWARE SCALPING METHODS // 1MIN · 3MIN · 30MIN</p>
-            <h2 class="panel-title">Scalping Method Matrix</h2>
-          </div>
-        </div>
-        <p class="panel-desc">7 original scalping methods that adapt thresholds across expiry periods. Each method uses custom microstructure indicators as entry triggers.</p>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Method ID</th>
-                <th>Concept</th>
-                <th>Indicator Used</th>
-                <th>1-min Threshold</th>
-                <th>3-min Threshold</th>
-                <th>30-min Threshold</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr><td class="mono">flow_imbalance_scalp</td><td>Order flow imbalance</td><td class="mono">body_pressure_imbalance</td><td class="mono">0.15</td><td class="mono">0.20</td><td class="mono">0.25</td></tr>
-              <tr><td class="mono">vpin_breakout_scalp</td><td>VPIN expansion breakout</td><td class="mono">vpin_proxy</td><td class="mono">0.35</td><td class="mono">0.40</td><td class="mono">0.50</td></tr>
-              <tr><td class="mono">smart_money_scalp</td><td>Smart money accumulation</td><td class="mono">smart_money_index</td><td class="mono">0.30</td><td class="mono">0.40</td><td class="mono">0.50</td></tr>
-              <tr><td class="mono">liquidity_gap_scalp</td><td>Liquidity gap continuation</td><td class="mono">liquidity_gap_detor</td><td class="mono">1.5</td><td class="mono">1.8</td><td class="mono">2.0</td></tr>
-              <tr><td class="mono">kyle_impact_scalp</td><td>Kyle's lambda price impact</td><td class="mono">kyle_lambda_proxy</td><td class="mono">0.15</td><td class="mono">0.20</td><td class="mono">0.25</td></tr>
-              <tr><td class="mono">session_velocity_scalp</td><td>Session velocity shift</td><td class="mono">session_velocity_shift</td><td class="mono">0.30</td><td class="mono">0.40</td><td class="mono">0.50</td></tr>
-              <tr><td class="mono">tick_imbalance_scalp</td><td>Tick volume imbalance</td><td class="mono">tick_volume_imbalance</td><td class="mono">0.15</td><td class="mono">0.20</td><td class="mono">0.25</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow mono">TRADER MINDSET // THE PRO'S OPERATING SYSTEM</p>
-            <h2 class="panel-title">Discipline &amp; Risk Framework</h2>
-          </div>
-        </div>
-        <div class="charter-grid">
-          <div class="charter-item">
-            <span class="mono charter-num">01 // THINK IN PROBABILITIES</span>
-            <p>Every trade is one data point in a distribution. Focus on edge, not outcome. One loss is just one flip of the coin.</p>
-          </div>
-          <div class="charter-item">
-            <span class="mono charter-num">02 // RISK IS THE HOLY COMMANDMENT</span>
-            <p>Protect capital at all costs. Risk 0.5-1.5% per trade. Place stop loss before entry. Never exceed daily loss limits.</p>
-          </div>
-          <div class="charter-item">
-            <span class="mono charter-num">03 // PROCESS OVER OUTCOME</span>
-            <p>Evaluate yourself on whether you followed your plan, not whether you made money. Over 100+ trades, process determines outcomes.</p>
-          </div>
-          <div class="charter-item">
-            <span class="mono charter-num">04 // LOSS ACCEPTANCE</span>
-            <p>Every strategy produces losing trades. Losing trades are tuition, not betrayal. Never revenge-trade after a loss.</p>
-          </div>
-          <div class="charter-item">
-            <span class="mono charter-num">05 // SELECTIVE ENTRY</span>
-            <p>Trade less, profit more. The highest-quality setups are rare. Waiting for them is the skill. "No trade" is a valid decision.</p>
-          </div>
-          <div class="charter-item">
-            <span class="mono charter-num">06 // ADAPTIVE RISK</span>
-            <p>During drawdowns, reduce risk — don't increase it. Normal: 1%, Drawdown: 0.25-0.5%, Recovery: 0.5%.</p>
-          </div>
-          <div class="charter-item">
-            <span class="mono charter-num">07 // DISCIPLINE INFRASTRUCTURE</span>
-            <p>Discipline is not a feeling — it's a system. Written plan, automated stops, trading journal, pre-trade checklist.</p>
-          </div>
-          <div class="charter-item">
-            <span class="mono charter-num">08 // CONTINUOUS IMPROVEMENT</span>
-            <p>Plan → Execute → Journal → Review → Refine → Repeat. Make subtle, evidence-based refinements. Validate through backtesting.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
+    
     <!-- ════════════════════════════════════════════════════════════════════
          PAGE 11 : WIN STREAK COMPOUNDING (勝率連続)
          ───────────────────────────────────────────────────────────────────
@@ -1225,12 +570,6 @@
       </svg>
       <span>Signals</span>
     </button>
-    <button type="button" class="tab-btn" data-nav="telegram">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-        <polygon points="21 3 3 11 10 14 13 21 21 3"/>
-      </svg>
-      <span>Telegram</span>
-    </button>
     <button type="button" class="tab-btn" data-nav="health">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
         <rect x="4" y="4" width="16" height="16"/>
@@ -1238,38 +577,11 @@
       </svg>
       <span>Health</span>
     </button>
-    <button type="button" class="tab-btn" data-nav="strategies">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-        <line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="#09090a"/>
-        <line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="#09090a"/>
-        <line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="#09090a"/>
-      </svg>
-      <span>Strategies</span>
-    </button>
-    <button type="button" class="tab-btn" data-nav="credentials">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-        <rect x="5" y="11" width="14" height="9"/>
-        <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
-      </svg>
-      <span>Vault</span>
-    </button>
     <button type="button" class="tab-btn" data-nav="risk">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
         <polygon points="12 3 20 7 20 13 12 21 4 13 4 7 12 3"/>
       </svg>
       <span>Risk</span>
-    </button>
-    <button type="button" class="tab-btn" data-nav="combiner">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-        <circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/>
-      </svg>
-      <span>Comb</span>
-    </button>
-    <button type="button" class="tab-btn" data-nav="generator">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-      </svg>
-      <span>Gen</span>
     </button>
     <button type="button" class="tab-btn" data-nav="indicators">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
@@ -1277,14 +589,6 @@
         <line x1="16" y1="20" x2="16" y2="14"/><line x1="22" y1="20" x2="2" y2="20"/>
       </svg>
       <span>Indic</span>
-    </button>
-    <button type="button" class="tab-btn" data-nav="surveillance">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-        <circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>
-        <line x1="12" y1="1" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="23"/>
-        <line x1="1" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="23" y2="12"/>
-      </svg>
-      <span>Surv</span>
     </button>
     <button type="button" class="tab-btn" data-nav="winstreak">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">

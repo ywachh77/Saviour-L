@@ -361,6 +361,313 @@ def candle_sequence_encoding(candles: Sequence[Candle], window: int = 5) -> list
     return result
 
 
+def hammer_pattern(candles: Sequence[Candle]) -> list[float | None]:
+    """Hammer / Shooting Star detector.
+
+    Hammer: small body at top, long lower wick (>=2x body), appears in downtrend.
+    Shooting Star: small body at bottom, long upper wick (>=2x body), appears in uptrend.
+    Score: +1 = hammer (bullish reversal), -1 = shooting star (bearish reversal), 0 = none.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(2, n):
+        c = candles[i]
+        rng = c.high - c.low
+        if rng < 1e-15:
+            result[i] = 0.0
+            continue
+        body = abs(c.close - c.open)
+        upper_wick = c.high - max(c.open, c.close)
+        lower_wick = min(c.open, c.close) - c.low
+
+        # Check wick ratio
+        if body < 1e-15 or body / rng > 0.4:
+            result[i] = 0.0
+            continue
+
+        score = 0.0
+        # Hammer: long lower wick, small body at top
+        if lower_wick >= 2.0 * body and lower_wick >= upper_wick * 1.5:
+            # Confirm downtrend (prev 3 closes declining)
+            if i >= 3 and candles[i - 1].close > candles[i - 2].close > candles[i - 3].close:
+                score = 1.0
+            else:
+                score = 0.5  # Hammer without trend confirmation
+        # Shooting star: long upper wick, small body at bottom
+        elif upper_wick >= 2.0 * body and upper_wick >= lower_wick * 1.5:
+            # Confirm uptrend (prev 3 closes rising)
+            if i >= 3 and candles[i - 1].close < candles[i - 2].close < candles[i - 3].close:
+                score = -1.0
+            else:
+                score = -0.5  # Shooting star without trend confirmation
+        result[i] = score
+    return result
+
+
+def harami_pattern(candles: Sequence[Candle]) -> list[float | None]:
+    """Bullish / Bearish Harami detector.
+
+    Bullish Harami: large bearish candle, then small bullish candle inside its body.
+    Bearish Harami: large bullish candle, then small bearish candle inside its body.
+    Score: +1 = bullish harami, -1 = bearish harami, 0 = none.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(1, n):
+        prev = candles[i - 1]
+        curr = candles[i]
+        prev_body = abs(prev.close - prev.open)
+        curr_body = abs(curr.close - curr.open)
+        if prev_body < 1e-15:
+            result[i] = 0.0
+            continue
+
+        # Check if current candle's body is inside previous candle's body
+        prev_top = max(prev.open, prev.close)
+        prev_bottom = min(prev.open, prev.close)
+        curr_top = max(curr.open, curr.close)
+        curr_bottom = min(curr.open, curr.close)
+
+        if curr_bottom >= prev_bottom and curr_top <= prev_top and curr_body < prev_body * 0.6:
+            # Inside candle found
+            if prev.close < prev.open:  # Previous was bearish
+                result[i] = 1.0  # Bullish Harami
+            elif prev.close > prev.open:  # Previous was bullish
+                result[i] = -1.0  # Bearish Harami
+            else:
+                result[i] = 0.0
+        else:
+            result[i] = 0.0
+    return result
+
+
+def engulfing_pattern(candles: Sequence[Candle]) -> list[float | None]:
+    """Bullish / Bearish Engulfing detector.
+
+    Bullish Engulfing: bearish candle followed by bullish candle that engulfs it.
+    Bearish Engulfing: bullish candle followed by bearish candle that engulfs it.
+    Score: +1 = bullish engulfing, -1 = bearish engulfing, 0 = none.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(1, n):
+        prev = candles[i - 1]
+        curr = candles[i]
+        if prev.close == prev.open:
+            result[i] = 0.0
+            continue
+
+        if prev.close < prev.open and curr.close > curr.open:
+            # Bullish engulfing
+            if curr.open <= prev.close and curr.close >= prev.open:
+                result[i] = 1.0
+            else:
+                result[i] = 0.0
+        elif prev.close > prev.open and curr.close < curr.open:
+            # Bearish engulfing
+            if curr.open >= prev.close and curr.close <= prev.open:
+                result[i] = -1.0
+            else:
+                result[i] = 0.0
+        else:
+            result[i] = 0.0
+    return result
+
+
+def piercing_pattern(candles: Sequence[Candle]) -> list[float | None]:
+    """Piercing Line / Dark Cloud Cover detector.
+
+    Piercing Line: bullish reversal — opens below prior low, closes above midpoint of prior bearish body.
+    Dark Cloud Cover: bearish reversal — opens above prior high, closes below midpoint of prior bullish body.
+    Score: +1 = piercing, -1 = dark cloud, 0 = none.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(1, n):
+        prev = candles[i - 1]
+        curr = candles[i]
+        prev_body = abs(prev.close - prev.open)
+        if prev_body < 1e-15:
+            result[i] = 0.0
+            continue
+
+        prev_mid = (prev.open + prev.close) / 2.0
+
+        # Piercing Line: bearish prev, bullish curr
+        if prev.close < prev.open and curr.close > curr.open:
+            if curr.open < prev.low and curr.close > prev_mid and curr.close < prev.open:
+                result[i] = 1.0
+            else:
+                result[i] = 0.0
+        # Dark Cloud Cover: bullish prev, bearish curr
+        elif prev.close > prev.open and curr.close < curr.open:
+            if curr.open > prev.high and curr.close < prev_mid and curr.close > prev.open:
+                result[i] = -1.0
+            else:
+                result[i] = 0.0
+        else:
+            result[i] = 0.0
+    return result
+
+
+def morning_evening_star(candles: Sequence[Candle]) -> list[float | None]:
+    """Morning Star / Evening Star detector.
+
+    Morning Star: 3-candle bullish reversal — long bearish, small body (gapping down), long bullish.
+    Evening Star: 3-candle bearish reversal — long bullish, small body (gapping up), long bearish.
+    Score: +1 = morning star, -1 = evening star, 0 = none.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(2, n):
+        c1 = candles[i - 2]
+        c2 = candles[i - 1]
+        c3 = candles[i]
+        b1 = abs(c1.close - c1.open)
+        b2 = abs(c2.close - c2.open)
+        b3 = abs(c3.close - c3.open)
+        if b1 < 1e-15 or b2 < 1e-15 or b3 < 1e-15:
+            result[i] = 0.0
+            continue
+
+        # Morning Star: bearish, small, bullish
+        if c1.close < c1.open and b2 < b1 * 0.5 and c3.close > c3.open and b3 > b1 * 0.8:
+            result[i] = 1.0
+        # Evening Star: bullish, small, bearish
+        elif c1.close > c1.open and b2 < b1 * 0.5 and c3.close < c3.open and b3 > b1 * 0.8:
+            result[i] = -1.0
+        else:
+            result[i] = 0.0
+    return result
+
+
+def three_white_soldiers(candles: Sequence[Candle]) -> list[float | None]:
+    """Three White Soldiers — strong bullish reversal after a downtrend.
+
+    Three consecutive bullish candles, each closing higher than the last,
+    with bodies that are large relative to their ranges. Appears after a
+    decline. Score: +1 if pattern present, 0 otherwise.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(2, n):
+        c1 = candles[i - 2]
+        c2 = candles[i - 1]
+        c3 = candles[i]
+        # All bullish
+        if c1.close <= c1.open or c2.close <= c2.open or c3.close <= c3.open:
+            result[i] = 0.0
+            continue
+        # Each closes higher
+        if not (c1.close < c2.close < c3.close):
+            result[i] = 0.0
+            continue
+        # Large bodies (at least 50% of range)
+        for c in (c1, c2, c3):
+            rng = c.high - c.low
+            if rng < 1e-15 or abs(c.close - c.open) / rng < 0.5:
+                result[i] = 0.0
+                break
+        else:
+            # Confirm downtrend before (prev 3 closes declining)
+            if i >= 5 and candles[i - 3].close > candles[i - 4].close > candles[i - 5].close:
+                result[i] = 1.0
+            else:
+                result[i] = 0.5  # Pattern without trend confirmation
+    return result
+
+
+def three_black_crows(candles: Sequence[Candle]) -> list[float | None]:
+    """Three Black Crows — strong bearish reversal after an uptrend.
+
+    Three consecutive bearish candles, each closing lower than the last,
+    with bodies that are large relative to their ranges. Appears after a
+    rally. Score: -1 if pattern present, 0 otherwise.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(2, n):
+        c1 = candles[i - 2]
+        c2 = candles[i - 1]
+        c3 = candles[i]
+        # All bearish
+        if c1.close >= c1.open or c2.close >= c2.open or c3.close >= c3.open:
+            result[i] = 0.0
+            continue
+        # Each closes lower
+        if not (c1.close > c2.close > c3.close):
+            result[i] = 0.0
+            continue
+        # Large bodies
+        for c in (c1, c2, c3):
+            rng = c.high - c.low
+            if rng < 1e-15 or abs(c.close - c.open) / rng < 0.5:
+                result[i] = 0.0
+                break
+        else:
+            # Confirm uptrend before
+            if i >= 5 and candles[i - 3].close < candles[i - 4].close < candles[i - 5].close:
+                result[i] = -1.0
+            else:
+                result[i] = -0.5
+    return result
+
+
+def tweezer_pattern(candles: Sequence[Candle]) -> list[float | None]:
+    """Tweezer Top / Tweezer Bottom — reversal at matching extremes.
+
+    Tweezer Top: two candles with matching highs, second is bearish.
+    Tweezer Bottom: two candles with matching lows, second is bullish.
+    Score: +1 = tweezer bottom, -1 = tweezer top, 0 = none.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(1, n):
+        prev = candles[i - 1]
+        curr = candles[i]
+        tol = max(prev.high - prev.low, curr.high - curr.low) * 0.01
+
+        # Tweezer top: matching highs, second bearish
+        if abs(curr.high - prev.high) <= tol and curr.close < curr.open:
+            result[i] = -1.0
+        # Tweezer bottom: matching lows, second bullish
+        elif abs(curr.low - prev.low) <= tol and curr.close > curr.open:
+            result[i] = 1.0
+        else:
+            result[i] = 0.0
+    return result
+
+
+def separation_pattern(candles: Sequence[Candle]) -> list[float | None]:
+    """Bullish/Bearish Separation — two candles of same color with a gap.
+
+    Bullish separation: two white (bullish) candles with a gap between them.
+    Bearish separation: two black (bearish) candles with a gap between them.
+    Score: +1 = bullish separation, -1 = bearish separation, 0 = none.
+    """
+    n = len(candles)
+    result: list[float | None] = [None] * n
+    for i in range(1, n):
+        prev = candles[i - 1]
+        curr = candles[i]
+
+        # Bullish separation: both bullish, current open > prev close
+        if prev.close > prev.open and curr.close > curr.open:
+            if curr.open > prev.close:
+                result[i] = 1.0
+            else:
+                result[i] = 0.0
+        # Bearish separation: both bearish, current open < prev close
+        elif prev.close < prev.open and curr.close < curr.open:
+            if curr.open < prev.close:
+                result[i] = -1.0
+            else:
+                result[i] = 0.0
+        else:
+            result[i] = 0.0
+    return result
+
+
 def micro_trend_break(candles: Sequence[Candle], short: int = 3, long: int = 5) -> list[float | None]:
     """Detects when a short-term trend breaks.
 
@@ -745,6 +1052,15 @@ CUSTOM_INDICATOR_NAMES = (
     "body_acceleration",
     "gap_pressure",
     "candle_sequence_encoding",
+    "hammer_pattern",
+    "harami_pattern",
+    "engulfing_pattern",
+    "piercing_pattern",
+    "morning_evening_star",
+    "three_white_soldiers",
+    "three_black_crows",
+    "tweezer_pattern",
+    "separation_pattern",
     "micro_trend_break",
     "volatility_phase",
     "efficiency_ratio_custom",
@@ -780,6 +1096,15 @@ def compute_custom_indicators(candles: Sequence[Candle]) -> list[dict[str, float
         "body_acceleration": body_acceleration(candles, 5),
         "gap_pressure": gap_pressure(candles, 5),
         "candle_sequence_encoding": candle_sequence_encoding(candles, 5),
+        "hammer_pattern": hammer_pattern(candles),
+        "harami_pattern": harami_pattern(candles),
+        "engulfing_pattern": engulfing_pattern(candles),
+        "piercing_pattern": piercing_pattern(candles),
+        "morning_evening_star": morning_evening_star(candles),
+        "three_white_soldiers": three_white_soldiers(candles),
+        "three_black_crows": three_black_crows(candles),
+        "tweezer_pattern": tweezer_pattern(candles),
+        "separation_pattern": separation_pattern(candles),
         "micro_trend_break": micro_trend_break(candles, 3, 5),
         "volatility_phase": volatility_phase(candles, 10),
         "efficiency_ratio_custom": efficiency_ratio_custom(candles, 10),

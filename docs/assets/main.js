@@ -485,6 +485,84 @@
       });
   }
 
+  function fetchResults() {
+    apiGet("api/results")
+      .then(function (res) {
+        if (!res || !res.ok) return;
+        var panel = document.getElementById("results-panel");
+        var summary = document.getElementById("results-summary");
+        var learning = document.getElementById("results-learning");
+        var list = document.getElementById("results-list");
+        if (!panel) return;
+
+        // Show panel
+        panel.style.display = "";
+
+        // Summary
+        var s = res.summary || {};
+        summary.textContent = s.total + " total · " + s.settled + " settled · " + s.wins + "W " + s.losses + "L";
+
+        // Learning banner
+        if (res.learning && res.learning.status === "learning") {
+          learning.style.display = "";
+          var lr = res.learning;
+          learning.innerHTML =
+            '<div class="learning-card">' +
+            '<span class="learning-tag">AUTO-LEARNING</span>' +
+            '<span>Win rate: <strong>' + Math.round(lr.win_rate * 100) + '%</strong> (' + lr.wins + 'W / ' + lr.losses + 'L)</span>' +
+            '<span>Best regime: <strong>' + (lr.best_regime || "—") + '</strong></span>' +
+            '<span>Worst regime: <strong>' + (lr.worst_regime || "—") + '</strong></span>' +
+            '<span>Threshold: <strong>' + lr.adjusted_threshold + '</strong></span>' +
+            '<span>Avg core checks (win): <strong>' + lr.avg_core_checks_win + '</strong></span>' +
+            '<span>Avg core checks (loss): <strong>' + lr.avg_core_checks_loss + '</strong></span>' +
+            '</div>';
+        } else {
+          learning.style.display = "none";
+        }
+
+        // Results table
+        if (!res.results || res.results.length === 0) {
+          list.innerHTML = '<div class="empty-stage"><p class="empty-title">No signals yet. Generate a signal above to see outcomes.</p></div>';
+          return;
+        }
+
+        var html = '<table class="results-table"><thead><tr>' +
+          '<th>Time</th><th>Side</th><th>Entry</th><th>Current</th><th>Pips</th><th>Outcome</th><th>Regime</th><th>Checks</th><th>Reason</th>' +
+          '</tr></thead><tbody>';
+
+        res.results.slice().reverse().forEach(function (r) {
+          var outcomeClass = r.outcome === "WIN" ? "win" : r.outcome === "LOSS" ? "loss" : "pending";
+          var pipsText = r.net_pips != null ? r.net_pips.toFixed(2) : (r.current_pips != null ? r.current_pips.toFixed(2) : "—");
+          var entryText = r.entry_price != null ? r.entry_price.toFixed(5) : "—";
+          var currentText = r.current_price != null ? r.current_price.toFixed(5) : "—";
+          var timeText = (r.generated_at || "").substring(5, 16).replace("T", " ");
+
+          html += '<tr class="' + outcomeClass + '">' +
+            '<td class="mono">' + timeText + '</td>' +
+            '<td>' + r.side + '</td>' +
+            '<td class="mono">' + entryText + '</td>' +
+            '<td class="mono">' + currentText + '</td>' +
+            '<td class="mono">' + pipsText + '</td>' +
+            '<td><span class="outcome-badge ' + outcomeClass + '">' + r.outcome + '</span></td>' +
+            '<td>' + r.regime + '</td>' +
+            '<td class="mono">' + (r.core_checks || 0) + '</td>' +
+            '<td class="reason-cell">' + (r.reason || "").substring(0, 60) + '</td>' +
+            '</tr>';
+        });
+        html += '</tbody></table>';
+        list.innerHTML = html;
+      })
+      .catch(function () {});
+  }
+
+  // Auto-refresh results every 15 seconds
+  setInterval(function () {
+    var panel = document.getElementById("results-panel");
+    if (panel && panel.style.display !== "none") {
+      fetchResults();
+    }
+  }, 15000);
+
   function renderSignalEvaluations(cards) {
     var box = document.getElementById("signal-results");
     if (!box) return;
@@ -682,6 +760,7 @@
       .then(function (res) {
         renderSignalEvaluations(res.evaluations || []);
         refreshStatus();
+        fetchResults();
         showToast(
           res.emitted > 0
             ? ("Sealed " + res.emitted + " future next-candle signal(s) (" + (res.target_entry_hm || TZ_LABEL) + ").")

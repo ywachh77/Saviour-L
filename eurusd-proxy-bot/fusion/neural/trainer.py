@@ -533,6 +533,8 @@ class NeuralTrainer:
 
     def _evaluate(self, model, loader, cfg: TrainingConfig) -> dict:
         """Evaluate model on a dataset."""
+        if model is None or loader is None:
+            return {"loss": float("inf"), "direction_acc": 0.0, "return_mae": 0.0}
         model.eval()
         losses = []
         correct = 0

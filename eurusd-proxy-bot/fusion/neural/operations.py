@@ -258,7 +258,8 @@ class NeuralOperations:
         try:
             # Load candles
             if not os.path.exists(self.candles_path):
-                return None
+                self.state.last_training_at = datetime.utcnow().isoformat()
+                return None  # Skip training, don't retry immediately
 
             with open(self.candles_path) as f:
                 rows = json.load(f)
