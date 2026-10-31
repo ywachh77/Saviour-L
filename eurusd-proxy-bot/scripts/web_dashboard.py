@@ -708,6 +708,7 @@ class OperatorRuntime:
                     "alerts": self.store.recent_alerts(limit=8),
                 },
                 "needle": self.needle.status(),
+                "neural": self.neural_payload(),
             }
 
     def generate_signals(
