@@ -259,6 +259,9 @@ class WarmupCosineScheduler:
 
     def _get_lr(self) -> float:
         if self.current_step <= self.warmup_steps:
+            # Start at a small fraction to avoid LR=0 on first step
+            if self.current_step == 0:
+                return self.initial_lr * 0.1
             return self.initial_lr * (self.current_step / self.warmup_steps)
         progress = (self.current_step - self.warmup_steps) / max(
             1, self.total_steps - self.warmup_steps

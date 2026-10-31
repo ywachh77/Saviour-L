@@ -234,8 +234,14 @@ def _adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
     if up_smooth[-1] == 0 and down_smooth[-1] == 0:
         return 0.0
 
+    # Handle extreme cases: when one direction has no movement
+    if down_smooth[-1] == 0:
+        return 100.0  # Strong uptrend, maximum directional movement
+    if up_smooth[-1] == 0:
+        return 100.0  # Strong downtrend, maximum directional movement
+
     dx = 100.0 * abs(up_smooth[-1] - down_smooth[-1]) / (
-        up_smooth[-1] + down_smooth[-1] + 1e-10
+        up_smooth[-1] + down_smooth[-1]
     )
     return dx
 
@@ -361,7 +367,7 @@ class NeuralDataset(Dataset):
             entry_price = candles[i].close
             future_idx = i + self.horizon
             if future_idx >= n:
-                break
+                continue  # Skip this index, try the next one
             future_price = candles[future_idx].close
             atr_pips = all_features[i, 12] * 10.0  # ATR was normalized
 
