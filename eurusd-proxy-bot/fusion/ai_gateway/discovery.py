@@ -13,9 +13,7 @@ to select the provider. Never guess.
 from __future__ import annotations
 
 import re
-from typing import Any
-
-from .providers import PROVIDERS, ProviderAdapter, ProviderError, get_adapter
+from .providers import PROVIDERS, ProviderError, get_adapter
 
 
 def detect_provider(api_key: str) -> list[str]:

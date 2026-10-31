@@ -28,23 +28,21 @@ Usage:
 
 from __future__ import annotations
 
-import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from . import charter, costs, datagate, instruments, news, protections
-from .calibration import IsotonicCalibrator
 from .council import CouncilResult, CouncilWeights, run_council
-from .domain import Candle, Decision, ModelRead, Settlement, Signal, closed_before
-from .family_fusion import FamilyFusionEngine, FamilyFusionVerdict
+from .domain import Candle, ModelRead, Settlement, Signal, closed_before
+from .family_fusion import FamilyFusionEngine
 from .features import compute_features
 from .mistakes import MistakeMemory
 from .model import BootstrapEnsemble, OnlineLogisticModel
 from .regime import RegimeState, detect_regime
 from .session import session_of
-from .timeutil import add_minutes, floor_minute, now as utcnow
+from .timeutil import floor_minute, now as utcnow
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -359,7 +357,7 @@ class AIBrain:
                 )
 
         # 11. Model veto
-        from .model import MODE_VETO, MODE_ADVISORY
+        from .model import MODE_VETO
         mode = model.mode if model is not None else MODE_VETO
         allowed, model_reason = self._model_verdict(council.side, read, mode=mode)
         if not allowed:
