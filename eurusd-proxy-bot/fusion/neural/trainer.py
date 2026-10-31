@@ -68,6 +68,11 @@ class TrainingConfig:
     w_uncertainty: float = 0.2
     w_regime: float = 0.2
 
+    # Class weights for direction loss (higher = model learns to be more
+    # conservative about NO_TRADE). NO_TRADE (class 2) gets highest weight
+    # to push the model toward selectivity — key to high win rates.
+    direction_class_weights: tuple[float, float, float] = (1.0, 1.0, 2.0)
+
     # Checkpointing
     checkpoint_dir: str = "neural/checkpoints"
     save_best_only: bool = True
@@ -100,6 +105,7 @@ class TrainingConfig:
             "w_return": self.w_return,
             "w_uncertainty": self.w_uncertainty,
             "w_regime": self.w_regime,
+            "direction_class_weights": list(self.direction_class_weights),
             "checkpoint_dir": self.checkpoint_dir,
             "save_best_only": self.save_best_only,
             "seed": self.seed,
@@ -133,8 +139,13 @@ def multi_task_loss(
     target_unc = batch["uncertainty"]
     target_regime = batch["regime"]
 
-    # Direction cross-entropy
-    loss_dir = F.cross_entropy(direction_logits, target_dir)
+    # Direction cross-entropy with class weighting
+    # Higher weight on NO_TRADE (class 2) pushes the model toward selectivity
+    class_weights = torch.tensor(
+        config.direction_class_weights, dtype=direction_logits.dtype,
+        device=direction_logits.device,
+    )
+    loss_dir = F.cross_entropy(direction_logits, target_dir, weight=class_weights)
 
     # Return MSE
     loss_ret = F.mse_loss(expected_return, target_ret)
