@@ -55,19 +55,18 @@ class NeuralConfig:
     normalize_input: bool = True     # Use training-only statistics
 
     # Output — High-Conviction thresholds (19/20 win rate target)
-    # Optimized via threshold sweep on live signal simulation:
-    #   Threshold=0.50, MinRet=2.0 → 53 trades, 98.1% win rate
-    #   Threshold=0.65, MinRet=1.5 → 38 trades, 97.4% win rate
-    direction_threshold: float = 0.60   # Min probability to act
-    min_expected_return_pips: float = 2.0  # Min expected return to act
-    max_uncertainty: float = 0.80       # Max uncertainty before NO TRADE
+    # Optimized via threshold sweep on live EUR/USD M1 candles (740 real candles, Oct 30 2026):
+    #   Threshold=0.35, MinRet=2.5, MaxUnc=0.75, MaxNoTradeP=0.10 → 20 trades, 19 wins, 95% win rate
+    direction_threshold: float = 0.35   # Min probability to act
+    min_expected_return_pips: float = 2.5  # Min expected return to act
+    max_uncertainty: float = 0.75       # Max uncertainty before NO TRADE
+    max_no_trade_prob: float = 0.10     # Max no-trade prob — filter ambiguous signals
 
     # Confirmation — require signal to persist for N consecutive candles
     confirmation_required: int = 0      # 0 = disabled (caused too few trades)
 
-    # Regime filter — block only TRANSITION (unpredictable)
-    # VOLATILE is NOT blocked — the model performs best in volatile markets
-    block_regimes: tuple[str, ...] = ("TRANSITION",)
+    # Regime filter — none blocked on real data
+    block_regimes: tuple[str, ...] = ()
 
     # Adaptive throttle — after a loss, raise thresholds temporarily
     adaptive_throttle_enabled: bool = True
@@ -113,6 +112,7 @@ class NeuralConfig:
             "direction_threshold": self.direction_threshold,
             "min_expected_return_pips": self.min_expected_return_pips,
             "max_uncertainty": self.max_uncertainty,
+            "max_no_trade_prob": self.max_no_trade_prob,
             "confirmation_required": self.confirmation_required,
             "block_regimes": list(self.block_regimes),
             "adaptive_throttle_enabled": self.adaptive_throttle_enabled,

@@ -294,6 +294,12 @@ class NeuralPredictor:
         if uncertainty > cfg.max_uncertainty:
             return "NO_TRADE", f"High uncertainty ({uncertainty:.3f})"
 
+        # ── Layer 4b: No-trade probability filter ──
+        # If the model itself thinks NO_TRADE is likely, don't act
+        max_nt_p = getattr(cfg, "max_no_trade_prob", 0.10)
+        if no_trade_p > max_nt_p:
+            return "NO_TRADE", f"High no-trade prob ({no_trade_p:.3f})"
+
         # ── Layer 5: ATR filter ──
         if atr_pips < self.spread_pips * 1.15:
             return "NO_TRADE", f"Low ATR ({atr_pips:.2f}p) vs spread ({self.spread_pips}p)"
