@@ -513,3 +513,7 @@ class ModelRegistry:
     def list_versions(self) -> list[dict]:
         """List all model versions with their status."""
         return [v.to_dict() for v in self.versions]
+
+    def list_candidates(self) -> list[dict]:
+        """List all CANDIDATE model versions."""
+        return [v.to_dict() for v in self.versions if v.status == "CANDIDATE"]

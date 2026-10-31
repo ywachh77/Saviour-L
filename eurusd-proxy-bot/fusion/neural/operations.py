@@ -288,7 +288,7 @@ class NeuralOperations:
         """Enter safety mode — pauses training and predictions."""
         self.state.safety_mode = True
         self.state.safety_reason = reason
-        self._save_state()
+        self._save_state(self.state)
         print(f"SAFETY MODE ENGAGED: {reason}")
 
     def _exit_safety_mode(self) -> None:
@@ -296,7 +296,7 @@ class NeuralOperations:
         self.state.safety_mode = False
         self.state.safety_reason = ""
         self.state.training_failures = 0
-        self._save_state()
+        self._save_state(self.state)
         print("SAFETY MODE DISENGAGED")
 
     def _should_run(self, attr: str, interval: timedelta) -> bool:
