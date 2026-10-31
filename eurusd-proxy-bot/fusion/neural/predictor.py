@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -216,7 +216,7 @@ class NeuralPredictor:
             # 9. Build prediction
             prediction = Prediction(
                 pair=pair,
-                prediction_time=(at or datetime.utcnow()).isoformat(),
+                prediction_time=(at or datetime.now(timezone.utc)).isoformat(),
                 entry_reference_price=entry_price,
                 horizon_minutes=cfg.horizon_minutes,
                 direction_probs={
@@ -234,7 +234,7 @@ class NeuralPredictor:
             )
 
             # Update health
-            self.health.last_prediction = at or datetime.utcnow()
+            self.health.last_prediction = at or datetime.now(timezone.utc)
             self.health.last_prediction_age_seconds = 0.0
             self.health.consecutive_errors = 0
 
@@ -335,7 +335,7 @@ class NeuralPredictor:
         entry_price = candles[-1].close if candles else 0.0
         return Prediction(
             pair=pair,
-            prediction_time=(at or datetime.utcnow()).isoformat(),
+            prediction_time=(at or datetime.now(timezone.utc)).isoformat(),
             entry_reference_price=entry_price,
             horizon_minutes=self.neural_config.horizon_minutes,
             direction_probs={"BUY": 0.0, "SELL": 0.0, "NO_TRADE": 1.0},
@@ -363,7 +363,7 @@ class NeuralPredictor:
     def get_health(self) -> dict:
         """Return model health status."""
         if self.health.last_prediction:
-            age = (datetime.utcnow() - self.health.last_prediction).total_seconds()
+            age = (datetime.now(timezone.utc) - self.health.last_prediction).total_seconds()
             self.health.last_prediction_age_seconds = age
             if age > 300:  # 5 minutes stale
                 self.health.is_healthy = False

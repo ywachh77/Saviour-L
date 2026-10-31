@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from ..store import SupabaseStore
@@ -70,7 +70,7 @@ class NeuralMemory:
             "model_version": prediction.get("model_version", "unknown"),
             "validation_status": prediction.get("validation_status", "PASSED"),
             "reason": prediction.get("reason", ""),
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         return self._insert(NEURAL_SIGNALS_TABLE, row, signal_id=row["id"])
 
@@ -95,8 +95,8 @@ class NeuralMemory:
             "gross_pips": settlement.get("gross_pips", 0.0),
             "net_pips": settlement.get("net_pips", 0.0),
             "spread_pips": settlement.get("spread_pips", 1.2),
-            "resolved_at": settlement.get("settled_at", datetime.utcnow().isoformat()),
-            "created_at": datetime.utcnow().isoformat(),
+            "resolved_at": settlement.get("settled_at", datetime.now(timezone.utc).isoformat()),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         return self._insert(NEURAL_OUTCOMES_TABLE, row, signal_id=signal_id)
 
@@ -133,7 +133,7 @@ class NeuralMemory:
             "config": json.dumps(report.get("config", {})),
             "neural_config": json.dumps(report.get("neural_config", {})),
             "notes": report.get("notes", ""),
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         return self._insert(NEURAL_TRAINING_TABLE, row, signal_id=run_id)
 
@@ -151,12 +151,12 @@ class NeuralMemory:
             "version": v,
             "checkpoint_path": version.get("checkpoint_path", ""),
             "status": version.get("status", "CANDIDATE"),
-            "created_at": version.get("created_at", datetime.utcnow().isoformat()),
+            "created_at": version.get("created_at", datetime.now(timezone.utc).isoformat()),
             "metrics": json.dumps(version.get("metrics", {})),
             "is_production": version.get("is_production", False),
             "parent_version": version.get("parent_version", ""),
             "notes": version.get("notes", ""),
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         return self._insert(NEURAL_MODEL_VERSIONS_TABLE, row, signal_id=v)
 
@@ -168,7 +168,7 @@ class NeuralMemory:
 
     def save_health(self, health: dict) -> str:
         """Save system health snapshot."""
-        ts = datetime.utcnow().isoformat()
+        ts = datetime.now(timezone.utc).isoformat()
         row = {
             "id": ts,
             "timestamp": ts,
@@ -191,7 +191,7 @@ class NeuralMemory:
 
     def save_upgrade(self, upgrade: dict) -> str:
         """Save an upgrade event."""
-        ts = datetime.utcnow().isoformat()
+        ts = datetime.now(timezone.utc).isoformat()
         row = {
             "id": ts,
             "timestamp": ts,

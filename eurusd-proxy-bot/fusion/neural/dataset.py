@@ -182,13 +182,13 @@ def candle_features(candles: Sequence) -> np.ndarray:
             vol_ratio = 1.0
         feats.append(vol_ratio / 2.0)  # 16
 
-        # Consecutive direction
+        # Consecutive direction streak (count consecutive same-direction moves)
         if i > 0:
             streak = 1
+            current_dir = closes[i] > closes[i - 1]  # True=up, False=down
             for j in range(i - 1, -1, -1):
-                if closes[j] > closes[j - 1] and closes[i] > closes[i - 1]:
-                    streak += 1
-                elif closes[j] < closes[j - 1] and closes[i] < closes[i - 1]:
+                dir_j = closes[j] > closes[j - 1] if j > 0 else None
+                if dir_j == current_dir:
                     streak += 1
                 else:
                     break

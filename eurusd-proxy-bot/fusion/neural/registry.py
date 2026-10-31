@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -337,7 +337,7 @@ class ModelRegistry:
         data = {
             "versions": [v.to_dict() for v in self.versions],
             "requirements": self.requirements.to_dict(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         with open(self.registry_path, "w") as f:
             json.dump(data, f, indent=2, default=str)
@@ -361,7 +361,7 @@ class ModelRegistry:
             checkpoint_path=checkpoint_path,
             training_report=training_report.to_dict(),
             neural_config=training_report.neural_config,
-            created_at=datetime.utcnow().isoformat(),
+            created_at=datetime.now(timezone.utc).isoformat(),
             status="CANDIDATE",
             parent_version=parent_version or (
                 self.get_production_version().version
@@ -505,7 +505,7 @@ class ModelRegistry:
         # Promote target
         target.is_production = True
         target.status = "PRODUCTION"
-        target.notes = f"Rolled back on {datetime.utcnow().isoformat()}."
+        target.notes = f"Rolled back on {datetime.now(timezone.utc).isoformat()}."
 
         self._save()
         return True

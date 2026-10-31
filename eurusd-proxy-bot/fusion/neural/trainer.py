@@ -21,9 +21,9 @@ import random
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import torch
@@ -344,7 +344,7 @@ class NeuralTrainer:
             report = TrainingReport(
                 run_id=uuid.uuid4().hex,
                 model_version="v0",
-                started_at=datetime.utcnow().isoformat(),
+                started_at=datetime.now(timezone.utc).isoformat(),
                 notes="Not enough candles to build training sequences.",
             )
             return report
@@ -402,8 +402,8 @@ class NeuralTrainer:
         # 6. Training loop
         report = TrainingReport(
             run_id=uuid.uuid4().hex,
-            model_version=f"v1-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
-            started_at=datetime.utcnow().isoformat(),
+            model_version=f"v1-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+            started_at=datetime.now(timezone.utc).isoformat(),
             config=cfg.to_dict(),
             neural_config=nc.to_dict(),
         )
@@ -519,7 +519,7 @@ class NeuralTrainer:
             "test_direction_acc": test_metrics["direction_acc"],
             "test_return_mae": test_metrics["return_mae"],
         }
-        report.finished_at = datetime.utcnow().isoformat()
+        report.finished_at = datetime.now(timezone.utc).isoformat()
 
         # Save final checkpoint
         self._save_checkpoint(model, nc, cfg, report, None,

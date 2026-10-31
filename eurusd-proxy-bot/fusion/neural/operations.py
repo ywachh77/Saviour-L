@@ -25,7 +25,7 @@ import time
 import traceback
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -108,7 +108,7 @@ class NeuralOperations:
                     return DaemonState.from_dict(json.load(f))
             except Exception:
                 pass
-        state = DaemonState(started_at=datetime.utcnow().isoformat())
+        state = DaemonState(started_at=datetime.now(timezone.utc).isoformat())
         self._save_state(state)
         return state
 
@@ -121,7 +121,7 @@ class NeuralOperations:
     def run_once(self) -> dict:
         """Run one operations cycle. Returns a report dict."""
         report = {
-            "cycle_started": datetime.utcnow().isoformat(),
+            "cycle_started": datetime.now(timezone.utc).isoformat(),
             "actions": [],
             "errors": [],
         }
@@ -168,13 +168,13 @@ class NeuralOperations:
             report["errors"].append(f"Cycle failed: {e}")
             traceback.print_exc()
 
-        report["cycle_finished"] = datetime.utcnow().isoformat()
+        report["cycle_finished"] = datetime.now(timezone.utc).isoformat()
         return report
 
     def run_daemon(self, max_cycles: int = 0):
         """Run the daemon continuously. max_cycles=0 means unlimited."""
         cycle = 0
-        print(f"Neural Operations Daemon starting at {datetime.utcnow().isoformat()}")
+        print(f"Neural Operations Daemon starting at {datetime.now(timezone.utc).isoformat()}")
         print(f"Poll interval: {self.poll_interval}s")
         print(f"Training interval: {self.training_interval}")
         print(f"Outcome eval interval: {self.outcome_eval_interval}")
@@ -193,10 +193,10 @@ class NeuralOperations:
                 report = self.run_once()
                 if report["actions"]:
                     for action in report["actions"]:
-                        print(f"[{datetime.utcnow().strftime('%H:%M:%S')}] {action}")
+                        print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {action}")
                 if report["errors"]:
                     for error in report["errors"]:
-                        print(f"[{datetime.utcnow().strftime('%H:%M:%S')}] ERROR: {error}")
+                        print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] ERROR: {error}")
                     self.state.consecutive_errors += 1
                     self.state.last_error = "; ".join(report["errors"])
                     self._save_state(self.state)
@@ -236,7 +236,7 @@ class NeuralOperations:
             return True
         try:
             last_dt = datetime.fromisoformat(last)
-            return datetime.utcnow() - last_dt >= interval
+            return datetime.now(timezone.utc) - last_dt >= interval
         except Exception:
             return True
 
@@ -249,7 +249,7 @@ class NeuralOperations:
             # For now, just count
             count += 1
 
-        self.state.last_outcome_eval_at = datetime.utcnow().isoformat()
+        self.state.last_outcome_eval_at = datetime.now(timezone.utc).isoformat()
         return count
 
     def _trigger_training(self) -> TrainingReport | None:
@@ -258,7 +258,7 @@ class NeuralOperations:
         try:
             # Load candles
             if not os.path.exists(self.candles_path):
-                self.state.last_training_at = datetime.utcnow().isoformat()
+                self.state.last_training_at = datetime.now(timezone.utc).isoformat()
                 return None  # Skip training, don't retry immediately
 
             with open(self.candles_path) as f:
@@ -294,7 +294,7 @@ class NeuralOperations:
                 self.registry.versions[-1].to_dict()
             )
 
-            self.state.last_training_at = datetime.utcnow().isoformat()
+            self.state.last_training_at = datetime.now(timezone.utc).isoformat()
             return report
 
         finally:
@@ -336,7 +336,7 @@ class NeuralOperations:
         health["model_version"] = prod.version
         self.memory.save_health(health)
 
-        self.state.last_prediction_at = datetime.utcnow().isoformat()
+        self.state.last_prediction_at = datetime.now(timezone.utc).isoformat()
         return pred_dict
 
     def _check_upgrades(self) -> str | None:
