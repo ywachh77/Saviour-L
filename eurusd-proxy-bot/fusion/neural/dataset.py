@@ -201,7 +201,10 @@ def candle_features(candles: Sequence) -> np.ndarray:
 
         rows.append(feats)
 
-    return np.array(rows, dtype=np.float32)
+    arr = np.array(rows, dtype=np.float32)
+    # Clean NaN/inf values — replace with 0.0 to prevent propagation
+    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    return arr
 
 
 def _ema(values: np.ndarray, period: int) -> float:
@@ -231,19 +234,30 @@ def _adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
             up_smooth[i] = (up_smooth[i - 1] * (period - 1) + up_moves[i]) / period
             down_smooth[i] = (down_smooth[i - 1] * (period - 1) + down_moves[i]) / period
 
-    if up_smooth[-1] == 0 and down_smooth[-1] == 0:
+    # Handle edge cases
+    up_val = up_smooth[-1]
+    down_val = down_smooth[-1]
+
+    # NaN or inf check
+    if not np.isfinite(up_val) or not np.isfinite(down_val):
+        return 0.0
+
+    if up_val == 0 and down_val == 0:
         return 0.0
 
     # Handle extreme cases: when one direction has no movement
-    if down_smooth[-1] == 0:
+    if down_val == 0:
         return 100.0  # Strong uptrend, maximum directional movement
-    if up_smooth[-1] == 0:
+    if up_val == 0:
         return 100.0  # Strong downtrend, maximum directional movement
 
-    dx = 100.0 * abs(up_smooth[-1] - down_smooth[-1]) / (
-        up_smooth[-1] + down_smooth[-1]
-    )
-    return dx
+    denom = up_val + down_val
+    if denom <= 0:
+        return 0.0
+
+    dx = 100.0 * abs(up_val - down_val) / denom
+    # Clamp to valid ADX range [0, 100]
+    return float(np.clip(dx, 0.0, 100.0))
 
 
 # ---------------------------------------------------------------------------
