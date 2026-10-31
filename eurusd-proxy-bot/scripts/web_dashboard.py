@@ -718,6 +718,7 @@ class OperatorRuntime:
                 },
                 "needle": self.needle.status(),
                 "neural": self.neural_payload(),
+                "ai": self.ai_payload(),
             }
 
     def generate_signals(
