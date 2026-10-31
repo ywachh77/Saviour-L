@@ -57,6 +57,13 @@ class DaemonState:
     last_error: str = ""
     started_at: str = ""
     state_version: int = 1
+    # Safety guards
+    training_failures: int = 0
+    last_successful_training: str = ""
+    safety_mode: bool = False
+    safety_reason: str = ""
+    max_consecutive_training_failures: int = 3
+    max_model_age_hours: int = 48
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items()}
@@ -130,6 +137,13 @@ class NeuralOperations:
         }
 
         try:
+            # 0. Safety guard check
+            safety = self._check_safety()
+            if safety:
+                report["actions"].append(f"Safety mode: {safety}")
+                report["cycle_finished"] = datetime.now(timezone.utc).isoformat()
+                return report
+
             # 1. Health check
             health = self._check_health()
             report["actions"].append(f"Health check: {'OK' if health else 'DEGRADED'}")
@@ -231,6 +245,59 @@ class NeuralOperations:
         if not os.path.exists(prod.checkpoint_path):
             return False
         return True
+
+    def _check_safety(self) -> str | None:
+        """Check autonomous safety guards. Returns a reason string if in
+        safety mode, or None if safe to proceed.
+
+        Guards:
+        1. Consecutive training failures — pause if exceeded
+        2. Model staleness — alert if production model is too old
+        3. Model health — pause if production model health check fails
+        """
+        # Guard 1: Consecutive training failures
+        if self.state.training_failures >= self.state.max_consecutive_training_failures:
+            if not self.state.safety_mode:
+                self._enter_safety_mode(
+                    f"Training failed {self.state.training_failures} consecutive times"
+                )
+            return self.state.safety_reason
+
+        # Guard 2: Model staleness
+        prod = self.registry.get_production_version()
+        if prod is not None:
+            try:
+                model_age = datetime.now(timezone.utc) - datetime.fromisoformat(
+                    prod.created_at
+                )
+                if model_age > timedelta(hours=self.state.max_model_age_hours):
+                    return f"Model stale: {model_age.total_seconds() // 3600:.0f}h old"
+            except (ValueError, TypeError):
+                pass
+
+        # Guard 3: Model health — don't predict if health check fails
+        if prod is not None:
+            if not os.path.exists(prod.checkpoint_path):
+                if not self.state.safety_mode:
+                    self._enter_safety_mode("Production model checkpoint missing")
+                return self.state.safety_reason
+
+        return None
+
+    def _enter_safety_mode(self, reason: str) -> None:
+        """Enter safety mode — pauses training and predictions."""
+        self.state.safety_mode = True
+        self.state.safety_reason = reason
+        self._save_state()
+        print(f"SAFETY MODE ENGAGED: {reason}")
+
+    def _exit_safety_mode(self) -> None:
+        """Exit safety mode — clears the flag and resets counters."""
+        self.state.safety_mode = False
+        self.state.safety_reason = ""
+        self.state.training_failures = 0
+        self._save_state()
+        print("SAFETY MODE DISENGAGED")
 
     def _should_run(self, attr: str, interval: timedelta) -> bool:
         """Check if an action should run based on the last run time."""
@@ -340,7 +407,7 @@ class NeuralOperations:
             return None
 
     def _trigger_training(self) -> TrainingReport | None:
-        """Trigger a new training run."""
+        """Trigger a new training run. Tracks failures for safety mode."""
         self.state.is_training = True
         try:
             # Load candles
@@ -382,7 +449,18 @@ class NeuralOperations:
             )
 
             self.state.last_training_at = datetime.now(timezone.utc).isoformat()
+            self.state.last_successful_training = self.state.last_training_at
+            self.state.training_failures = 0
+            if self.state.safety_mode:
+                self._exit_safety_mode()
             return report
+
+        except Exception as e:
+            self.state.training_failures += 1
+            self.state.last_error = str(e)
+            print(f"Training failed ({self.state.training_failures}/"
+                  f"{self.state.max_consecutive_training_failures}): {e}")
+            raise
 
         finally:
             self.state.is_training = False
