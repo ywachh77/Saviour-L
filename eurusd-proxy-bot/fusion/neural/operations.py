@@ -602,7 +602,8 @@ def main():
                 timestamp=ts, open=r["o"], high=r["h"], low=r["l"],
                 close=r["c"], volume=r["v"],
             ))
-        trainer = NeuralTrainer(TrainingConfig(epochs=30), NeuralConfig())
+        seed = int(os.environ.get("NEURAL_SEED", "42"))
+        trainer = NeuralTrainer(TrainingConfig(epochs=30, seed=seed), NeuralConfig())
         report = trainer.train(candles)
         print(json.dumps(report.to_dict(), indent=2, default=str))
     elif args.mode == "predict":
