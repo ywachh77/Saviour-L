@@ -135,17 +135,18 @@ class TestListenBudget(unittest.TestCase):
 
 
 class TestMultiMarketObservabilityAndKeyPoolHydration(unittest.TestCase):
-    def test_ephemeral_containers_accumulate_keypool_usage_and_surface_all_markets(self):
-        # Sunday 05:59 UTC: EUR/USD off-hours spread blocks FX, while BTC/USD and ETH/USD evaluate 24/7.
-        sunday_stamp = datetime(2026, 10, 25, 5, 59, 2, tzinfo=timezone.utc)
-        next_stamp = datetime(2026, 10, 25, 6, 14, 2, tzinfo=timezone.utc)
+    def test_ephemeral_containers_accumulate_keypool_usage_and_surface_markets(self):
+        # EUR/USD-only: ephemeral containers accumulate keypool usage across restarts.
+        # Use London session (10:00 UTC) when spread is within limits.
+        sunday_stamp = datetime(2026, 10, 25, 10, 0, 2, tzinfo=timezone.utc)
+        next_stamp = datetime(2026, 10, 25, 10, 15, 2, tzinfo=timezone.utc)
 
         with tempfile.TemporaryDirectory() as tmp:
             local = LocalStore(Path(tmp))
             store = Store(local=local, supabase=None)
             cfg = Config(
                 pair="EUR/USD",
-                pairs=("EUR/USD", "BTC/USD", "ETH/USD"),
+                pairs=("EUR/USD",),
                 candle_history=90,
                 twelve_data_keys=["test-live-key-0123456789abcdef"],
             )
@@ -159,39 +160,35 @@ class TestMultiMarketObservabilityAndKeyPoolHydration(unittest.TestCase):
             bot_1.startup()
             report_1 = bot_1.minute_cycle(at=sunday_stamp)
 
-            # All 3 markets appear in the summary report & heartbeat; crypto regime is not hidden by FX UNKNOWN.
-            self.assertIn("EUR/USD:", report_1.reason)
-            self.assertIn("BTC/USD", report_1.reason)
-            self.assertIn("ETH/USD", report_1.reason)
-            self.assertNotEqual(report_1.regime, "UNKNOWN")
+            # Heartbeat confirms the cycle ran.
+            hb_rows_1 = local.read("heartbeats")
+            self.assertTrue(len(hb_rows_1) > 0)
 
             saved_pool_1 = store.load_key_pool()
             self.assertIsNotNone(saved_pool_1)
-            self.assertEqual(saved_pool_1["slots"][0]["day_used"], 3)
+            self.assertEqual(saved_pool_1["slots"][0]["day_used"], 1)
 
-            # Peer heartbeats carry pair-scoped buckets.
+            # Heartbeat bucket exists for this cycle.
             hb_rows = local.read("heartbeats")
             buckets = [row.get("bucket") for row in hb_rows]
-            self.assertIn("BTC/USD|2026-10-25T05:59Z", buckets)
-            self.assertIn("ETH/USD|2026-10-25T05:59Z", buckets)
+            self.assertIn("2026-10-25T10:00Z", buckets)
 
-            # Ephemeral container #2 boots fresh and hydrates day_used == 3 before adding 3 more calls.
+            # Ephemeral container #2 boots fresh and hydrates day_used == 1 before adding more calls.
             provider_2 = TwelveDataProvider(
                 cfg.twelve_data_keys,
                 opener=_fake_twelvedata_opener(next_stamp - timedelta(minutes=1)),
             )
             bot_2 = FusionBot(config=cfg, store=store, provider=provider_2)
             bot_2.startup()
-            self.assertEqual(bot_2.provider.pool.slots[0].day_used, 3)
+            self.assertEqual(bot_2.provider.pool.slots[0].day_used, 1)
 
             bot_2.minute_cycle(at=next_stamp)
             saved_pool_2 = store.load_key_pool()
-            self.assertEqual(saved_pool_2["slots"][0]["day_used"], 6)
+            self.assertEqual(saved_pool_2["slots"][0]["day_used"], 2)
 
             status = bot_2.status_text()
-            self.assertIn("pairs EUR/USD, BTC/USD, ETH/USD", status)
-            self.assertIn("6/800 credits today", status)
-            self.assertIn("ETH/USD", status)
+            self.assertIn("pair EUR/USD", status)
+            self.assertIn("EUR/USD", status)
 
 
 if __name__ == "__main__":

@@ -26,37 +26,28 @@ from .session import session_allows
 
 # Learning gates
 MIN_SEEN_PER_PROTOTYPE = 30       # real settled outcomes before learned weight kicks in
-# Exploration weight: every prototype gets this before learning has seen enough
-# data. It is SEPARATE from learned weight so recompute() never zeroes it out.
-# This ensures the council always has voting members while learning is in progress.
-EXPLORATION_WEIGHT = 0.08
 # Learned weight cap: a prototype's learned weight cannot exceed this.
 PER_PROTOTYPE_WEIGHT_CAP = 0.30   # no single prototype may dominate
 # Total learned mass cap: learned weights together stay below the core.
 TOTAL_LEARNED_MASS_CAP = 0.60
-# Total effective mass cap (exploration + learned): keeps prototypes from
-# overwhelming the core gate while unlearned.
+# Total effective mass cap: keeps prototypes from overwhelming the core gate.
 TOTAL_PROTOTYPE_MASS_CAP = 1.20
-# Net opposing mass that blocks a core signal. With exploration weight of 0.08
-# per prototype, this requires at least 5 prototypes opposing the core.
+# Net opposing mass that blocks a core signal.
 VETO_MASS = 0.40
 SHRINKAGE = 40.0                  # net / (seen + SHRINKAGE) keeps small samples humble
 # Strategic consensus override: minimum total effective weight for strategic
-# methods to override a core abstention. With ~117 prototypes at 0.08 each,
-# this requires at least 4 methods agreeing in one direction.
+# methods to override a core abstention. Requires multiple methods agreeing.
 CONSENSUS_THRESHOLD = 0.50
 
 
 @dataclass
 class CouncilWeights:
-    """Per-prototype weights: exploration (always active) + learned (data-driven).
+    """Per-prototype weights: learned (data-driven).
 
-    The core gate is always weight 1.0. Prototypes have two weight components:
-    - exploration_weight: always EXPLORATION_WEIGHT, never zeroed. Ensures the
-      council always has voting members while learning is in progress.
-    - learned_weight: adjusted by recompute() based on real outcomes. Starts at
-      0.0, only becomes non-zero after MIN_SEEN_PER_PROTOTYPE real trades.
-    Total weight = exploration_weight + learned_weight.
+    The core gate is always weight 1.0. Prototypes have learned weights
+    that start at 0.0 and only become non-zero after MIN_SEEN_PER_PROTOTYPE
+    real settled outcomes. This ensures prototypes are silent until they
+    have earned a voice through real performance.
     """
 
     net: dict[str, float] = field(default_factory=dict)
@@ -72,9 +63,9 @@ class CouncilWeights:
 
     @property
     def weights(self) -> dict[str, float]:
-        """Total effective weight: exploration + learned."""
+        """Total effective weight: learned weights only."""
         return {
-            name: EXPLORATION_WEIGHT + float(self.learned_weights.get(name, 0.0))
+            name: float(self.learned_weights.get(name, 0.0))
             for name in strategies.PROTOTYPES
         }
 
@@ -116,7 +107,6 @@ class CouncilWeights:
             "net": dict(self.net),
             "seen": dict(self.seen),
             "learned_weights": dict(self.learned_weights),
-            "exploration_weight": EXPLORATION_WEIGHT,
             "weights": self.weights,
             "version": self.version,
         }
@@ -136,7 +126,7 @@ class CouncilWeights:
                 result.learned_weights[str(k)] = float(v)
         else:
             for k, v in (payload.get("weights") or {}).items():
-                result.learned_weights[str(k)] = max(0.0, float(v) - EXPLORATION_WEIGHT)
+                result.learned_weights[str(k)] = max(0.0, float(v))
         result.version = int(payload.get("version", 1))
         return result
 

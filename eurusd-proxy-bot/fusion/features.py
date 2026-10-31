@@ -50,7 +50,6 @@ CCI_PERIOD = 20
 # swing the swing strategies use, because a scalp targets a few pips, not a leg.
 MICRO_PIVOT_BARS = 5
 
-FEATURE_VERSION = 8
 FEATURE_VERSION = 9
 
 # Higher-timeframe context. The feed is one-minute only, so these are resampled

@@ -22,18 +22,20 @@ class TestRiskPlan(unittest.TestCase):
 
     def test_risk_fraction_caps_at_two_percent_by_default(self):
         capped = risk.build_risk_plan(
-            symbol="BTC/USD", side="BUY", entry_price=80_000.0, atr_pips=60.0,
+            symbol="EUR/USD", side="BUY", entry_price=1.08500, atr_pips=60.0,
             balance_usd=5_000.0, risk_fraction=0.10
         )
         self.assertAlmostEqual(capped.risk_fraction, 0.02)
         self.assertAlmostEqual(capped.risk_amount_usd, 100.0)
-        # 60 * 1.5 = 90 pip stop + 8 pip spread = $98 loss per 1 BTC -> ~1.0204 BTC
-        self.assertAlmostEqual(capped.position_units, 100.0 / 98.0, places=4)
+        # 60 * 1.5 = 90 pip stop + 1.2 pip spread = 91.2 pip loss per 1 EUR
+        # loss_per_unit = 91.2 * 0.0001 = $0.00912
+        # units = $100 / $0.00912 = 10964.91 EUR
+        self.assertAlmostEqual(capped.position_units, 100.0 / (91.2 * 0.0001), places=2)
 
-    def test_crypto_net_reward_to_risk_beats_fx_on_real_scales(self):
-        fx = risk.build_risk_plan(symbol="EUR/USD", side="BUY", entry_price=1.0850, atr_pips=1.95)
-        btc = risk.build_risk_plan(symbol="BTC/USD", side="BUY", entry_price=80_500.0, atr_pips=58.0)
-        self.assertGreater(btc.net_reward_to_risk, fx.net_reward_to_risk)
+    def test_net_reward_to_risk_increases_with_atr(self):
+        low_atr = risk.build_risk_plan(symbol="EUR/USD", side="BUY", entry_price=1.0850, atr_pips=1.95)
+        high_atr = risk.build_risk_plan(symbol="EUR/USD", side="BUY", entry_price=1.0850, atr_pips=6.0)
+        self.assertGreater(high_atr.net_reward_to_risk, low_atr.net_reward_to_risk)
 
 
 class TestCircuitBreaker(unittest.TestCase):
