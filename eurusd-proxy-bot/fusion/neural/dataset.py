@@ -277,12 +277,14 @@ def make_label(
     future_price: float,
     atr_pips: float,
     spread_pips: float = 1.2,
-    min_return_pips: float = 1.5,
+    min_return_pips: float = 3.0,
 ) -> SequenceLabel:
     """Generate a training label from entry and future prices.
 
-    Direction is assigned based on whether the return clears the
-    cost threshold. NO_TRADE when return is within noise.
+    High-conviction labeling: BUY/SELL labels are only assigned when
+    the move is substantial — both in absolute pips AND relative to
+    ATR. This teaches the model that most candles are NO_TRADE,
+    directly supporting high win rates on the trades it does fire.
 
     Note: ``direction_threshold`` from NeuralConfig is not used here
     because labels are based on actual price movement, not model
@@ -293,7 +295,11 @@ def make_label(
     # Net return after cost
     net_ret = abs(ret) - spread_pips
 
-    if net_ret < min_return_pips:
+    # High-conviction: require move to clear both absolute and ATR-relative
+    # thresholds. This ensures BUY/SELL labels are only for strong moves.
+    atr_relative = abs(ret) / (atr_pips + 1e-10)
+
+    if net_ret < min_return_pips or atr_relative < 0.3:
         direction = 2  # NO_TRADE
     elif ret > 0:
         direction = 0  # BUY
