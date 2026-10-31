@@ -377,16 +377,16 @@ class NeuralOperations:
             )
 
             # Save outcome to memory
-            signal_data = {
-                "signal_id": signal_id,
-                "pair": pair,
-                "timestamp": signal_ts,
+            settlement_dict = {
+                "outcome": outcome,
                 "entry_price": entry_price,
-                "side": side,
+                "exit_price": current_price,
+                "gross_pips": pnl_pips + spread_pips,
+                "net_pips": pnl_pips,
                 "spread_pips": spread_pips,
-                "horizon_minutes": horizon,
+                "settled_at": datetime.now(timezone.utc).isoformat(),
             }
-            self.memory.save_outcome(signal_data, settlement)
+            self.memory.save_outcome(signal_id, settlement_dict)
             count += 1
 
         self.state.last_outcome_eval_at = datetime.now(timezone.utc).isoformat()
