@@ -185,7 +185,9 @@
     combiner:    { code: "DIVISION 07 // FUSION",      title: "Combiner Fusion",     jp: "融合", sig: "融合 · FUSION REACTOR",  fx: "fx-combiner",   stamp: "融合 · 結合", manga: "assets/manga/vasto-ulquiorra.jpg",      plate: "CHRONICLE PLATE 07 // INFINITE FUSION",  quote: "21 indicators fused with ML ensemble into a single directional vote." },
     generator:   { code: "DIVISION 08 // GENERATION",  title: "Signal Generator",    jp: "生成", sig: "生成 · SIGNAL FORGE",    fx: "fx-generator",  stamp: "生成 · 未来", manga: "assets/manga/bankai-clash.jpg",         plate: "CHRONICLE PLATE 08 // FUTURE FORGE",      quote: "Predicts upcoming candle direction across 1-min, 3-min, and 30-min horizons." },
     indicators:  { code: "DIVISION 09 // INDICATORS",  title: "Indicator Library",   jp: "指標", sig: "指標 · COMPASS ROSE",    fx: "fx-indicators",  stamp: "指標 · 羅針", manga: "assets/manga/zangetsu-cleave.jpg",       plate: "CHRONICLE PLATE 09 // 21-STAR COMPASS",  quote: "Every indicator value rendered with directional interpretation in real time." },
-    surveillance:{ code: "DIVISION 10 // SURVEILLANCE", title: "Market Surveillance", jp: "監視", sig: "監視 · EYE OF SENTINEL", fx: "fx-surveillance", stamp: "監視 · 眼光", manga: "assets/manga/gotei-captains.webp",       plate: "CHRONICLE PLATE 10 // SENTINEL WATCH",   quote: "20 original microstructure indicators and 7 expiry-aware scalping methods surveilling the market." }
+    surveillance:{ code: "DIVISION 10 // SURVEILLANCE", title: "Market Surveillance", jp: "監視", sig: "監視 · EYE OF SENTINEL", fx: "fx-surveillance", stamp: "監視 · 眼光", manga: "assets/manga/gotei-captains.webp", plate: "CHRONICLE PLATE 10 // SENTINEL WATCH", quote: "20 original microstructure indicators and 7 expiry-aware scalping methods surveilling the market." },
+    winstreak:   { code: "DIVISION 11 // WIN STREAK",  title: "Win Streak Guardian",  jp: "連続", sig: "連続 · STREAK FORGE",     fx: "fx-winstreak",   stamp: "連続 · 勝率", manga: "assets/manga/ichigo-yhwach-tybw.jpg",  plate: "CHRONICLE PLATE 11 // STREAK GUARDIAN", quote: "Streak-aware sizing: every consecutive win increases position size until the 5-win bank-the-day cap." },
+    ai:          { code: "DIVISION 12 // AI CONTROL",  title: "Universal AI Gateway", jp: "AI統制", sig: "統制 · AI GATEWAY",      fx: "fx-ai",          stamp: "統制 · AI",   manga: "assets/manga/yhwach-sovereign.jpg",    plate: "CHRONICLE PLATE 12 // AI CONTROL CENTER", quote: "Connect any AI provider with just an API key. Auto-detection, model discovery, and unified gateway routing." }
   };
 
   var MARKETS_STATIC = {
@@ -288,6 +290,7 @@
     if (pageId === "indicators") loadIndicators();
     if (pageId === "surveillance") loadSurveillance();
     if (pageId === "winstreak") loadWinStreak();
+    if (pageId === "ai") refreshAI();
   }
 
   Array.prototype.forEach.call(document.querySelectorAll("[data-nav]"), function (btn) {
@@ -2215,6 +2218,209 @@
         grid.innerHTML = '<div class="empty-stage"><p class="empty-title">Error loading win streak data</p><p class="empty-sub">' + esc(err.message) + '</p></div>';
       });
   }
+
+  /* ─────────────────────────────────────────────────────────────
+     UNIVERSAL AI CONTROL CENTER
+     ───────────────────────────────────────────────────────────── */
+
+  function refreshAI() {
+    apiGet("api/ai").then(renderAI).catch(function (err) {
+      var grid = document.getElementById("ai-models-list");
+      if (grid) grid.innerHTML = '<div class="empty-stage"><p class="empty-title">AI Gateway not responding</p><p class="empty-sub">' + esc(err.message) + '</p></div>';
+    });
+  }
+
+  function renderAI(data) {
+    if (!data.ok) return;
+
+    // Update provider dropdown
+    var select = document.getElementById("ai-provider-select");
+    if (select && data.supported_providers) {
+      var current = select.value;
+      select.innerHTML = '<option value="">Auto-detect</option>';
+      data.supported_providers.forEach(function (p) {
+        var opt = document.createElement("option");
+        opt.value = p.name;
+        opt.textContent = p.display_name + " (" + p.key_prefix + "*)";
+        select.appendChild(opt);
+      });
+      if (current) select.value = current;
+    }
+
+    // Render connected providers
+    var provGrid = document.getElementById("ai-providers-list");
+    if (provGrid) {
+      if (data.connected_providers && data.connected_providers.length > 0) {
+        var html = '<div style="display:flex;gap:0.75rem;flex-wrap:wrap;">';
+        data.connected_providers.forEach(function (p) {
+          html += '<div style="flex:1;min-width:200px;border:1px solid var(--border);border-radius:8px;padding:0.75rem;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+            '<strong style="font-size:0.9rem;">' + esc(p.provider) + '</strong>' +
+            '<span class="pill pill-ok mono" style="font-size:0.7rem;">CONNECTED</span>' +
+            '</div>' +
+            '<div class="muted mono" style="font-size:0.75rem;margin-top:0.25rem;">Key: ' + esc(p.api_key_masked || "****") + '</div>' +
+            '<div class="muted mono" style="font-size:0.75rem;">Models: ' + p.models_count + '</div>' +
+            '<div class="muted mono" style="font-size:0.7rem;margin-top:0.25rem;">Last sync: ' + esc((p.last_sync || "").substring(0, 19)) + '</div>' +
+            '</div>';
+        });
+        html += '</div>';
+        provGrid.innerHTML = html;
+      } else {
+        provGrid.innerHTML = '<div class="empty-stage"><p class="empty-sub">No providers connected</p></div>';
+      }
+    }
+
+    // Render models
+    var modelGrid = document.getElementById("ai-models-list");
+    if (modelGrid) {
+      var models = data.models || [];
+      var countEl = document.getElementById("ai-model-count");
+      if (countEl) countEl.textContent = models.length + " models";
+
+      if (models.length > 0) {
+        var html = '<div class="ai-models-grid">';
+        models.forEach(function (m) {
+          var caps = [];
+          if (m.vision) caps.push("Vision");
+          if (m.reasoning) caps.push("Reasoning");
+          if (m.tool_calling) caps.push("Tools");
+          if (m.streaming) caps.push("Stream");
+          if (m.context_length) caps.push("ctx:" + m.context_length);
+          html += '<div style="border:1px solid var(--border);border-radius:6px;padding:0.6rem;margin-bottom:0.4rem;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+            '<strong style="font-size:0.85rem;">' + esc(m.model_name || m.model_id) + '</strong>' +
+            '<span class="pill mono" style="font-size:0.65rem;background:rgba(120,120,120,0.15);">' + esc(m.provider) + '</span>' +
+            '</div>' +
+            '<div class="muted mono" style="font-size:0.7rem;margin-top:0.15rem;">' + esc(m.model_id) + '</div>' +
+            '<div style="display:flex;gap:0.25rem;flex-wrap:wrap;margin-top:0.3rem;">' +
+            caps.map(function (c) {
+              return '<span class="pill mono" style="font-size:0.65rem;background:rgba(158,31,31,0.15);color:var(--accent);">' + esc(c) + '</span>';
+            }).join("") +
+            '</div>' +
+            '<div class="muted mono" style="font-size:0.65rem;margin-top:0.2rem;">' +
+            (m.latency_ms ? "latency: " + m.latency_ms + "ms" : "latency: unknown") +
+            (m.availability ? " · " + m.availability : "") +
+            '</div>' +
+            '</div>';
+        });
+        html += '</div>';
+        modelGrid.innerHTML = html;
+      } else {
+        modelGrid.innerHTML = '<div class="empty-stage"><p class="empty-sub">No models discovered. Connect a provider to see available models.</p></div>';
+      }
+    }
+
+    // Update gateway status
+    var gwEl = document.getElementById("ai-gateway-status");
+    if (gwEl) {
+      var gw = data.gateway || {};
+      if (gw.providers_connected > 0) {
+        gwEl.textContent = "ACTIVE · " + gw.providers_connected + " providers · " + gw.models_available + " models";
+        gwEl.style.color = "var(--accent)";
+      } else {
+        gwEl.textContent = "DISCONNECTED";
+        gwEl.style.color = "var(--muted)";
+      }
+    }
+
+    // Show/hide disconnect button
+    var discBtn = document.getElementById("ai-disconnect-btn");
+    if (discBtn) {
+      discBtn.style.display = (data.connected_providers && data.connected_providers.length > 0) ? "" : "none";
+    }
+  }
+
+  // AI Connect handler
+  function initAIHandlers() {
+    var connectBtn = document.getElementById("ai-connect-btn");
+    if (connectBtn) {
+      connectBtn.addEventListener("click", function () {
+        var provider = document.getElementById("ai-provider-select").value;
+        var apiKey = document.getElementById("ai-api-key-input").value;
+        var statusEl = document.getElementById("ai-connect-status");
+
+        if (!apiKey) {
+          statusEl.textContent = "Please enter an API key";
+          statusEl.style.color = "var(--danger)";
+          return;
+        }
+
+        statusEl.textContent = "Connecting...";
+        statusEl.style.color = "var(--muted)";
+
+        var payload = { api_key: apiKey };
+        if (provider) payload.provider = provider;
+
+        apiPost("api/ai/connect", payload).then(function (result) {
+          if (result.ok) {
+            statusEl.textContent = "Connected! " + result.display_name + " — " + result.models_discovered + " models discovered";
+            statusEl.style.color = "var(--accent)";
+            document.getElementById("ai-api-key-input").value = "";
+            refreshAI();
+          } else {
+            statusEl.textContent = "Failed: " + (result.error || "Unknown error");
+            statusEl.style.color = "var(--danger)";
+          }
+        }).catch(function (err) {
+          statusEl.textContent = "Error: " + err.message;
+          statusEl.style.color = "var(--danger)";
+        });
+      });
+    }
+
+    // AI Disconnect handler
+    var discBtn = document.getElementById("ai-disconnect-btn");
+    if (discBtn) {
+      discBtn.addEventListener("click", function () {
+        var provider = document.getElementById("ai-provider-select").value;
+        if (!provider) return;
+        apiPost("api/ai/disconnect", { provider: provider }).then(function (result) {
+          if (result.ok) {
+            showToast("Provider " + provider + " disconnected");
+            refreshAI();
+          } else {
+            showToast("Disconnect failed: " + (result.error || "Unknown error"));
+          }
+        });
+      });
+    }
+
+    // AI Refresh handler
+    var refreshBtn = document.getElementById("ai-refresh-btn");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", function () {
+        refreshAI();
+      });
+    }
+
+    // AI Health Check handler
+    var monitorBtn = document.getElementById("ai-monitor-btn");
+    if (monitorBtn) {
+      monitorBtn.addEventListener("click", function () {
+        var statusEl = document.getElementById("ai-monitor-status");
+        statusEl.textContent = "Running health check...";
+        statusEl.style.color = "var(--muted)";
+        apiPost("api/ai/monitor", { full_check: false }).then(function (result) {
+          if (result.ok) {
+            var checked = result.providers || [];
+            var okCount = checked.filter(function (p) { return p.ok; }).length;
+            statusEl.textContent = "Health check complete: " + okCount + "/" + checked.length + " providers OK at " + (result.checked_at || "").substring(0, 19);
+            statusEl.style.color = okCount > 0 ? "var(--accent)" : "var(--danger)";
+            refreshAI();
+          } else {
+            statusEl.textContent = "Health check failed: " + (result.error || "Unknown error");
+            statusEl.style.color = "var(--danger)";
+          }
+        }).catch(function (err) {
+          statusEl.textContent = "Error: " + err.message;
+          statusEl.style.color = "var(--danger)";
+        });
+      });
+    }
+  }
+
+  // Initialize AI handlers
+  initAIHandlers();
 
   /* Initial Boot --------------------------------------------------------- */
   refreshNeedleStatus();

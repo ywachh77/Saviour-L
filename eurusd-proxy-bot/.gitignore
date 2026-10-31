@@ -25,3 +25,6 @@ venv/
 
 # Portable copies
 *.zip
+
+# AI gateway runtime data
+neural/

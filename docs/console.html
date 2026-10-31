@@ -80,6 +80,11 @@
         <span class="nav-name">Win Streak</span>
         <span class="nav-jp" lang="ja">勝率連続</span>
       </button>
+      <button type="button" class="nav-item" data-nav="ai">
+        <span class="nav-idx mono">06</span>
+        <span class="nav-name">AI Center</span>
+        <span class="nav-jp" lang="ja">AI統制</span>
+      </button>
     </nav>
 
     <div class="rail-footer">
@@ -560,6 +565,67 @@
         </div>
       </div>
     </section>
+
+    <!-- ================================================================
+         PAGE 06 : AI CONTROL CENTER (AI統制)
+         ================================================================= -->
+    <section class="page" id="page-ai" data-page="ai">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow mono">UNIVERSAL AI CONTROL CENTER // API-KEY-ONLY CONNECTION</p>
+            <h2 class="panel-title">AI Provider Gateway</h2>
+          </div>
+          <span class="mono dim" id="ai-gateway-status">DISCONNECTED</span>
+        </div>
+
+        <!-- Connection Panel -->
+        <div class="card" style="margin-bottom:1.25rem;">
+          <div class="card-title">CONNECT A PROVIDER</div>
+          <p class="muted" style="font-size:0.85rem;margin:0.5rem 0 1rem;">
+            Enter only your API key. The system auto-detects the provider and discovers all available models.
+          </p>
+          <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-end;">
+            <div style="flex:1;min-width:200px;">
+              <label class="field-label mono" for="ai-provider-select">Provider</label>
+              <select id="ai-provider-select" class="field-input" style="width:100%;">
+                <option value="">Auto-detect</option>
+              </select>
+            </div>
+            <div style="flex:2;min-width:280px;">
+              <label class="field-label mono" for="ai-api-key-input">API Key</label>
+              <input type="password" id="ai-api-key-input" class="field-input"
+                placeholder="sk-... or nvapi-... or AIza..." autocomplete="off">
+            </div>
+            <button type="button" class="btn btn-primary" id="ai-connect-btn">Connect</button>
+            <button type="button" class="btn btn-ghost" id="ai-disconnect-btn" style="display:none;">Disconnect</button>
+          </div>
+          <div id="ai-connect-status" class="muted mono" style="font-size:0.8rem;margin-top:0.75rem;"></div>
+        </div>
+
+        <!-- Connected Providers -->
+        <div class="card" style="margin-bottom:1.25rem;">
+          <div class="card-head">
+            <div class="card-title">CONNECTED PROVIDERS</div>
+            <button type="button" class="btn btn-sm btn-ghost" id="ai-refresh-btn">Refresh</button>
+          </div>
+          <div id="ai-providers-list" class="ai-providers-grid"></div>
+        </div>
+
+        <!-- Model Discovery -->
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">AI MODEL REGISTRY</div>
+            <div style="display:flex;gap:0.5rem;align-items:center;">
+              <span class="mono dim" id="ai-model-count">0 models</span>
+              <button type="button" class="btn btn-sm btn-ghost" id="ai-monitor-btn">Run Health Check</button>
+            </div>
+          </div>
+          <div id="ai-monitor-status" class="muted mono" style="font-size:0.8rem;margin-bottom:0.75rem;"></div>
+          <div id="ai-models-list" class="ai-models-grid"></div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <!-- ───────────────────── MOBILE BOTTOM APP TAB BAR ──────────────────── -->
@@ -595,6 +661,17 @@
         <polyline points="17 3 21 3 21 7"/><polyline points="3 17 7 17 7 21"/><polyline points="14 4 17 7 20 4"/><polyline points="10 20 7 17 10 14"/>
       </svg>
       <span>Streak</span>
+    </button>
+    <button type="button" class="tab-btn" data-nav="ai">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/>
+        <circle cx="12" cy="12" r="3"/>
+        <line x1="12" y1="3" x2="12" y2="6"/>
+        <line x1="12" y1="18" x2="12" y2="21"/>
+        <line x1="3" y1="12" x2="6" y2="12"/>
+        <line x1="18" y1="12" x2="21" y2="12"/>
+      </svg>
+      <span>AI</span>
     </button>
   </nav>
 </div>

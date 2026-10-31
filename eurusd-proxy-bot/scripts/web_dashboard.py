@@ -191,6 +191,15 @@ class OperatorRuntime:
         self.config: Config = Config()
         self.store: Store = None  # type: ignore[assignment]
         self.bot: FusionBot = None  # type: ignore[assignment]
+        # AI Gateway (Universal AI Control Center)
+        from fusion.ai_gateway import (
+            AIGateway, AIMonitor, CredentialStore, ModelRegistry,
+        )
+        neural_dir = getattr(self.config, "neural_dir", "neural")
+        self.ai_registry = ModelRegistry(os.path.join(neural_dir, "ai_registry.json"))
+        self.ai_credentials = CredentialStore(os.path.join(neural_dir, "ai_credentials.json"))
+        self.ai_gateway = AIGateway(self.ai_registry, self.ai_credentials)
+        self.ai_monitor = AIMonitor(self.ai_registry, self.ai_credentials)
         self.reload()
         if auto_settle:
             self._start_auto_settle_worker()
@@ -1435,6 +1444,88 @@ class OperatorRuntime:
                 "cognitive": partner.status_summary(self.bot),
                 **self.needle.status(),
             }
+
+    def ai_payload(self) -> dict[str, Any]:
+        """Universal AI Control Center dashboard snapshot."""
+        with self.lock:
+            try:
+                from fusion.ai_gateway.discovery import get_provider_info
+
+                providers = get_provider_info()
+                connected = self.ai_credentials.list_credentials()
+                reg_stats = self.ai_registry.stats()
+                gw_status = self.ai_gateway.get_status()
+
+                return {
+                    "ok": True,
+                    "supported_providers": providers,
+                    "connected_providers": connected,
+                    "registry": reg_stats,
+                    "gateway": gw_status,
+                    "models": self.ai_registry.get_models(available_only=True)[:50],
+                    "monitor": self.ai_monitor.get_status(),
+                }
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+    def ai_connect_action(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Connect a provider with an API key."""
+        provider = str(body.get("provider", ""))
+        api_key = str(body.get("api_key", ""))
+
+        if not provider:
+            return {"ok": False, "error": "Provider is required"}
+        if not api_key:
+            return {"ok": False, "error": "API key is required"}
+
+        with self.lock:
+            try:
+                result = self.ai_gateway.connect(provider, api_key)
+                if result.get("ok"):
+                    return {
+                        "ok": True,
+                        "provider": provider,
+                        "display_name": result.get("display_name"),
+                        "models_discovered": result.get("models_discovered", 0),
+                        "models": result.get("models", []),
+                    }
+                else:
+                    return {
+                        "ok": False,
+                        "provider": provider,
+                        "error": result.get("error", "Connection failed"),
+                    }
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+    def ai_disconnect_action(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Disconnect a provider and revoke credentials."""
+        provider = str(body.get("provider", ""))
+        if not provider:
+            return {"ok": False, "error": "Provider is required"}
+        with self.lock:
+            try:
+                self.ai_gateway.disconnect(provider)
+                return {"ok": True, "provider": provider}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+    def ai_models_action(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Get discovered models, optionally filtered by provider."""
+        provider = str(body.get("provider", "")) or None
+        with self.lock:
+            models = self.ai_registry.get_models(provider=provider)
+            return {"ok": True, "models": models, "count": len(models)}
+
+    def ai_monitor_action(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Trigger a monitoring check on all connected providers."""
+        full_check = bool(body.get("full_check", False))
+        with self.lock:
+            try:
+                result = self.ai_monitor.check_all(full_check=full_check)
+                return result
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
 
     def neural_payload(self) -> dict[str, Any]:
         """Neural AI dashboard snapshot — model health, training, and predictions."""
@@ -3144,6 +3235,10 @@ def make_handler(runtime: OperatorRuntime):
                 self._send_json(runtime.neural_payload())
                 return
 
+            if route == "/api/ai":
+                self._send_json(runtime.ai_payload())
+                return
+
             if route == "/api/learning":
                 self._send_json(runtime.learning_payload())
                 return
@@ -3239,6 +3334,22 @@ def make_handler(runtime: OperatorRuntime):
 
                 if route == "/api/neural/train":
                     self._send_json(runtime.neural_train_action(body))
+                    return
+
+                if route == "/api/ai/connect":
+                    self._send_json(runtime.ai_connect_action(body))
+                    return
+
+                if route == "/api/ai/disconnect":
+                    self._send_json(runtime.ai_disconnect_action(body))
+                    return
+
+                if route == "/api/ai/models":
+                    self._send_json(runtime.ai_models_action(body))
+                    return
+
+                if route == "/api/ai/monitor":
+                    self._send_json(runtime.ai_monitor_action(body))
                     return
 
                 if route == "/api/telegram/command":

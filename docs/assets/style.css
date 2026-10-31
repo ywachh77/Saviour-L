@@ -3025,3 +3025,92 @@ body.is-unleashing .fuin-flash {
   font-weight: 700;
   text-transform: uppercase;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   UNIVERSAL AI CONTROL CENTER
+   ───────────────────────────────────────────────────────────── */
+
+.ai-providers-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.ai-models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.5rem;
+}
+
+/* AI page-specific adjustments */
+#page-ai .card {
+  margin-bottom: 1.25rem;
+}
+
+#page-ai .field-label {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+  letter-spacing: 0.05em;
+}
+
+#page-ai .field-input {
+  background: var(--ink-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 0.7rem;
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+#page-ai .field-input:focus {
+  border-color: var(--accent);
+}
+
+#page-ai select.field-input {
+  cursor: pointer;
+}
+
+#page-ai .btn-primary {
+  background: var(--accent);
+  color: var(--ink);
+  border: none;
+  border-radius: 4px;
+  padding: 0.6rem 1.2rem;
+  font-weight: 700;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+#page-ai .btn-primary:hover {
+  opacity: 0.85;
+}
+
+#page-ai .btn-ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+#page-ai .btn-ghost:hover {
+  color: var(--accent);
+}
+
+#page-ai .pill-ok {
+  background: rgba(120, 200, 120, 0.15);
+  color: #7cc47c;
+  padding: 0.1rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.7rem;
+}
