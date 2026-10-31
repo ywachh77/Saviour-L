@@ -59,6 +59,25 @@ class NeuralConfig:
     min_expected_return_pips: float = 1.5  # Min expected return to act
     max_uncertainty: float = 0.65    # Max uncertainty before NO TRADE
 
+    def __post_init__(self) -> None:
+        """Validate config values are in sensible ranges."""
+        if self.input_window < 10:
+            raise ValueError(f"input_window must be >= 10, got {self.input_window}")
+        if self.horizon_minutes < 1:
+            raise ValueError(f"horizon_minutes must be >= 1, got {self.horizon_minutes}")
+        if self.d_model < 16:
+            raise ValueError(f"d_model must be >= 16, got {self.d_model}")
+        if self.n_heads < 1 or self.n_heads > 16:
+            raise ValueError(f"n_heads must be between 1 and 16, got {self.n_heads}")
+        if self.n_layers < 1 or self.n_layers > 12:
+            raise ValueError(f"n_layers must be between 1 and 12, got {self.n_layers}")
+        if self.d_ff < 16:
+            raise ValueError(f"d_ff must be >= 16, got {self.d_ff}")
+        if self.dropout < 0 or self.dropout > 0.9:
+            raise ValueError(f"dropout must be between 0 and 0.9, got {self.dropout}")
+        if self.d_model % self.n_heads != 0:
+            raise ValueError(f"d_model ({self.d_model}) must be divisible by n_heads ({self.n_heads})")
+
     def to_dict(self) -> dict:
         return {
             "input_window": self.input_window,
