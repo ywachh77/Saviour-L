@@ -123,6 +123,14 @@ class NeuralPredictor:
         self.health = ModelHealth()
         self._min_candles = neural_config.input_window + 1
 
+        # ── High-conviction state tracking ──
+        self._confirmation_count = 0        # Consecutive confirming candles
+        self._confirmation_direction = None  # "BUY" | "SELL" | None
+        self._throttle_remaining = 0        # Candles to wait after a loss
+        self._kill_switch_remaining = 0    # Candles to wait after kill switch
+        self._consecutive_losses = 0       # Track losses for kill switch
+        self._candles_since_trade = 0      # Candles elapsed since last trade
+
     @classmethod
     def from_checkpoint(cls, checkpoint_path: str, spread_pips: float = 1.2) -> "NeuralPredictor":
         """Load predictor from a saved checkpoint."""
@@ -198,14 +206,14 @@ class NeuralPredictor:
             regime_names = ["TREND", "RANGE", "VOLATILE", "TRANSITION"]
             regime = regime_names[regime_idx]
 
-            # 7. Decision logic with cost guard
+            # 7. Decision logic with cost guard + high-conviction filters
             cfg = self.neural_config
             entry_price = candles[-1].close
             atr_pips = all_features[-1, 12] * 10.0
 
             action, reason = self._decide_action(
                 buy_p, sell_p, no_trade_p, expected_return,
-                uncertainty, atr_pips,
+                uncertainty, atr_pips, regime,
             )
 
             # 8. Validation checks
@@ -247,37 +255,113 @@ class NeuralPredictor:
     def _decide_action(
         self, buy_p: float, sell_p: float, no_trade_p: float,
         expected_return: float, uncertainty: float, atr_pips: float,
+        regime: str = "UNKNOWN",
     ) -> tuple[str, str]:
-        """Decide BUY / SELL / NO_TRADE based on model output and cost guards."""
+        """Decide BUY / SELL / NO_TRADE with high-conviction filters.
+
+        Layers (in order):
+          1. Kill switch — pause trading after consecutive losses
+          2. Adaptive throttle — raise thresholds after a recent loss
+          3. Regime filter — block unfavourable regimes
+          4. Uncertainty filter — reject high-uncertainty predictions
+          5. ATR filter — reject low-volatility (can't pay spread)
+          6. Confirmation — require N consecutive confirming candles
+          7. Strict thresholds — only fire on high-conviction signals
+        """
         cfg = self.neural_config
 
-        # High uncertainty → NO TRADE
+        # ── Layer 1: Kill switch ──
+        if cfg.kill_switch_enabled and self._kill_switch_remaining > 0:
+            self._kill_switch_remaining -= 1
+            return "NO_TRADE", (
+                f"Kill switch active ({self._kill_switch_remaining} candles remaining)"
+            )
+
+        # ── Layer 2: Adaptive throttle ──
+        throttle_bump = 0.0
+        if cfg.adaptive_throttle_enabled and self._throttle_remaining > 0:
+            self._throttle_remaining -= 1
+            throttle_bump = cfg.throttle_threshold_bump
+
+        effective_threshold = cfg.direction_threshold + throttle_bump
+        effective_min_return = cfg.min_expected_return_pips + throttle_bump * 10
+
+        # ── Layer 3: Regime filter ──
+        if regime in cfg.block_regimes:
+            return "NO_TRADE", f"Regime {regime} blocked for trading"
+
+        # ── Layer 4: Uncertainty filter ──
         if uncertainty > cfg.max_uncertainty:
             return "NO_TRADE", f"High uncertainty ({uncertainty:.3f})"
 
-        # Low ATR → NO TRADE (can't pay for spread)
+        # ── Layer 5: ATR filter ──
         if atr_pips < self.spread_pips * 1.15:
             return "NO_TRADE", f"Low ATR ({atr_pips:.2f}p) vs spread ({self.spread_pips}p)"
 
+        # ── Layer 6: Confirmation ──
+        # Determine the raw direction the model favours
+        if buy_p > sell_p and buy_p > no_trade_p:
+            raw_direction = "BUY"
+        elif sell_p > buy_p and sell_p > no_trade_p:
+            raw_direction = "SELL"
+        else:
+            raw_direction = None
+
+        if cfg.confirmation_required > 0:
+            if raw_direction == self._confirmation_direction:
+                self._confirmation_count += 1
+            else:
+                self._confirmation_count = 1
+                self._confirmation_direction = raw_direction
+
+            if self._confirmation_count < cfg.confirmation_required:
+                return "NO_TRADE", (
+                    f"Confirmation {self._confirmation_count}/{cfg.confirmation_required}"
+                    f" for {raw_direction}"
+                )
+        else:
+            # Confirmation disabled — reset tracking
+            self._confirmation_count = 0
+            self._confirmation_direction = None
+
+        # ── Layer 7: Strict thresholds ──
         # Strong BUY signal
-        if buy_p > cfg.direction_threshold and expected_return > cfg.min_expected_return_pips:
+        if (
+            raw_direction == "BUY"
+            and buy_p > effective_threshold
+            and expected_return > effective_min_return
+        ):
             net_ret = expected_return - self.spread_pips
             if net_ret > 0:
-                return "BUY", f"P(BUY)={buy_p:.2f}, expected return={expected_return:.2f}p"
+                # Reset confirmation for next cycle
+                self._confirmation_count = 0
+                self._confirmation_direction = None
+                self._candles_since_trade = 0
+                return "BUY", (
+                    f"High-conviction BUY: P(BUY)={buy_p:.2f}, "
+                    f"expected return={expected_return:.2f}p"
+                )
 
         # Strong SELL signal
-        if sell_p > cfg.direction_threshold and -expected_return > cfg.min_expected_return_pips:
+        if (
+            raw_direction == "SELL"
+            and sell_p > effective_threshold
+            and -expected_return > effective_min_return
+        ):
             net_ret = -expected_return - self.spread_pips
             if net_ret > 0:
-                return "SELL", f"P(SELL)={sell_p:.2f}, expected return={expected_return:.2f}p"
+                self._confirmation_count = 0
+                self._confirmation_direction = None
+                self._candles_since_trade = 0
+                return "SELL", (
+                    f"High-conviction SELL: P(SELL)={sell_p:.2f}, "
+                    f"expected return={expected_return:.2f}p"
+                )
 
-        # Weak signals
-        if buy_p > sell_p and expected_return > self.spread_pips * 0.5:
-            return "BUY", f"Weak BUY: P(BUY)={buy_p:.2f} > P(SELL)={sell_p:.2f}"
-        if sell_p > buy_p and expected_return < -self.spread_pips * 0.5:
-            return "SELL", f"Weak SELL: P(SELL)={sell_p:.2f} > P(BUY)={buy_p:.2f}"
-
-        return "NO_TRADE", "No clear edge"
+        # No clear edge — reset confirmation
+        self._confirmation_count = 0
+        self._confirmation_direction = None
+        return "NO_TRADE", "No clear edge after high-conviction filtering"
 
     def _validate(
         self, uncertainty: float, atr_pips: float,
@@ -310,6 +394,64 @@ class NeuralPredictor:
             return "FAILED"
 
         return "PASSED"
+
+    def record_outcome(self, prediction: Prediction, settlement_price: float) -> str:
+        """Record the outcome of a trade for kill-switch and throttle tracking.
+
+        Args:
+            prediction: The prediction that was acted on.
+            settlement_price: The price at which the trade was settled.
+
+        Returns:
+            "WIN" if the trade was profitable, "LOSS" otherwise, "SKIP" if
+            the prediction was NO_TRADE.
+        """
+        if prediction.action == "NO_TRADE":
+            return "SKIP"
+
+        entry = prediction.entry_reference_price
+        direction = prediction.action
+
+        # Calculate net return in pips (after spread)
+        if direction == "BUY":
+            net_pips = (settlement_price - entry) / 0.0001 - self.spread_pips
+        else:  # SELL
+            net_pips = (entry - settlement_price) / 0.0001 - self.spread_pips
+
+        outcome = "WIN" if net_pips > 0 else "LOSS"
+
+        if outcome == "WIN":
+            self._consecutive_losses = 0
+            self._throttle_remaining = 0
+            self._kill_switch_remaining = 0
+        else:
+            self._consecutive_losses += 1
+            # Trigger adaptive throttle
+            if self.neural_config.adaptive_throttle_enabled:
+                self._throttle_remaining = self.neural_config.throttle_steps
+            # Trigger kill switch if threshold reached
+            if (
+                self.neural_config.kill_switch_enabled
+                and self._consecutive_losses >= self.neural_config.kill_switch_threshold
+            ):
+                self._kill_switch_remaining = self.neural_config.kill_switch_cooldown_candles
+
+        return outcome
+
+    def get_conviction_state(self) -> dict:
+        """Return current high-conviction filter state for debugging/monitoring."""
+        cfg = self.neural_config
+        return {
+            "consecutive_losses": self._consecutive_losses,
+            "kill_switch_remaining": self._kill_switch_remaining,
+            "throttle_remaining": self._throttle_remaining,
+            "confirmation_count": self._confirmation_count,
+            "confirmation_direction": self._confirmation_direction,
+            "candles_since_trade": self._candles_since_trade,
+            "effective_threshold": cfg.direction_threshold,
+            "effective_min_return": cfg.min_expected_return_pips,
+            "blocked_regimes": list(cfg.block_regimes),
+        }
 
     def _extract_state(self, features: np.ndarray, idx: int) -> np.ndarray:
         """Extract 6-dim market-state features."""

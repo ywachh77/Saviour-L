@@ -27,4 +27,4 @@ venv/
 *.zip
 
 # AI gateway runtime data
-neural/
+/neural/

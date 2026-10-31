@@ -54,10 +54,26 @@ class NeuralConfig:
     # Normalization
     normalize_input: bool = True     # Use training-only statistics
 
-    # Output
-    direction_threshold: float = 0.55  # Min probability to act (after cost guard)
-    min_expected_return_pips: float = 1.5  # Min expected return to act
-    max_uncertainty: float = 0.65    # Max uncertainty before NO TRADE
+    # Output — High-Conviction thresholds (19/20 win rate target)
+    direction_threshold: float = 0.70   # Min probability to act (raised for selectivity)
+    min_expected_return_pips: float = 3.0  # Min expected return to act (raised)
+    max_uncertainty: float = 0.50       # Max uncertainty before NO TRADE (lowered)
+
+    # Confirmation — require signal to persist for N consecutive candles
+    confirmation_required: int = 3      # 0 = disabled, N = consecutive confirming candles
+
+    # Regime filter — block trades in unfavourable regimes
+    block_regimes: tuple[str, ...] = ("VOLATILE", "TRANSITION")
+
+    # Adaptive throttle — after a loss, raise thresholds temporarily
+    adaptive_throttle_enabled: bool = True
+    throttle_steps: int = 5             # Candles to wait after a loss
+    throttle_threshold_bump: float = 0.05  # Extra probability required during throttle
+
+    # Kill switch — pause trading after consecutive losses
+    kill_switch_enabled: bool = True
+    kill_switch_threshold: int = 2      # Consecutive losses before pause
+    kill_switch_cooldown_candles: int = 15  # Candles to wait after kill switch
 
     def __post_init__(self) -> None:
         """Validate config values are in sensible ranges."""
@@ -93,6 +109,14 @@ class NeuralConfig:
             "direction_threshold": self.direction_threshold,
             "min_expected_return_pips": self.min_expected_return_pips,
             "max_uncertainty": self.max_uncertainty,
+            "confirmation_required": self.confirmation_required,
+            "block_regimes": list(self.block_regimes),
+            "adaptive_throttle_enabled": self.adaptive_throttle_enabled,
+            "throttle_steps": self.throttle_steps,
+            "throttle_threshold_bump": self.throttle_threshold_bump,
+            "kill_switch_enabled": self.kill_switch_enabled,
+            "kill_switch_threshold": self.kill_switch_threshold,
+            "kill_switch_cooldown_candles": self.kill_switch_cooldown_candles,
         }
 
     @classmethod
