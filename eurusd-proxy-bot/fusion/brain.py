@@ -401,14 +401,8 @@ class AIBrain:
                 ai_market_view = self._consult_ai_gateway(gateway, candles, regime_state)
                 if ai_market_view:
                     self._ai_market_views.append(ai_market_view)
-                    # Trim to last 50 views
                     if len(self._ai_market_views) > 50:
                         self._ai_market_views = self._ai_market_views[-50:]
-
-                    # If AI has a strong disagreement with council, add a note
-                    if ai_market_view.get("direction") and ai_market_view["direction"] != council.side:
-                        # AI disagrees but doesn't veto — just note it
-                        pass  # Could add to reason later
             except Exception as e:
                 # AI gateway failure shouldn't block the pipeline
                 pass
