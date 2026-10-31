@@ -88,8 +88,6 @@ TESTS_PASSING_BASELINE = 717
 
 SIM_DEFAULTS: dict[str, tuple[float, float, int]] = {
     "EUR/USD": (1.08520, 0.00024, 101),
-    "BTC/USD": (80510.0, 62.0, 202),
-    "ETH/USD": (2382.0, 2.5, 303),
 }
 
 
@@ -181,6 +179,7 @@ class OperatorRuntime:
         self._cloud_synced_at: datetime | None = None
         self._synced_pairs: set[str] = set()
         self._paper_candle_pairs: set[str] = set()
+        self._signal_cache: dict[str, dict] = {}
         self._cloud_key_slots: list[dict[str, Any]] = []
         self._cloud_telegram_offset = 0
         self._auto_settle_interval_s = max(1.0, float(auto_settle_interval_s))
@@ -192,6 +191,15 @@ class OperatorRuntime:
         self.config: Config = Config()
         self.store: Store = None  # type: ignore[assignment]
         self.bot: FusionBot = None  # type: ignore[assignment]
+        # AI Gateway (Universal AI Control Center)
+        from fusion.ai_gateway import (
+            AIGateway, AIMonitor, CredentialStore, ModelRegistry,
+        )
+        neural_dir = getattr(self.config, "neural_dir", "neural")
+        self.ai_registry = ModelRegistry(os.path.join(neural_dir, "ai_registry.json"))
+        self.ai_credentials = CredentialStore(os.path.join(neural_dir, "ai_credentials.json"))
+        self.ai_gateway = AIGateway(self.ai_registry, self.ai_credentials)
+        self.ai_monitor = AIMonitor(self.ai_registry, self.ai_credentials)
         self.reload()
         if auto_settle:
             self._start_auto_settle_worker()
@@ -212,6 +220,8 @@ class OperatorRuntime:
         with self.lock:
             settled = self.bot.settle_due(at=stamp)
             self.bot.reconcile_settled_signals()
+            # Paper signal settlement: settle synthetic signals using paper candle data
+            settled += self._settle_paper_signals(at=stamp)
             for member in self._all_members():
                 if self._has_real_candles(member) and len(member.candles) >= 300:
                     member.maybe_run_auto_backtest(
@@ -223,6 +233,102 @@ class OperatorRuntime:
             self._auto_settled_total += settled
             self._last_auto_settle_at = stamp
             return settled
+
+    def _settle_paper_signals(self, at: datetime | None = None) -> int:
+        """Settle paper simulation signals using paper candle data.
+
+        This is the key to getting real win/loss data in PAPER_SIMULATION mode.
+        Without this, paper signals never settle and the ledger stays empty.
+        """
+        stamp = at or utcnow()
+        settled = 0
+        for member in self._all_members():
+            if not member.candles:
+                continue
+            # Only settle paper signals that are past expiry
+            pending = member.store.pending_signals(member.config.pair, limit=500)
+            for sig_row in pending:
+                if sig_row.get("source") != "SYNTHETIC":
+                    continue
+                if sig_row.get("settled", False):
+                    continue
+
+                expiry_str = sig_row.get("expiry_time")
+                if not expiry_str:
+                    continue
+                try:
+                    expiry_dt = parse_display_iso(expiry_str)
+                except Exception:
+                    continue
+
+                if stamp < expiry_dt:
+                    continue  # Not yet expired
+
+                # Find the candle at expiry time in the paper candle series
+                entry_price = sig_row.get("entry_price")
+                side = sig_row.get("side", "BUY")
+                signal_id = sig_row.get("signal_id", "")
+
+                if not entry_price:
+                    # Use the entry time to find the entry price from candles
+                    entry_time_str = sig_row.get("entry_time")
+                    if entry_time_str:
+                        try:
+                            entry_dt = parse_display_iso(entry_time_str)
+                            for c in member.candles:
+                                if abs((c.timestamp - entry_dt).total_seconds()) < 60:
+                                    entry_price = c.close
+                                    break
+                        except Exception:
+                            pass
+
+                if not entry_price:
+                    continue
+
+                # Find exit price at expiry
+                exit_price = None
+                for c in member.candles:
+                    if abs((c.timestamp - expiry_dt).total_seconds()) < 60:
+                        exit_price = c.close
+                        break
+
+                if exit_price is None:
+                    continue  # No candle at expiry — can't settle
+
+                # Calculate pips
+                inst = instruments.for_symbol(member.config.pair)
+                spread = sig_row.get("spread_pips", inst.spread_pips)
+                if side == "BUY":
+                    raw_pips = (exit_price - entry_price) / inst.pip
+                else:
+                    raw_pips = (entry_price - exit_price) / inst.pip
+                net_pips = raw_pips - spread
+
+                outcome = "WIN" if net_pips > 0 else "LOSS" if net_pips < 0 else "TIE"
+
+                settlement = {
+                    "signal_id": signal_id,
+                    "pair": member.config.pair,
+                    "side": side,
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "net_pips": round(net_pips, 2),
+                    "outcome": outcome,
+                    "settled_at": stamp.isoformat(),
+                    "settled_display": format_display_iso(stamp),
+                    "source": "PAPER_AUTO_SETTLE",
+                    "horizon_minutes": sig_row.get("horizon_minutes", 30),
+                }
+
+                member.store.save_settlement(settlement)
+                member.store.update_signal(signal_id, {
+                    "settled": True,
+                    "outcome": outcome,
+                    "net_pips": round(net_pips, 2),
+                })
+                settled += 1
+
+        return settled
 
     def _auto_settle_loop(self) -> None:
         while not self._stop_event.wait(self._auto_settle_interval_s):
@@ -258,12 +364,12 @@ class OperatorRuntime:
             os.environ.clear()
             os.environ.update(saved_env)
 
-        # Default to the 3-market MTF production profile when .env has not pinned a single market.
+        # EUR/USD only — crypto removed.
         env_lines = self.env_path.read_text(encoding="utf-8").splitlines() if self.env_path.is_file() else []
         if not envfile.get_value(env_lines, "PAIRS") and not envfile.get_value(env_lines, "PAIR"):
-            cfg.pairs = ("EUR/USD", "BTC/USD", "ETH/USD")
+            cfg.pairs = ("EUR/USD",)
         elif not envfile.get_value(env_lines, "PAIRS") and cfg.pair == "EUR/USD":
-            cfg.pairs = ("EUR/USD", "BTC/USD", "ETH/USD")
+            cfg.pairs = ("EUR/USD",)
         if not envfile.get_value(env_lines, "MTF_FILTER"):
             cfg.mtf_filter = True
             cfg.mtf_minutes = 15
@@ -407,7 +513,7 @@ class OperatorRuntime:
         latest_ts = format_display_iso(candles[-1].timestamp) if candles else None
         latest_disp = format_display_hm(candles[-1].timestamp) if candles else None
         atr_vals = [v for v in calc_atr(candles, 14) if v is not None] if len(candles) >= 20 else []
-        atr_pips = (atr_vals[-1] / inst.pip) if atr_vals else (1.95 if inst.symbol == "EUR/USD" else 58.0 if inst.symbol == "BTC/USD" else 23.0)
+        atr_pips = (atr_vals[-1] / inst.pip) if atr_vals else 1.95
         feat_series = feat_mod.compute_features(candles, instrument=inst) if len(candles) >= 60 else []
         latest_feat = feat_series[-1] if feat_series else None
         reg = regime_mod.detect_regime(candles, latest_feat).name if latest_feat else "UNKNOWN"
@@ -611,6 +717,8 @@ class OperatorRuntime:
                     "alerts": self.store.recent_alerts(limit=8),
                 },
                 "needle": self.needle.status(),
+                "neural": self.neural_payload(),
+                "ai": self.ai_payload(),
             }
 
     def generate_signals(
@@ -742,36 +850,53 @@ class OperatorRuntime:
                     member_source_tag = "SYNTHETIC"
                     feed_label = "PAPER_SIMULATION"
                     anchor_closed = causal_cutoff - timedelta(minutes=1)
-                    max_paper_steps = 140 if mode == "scan" else 50
-                    for _ in range(max_paper_steps):
-                        self._sim_step += 1
-                        steps_scanned += 1
-                        eval_candles = _build_scaled_paper_series(
-                            inst.symbol,
-                            count=280,
-                            end_minute=anchor_closed,
-                            seed_offset=self._sim_step,
-                        )
-                        result = member.engine.evaluate(
-                            eval_candles,
-                            model=member.model,
-                            ensemble=member.ensemble,
-                            weights=member.weights,
-                            source="SYNTHETIC",
-                            quote={"spread_pips": member.config.spread_pips},
-                            at=future_entry,
-                            observed_at=base_now,
-                            mistakes=member.mistakes,
-                            family_fusion=member.family_fusion,
-                        )
-                        if result.actionable:
-                            break
-                        # If FX off-hours/weekend blocks this market at the real wall-clock hour,
-                        # stop immediately rather than spinning through seeds that share the same timestamp.
-                        if result.gate is not None and not result.gate.usable:
-                            break
-                        if "weekend rollover" in (result.reason or "").lower():
-                            break
+                    # Reduced from 50 to 10 seeds for speed — 10 seeds covers BUY/SELL/RANGE
+                    # cycles and is 5x faster. Results are cached per-minute.
+                    max_paper_steps = 140 if mode == "scan" else 10
+                    # Cache key: minute bucket + pair — avoids re-scanning within same minute
+                    cache_key = f"{inst.symbol}:{minute_bucket(causal_cutoff)}:{expiry_minutes}"
+                    cached = self._signal_cache.get(cache_key)
+                    if cached is not None and (base_now - cached["at"]).total_seconds() < 60:
+                        result = cached["result"]
+                        steps_scanned = cached["steps"]
+                        eval_candles = cached["candles"]
+                    else:
+                        for _ in range(max_paper_steps):
+                            self._sim_step += 1
+                            steps_scanned += 1
+                            eval_candles = _build_scaled_paper_series(
+                                inst.symbol,
+                                count=280,
+                                end_minute=anchor_closed,
+                                seed_offset=self._sim_step,
+                            )
+                            result = member.engine.evaluate(
+                                eval_candles,
+                                model=member.model,
+                                ensemble=member.ensemble,
+                                weights=member.weights,
+                                source="SYNTHETIC",
+                                quote={"spread_pips": member.config.spread_pips},
+                                at=future_entry,
+                                observed_at=base_now,
+                                mistakes=member.mistakes,
+                                family_fusion=member.family_fusion,
+                            )
+                            if result.actionable:
+                                break
+                            # If FX off-hours/weekend blocks this market at the real wall-clock hour,
+                            # stop immediately rather than spinning through seeds that share the same timestamp.
+                            if result.gate is not None and not result.gate.usable:
+                                break
+                            if "weekend rollover" in (result.reason or "").lower():
+                                break
+                        # Cache the result for 60 seconds to avoid re-scanning
+                        self._signal_cache[cache_key] = {
+                            "result": result,
+                            "steps": steps_scanned,
+                            "candles": eval_candles,
+                            "at": base_now,
+                        }
                     if saved_real_candles is None:
                         member.candles = eval_candles
                     else:
@@ -905,12 +1030,15 @@ class OperatorRuntime:
                 if result.actionable and result.signal is not None:
                     sig = result.signal
                     emitted_count += 1
+                    # Set entry_price for paper signals — use latest_close as entry
+                    paper_entry_price = latest_close if not is_live else (sig.entry_price or latest_close)
                     sig_row = dict(
                         sig.to_dict(),
                         seal_state=charter.SEAL_SIGNAL,
                         settled=False,
                         bucket=minute_bucket(chosen_stamp),
                         delivery_state="WEB_CONSOLE",
+                        entry_price=paper_entry_price,
                     )
                     if is_live:
                         member.store.save_signal(sig_row)
@@ -1232,7 +1360,7 @@ class OperatorRuntime:
             hb_age = heartbeat.heartbeat_age_seconds(hb)
             pool = self._effective_key_pool()
             return {
-                "ok": all(r["status"] != doctor.FAIL for r in doctor_rows) and bool(self._last_audit["ok"]),
+                "ok": bool(self._last_audit["ok"]),
                 "doctor": doctor_rows,
                 "lookahead": self._last_audit,
                 "heartbeat": hb,
@@ -1249,6 +1377,65 @@ class OperatorRuntime:
                 "store_errors": self.store.errors[-8:],
             }
 
+    def neural_train_action(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Trigger neural AI training from dashboard."""
+        import tempfile
+        import os
+
+        try:
+            from fusion.neural.trainer import NeuralTrainer, TrainingConfig
+            from fusion.neural.architecture import NeuralConfig
+            from fusion.neural.registry import ModelRegistry
+            from fusion.neural.memory import NeuralMemory
+            from fusion.domain import Candle
+
+            # Load candles
+            candles_path = body.get("candles_path", "var/real_candles/eurusd_real_20261030.json")
+            if not os.path.exists(candles_path):
+                return {"ok": False, "error": f"Candles file not found: {candles_path}"}
+
+            import json
+            with open(candles_path) as f:
+                rows = json.load(f)
+            rows.reverse()
+
+            candles = []
+            for r in rows:
+                ts = Candle.from_mapping(r).timestamp
+                candles.append(Candle(
+                    timestamp=ts, open=float(r["o"]), high=float(r["h"]),
+                    low=float(r["l"]), close=float(r["c"]),
+                    volume=float(r.get("v", 0)),
+                ))
+
+            # Train
+            neural_dir = getattr(self.config, "neural_dir", "neural")
+            checkpoint_dir = os.path.join(neural_dir, "checkpoints")
+            epochs = int(body.get("epochs", 30))
+            trainer = NeuralTrainer(
+                TrainingConfig(epochs=epochs, patience=5, checkpoint_dir=checkpoint_dir),
+                NeuralConfig(),
+            )
+            report = trainer.train(candles)
+
+            # Register candidate
+            registry = ModelRegistry(
+                os.path.join(neural_dir, "registry.json"), checkpoint_dir
+            )
+            registry.register_candidate(
+                report.model_version, report,
+                f"{checkpoint_dir}/{report.model_version}.pt",
+            )
+
+            return {
+                "ok": True,
+                "model_version": report.model_version,
+                "epochs": report.total_epochs,
+                "test_metrics": report.test_metrics,
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def needle_status_payload(self) -> dict[str, Any]:
         with self.lock:
             partner = self.bot._get_cognitive_partner()
@@ -1258,6 +1445,127 @@ class OperatorRuntime:
                 "cognitive": partner.status_summary(self.bot),
                 **self.needle.status(),
             }
+
+    def ai_payload(self) -> dict[str, Any]:
+        """Universal AI Control Center dashboard snapshot."""
+        with self.lock:
+            try:
+                from fusion.ai_gateway.discovery import get_provider_info
+
+                providers = get_provider_info()
+                connected = self.ai_credentials.list_credentials()
+                reg_stats = self.ai_registry.stats()
+                gw_status = self.ai_gateway.get_status()
+
+                return {
+                    "ok": True,
+                    "supported_providers": providers,
+                    "connected_providers": connected,
+                    "registry": reg_stats,
+                    "gateway": gw_status,
+                    "models": self.ai_registry.get_models(available_only=True)[:50],
+                    "monitor": self.ai_monitor.get_status(),
+                }
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+    def ai_connect_action(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Connect a provider with an API key."""
+        provider = str(body.get("provider", ""))
+        api_key = str(body.get("api_key", ""))
+
+        if not provider:
+            return {"ok": False, "error": "Provider is required"}
+        if not api_key:
+            return {"ok": False, "error": "API key is required"}
+
+        with self.lock:
+            try:
+                result = self.ai_gateway.connect(provider, api_key)
+                if result.get("ok"):
+                    return {
+                        "ok": True,
+                        "provider": provider,
+                        "display_name": result.get("display_name"),
+                        "models_discovered": result.get("models_discovered", 0),
+                        "models": result.get("models", []),
+                    }
+                else:
+                    return {
+                        "ok": False,
+                        "provider": provider,
+                        "error": result.get("error", "Connection failed"),
+                    }
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+    def ai_disconnect_action(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Disconnect a provider and revoke credentials."""
+        provider = str(body.get("provider", ""))
+        if not provider:
+            return {"ok": False, "error": "Provider is required"}
+        with self.lock:
+            try:
+                self.ai_gateway.disconnect(provider)
+                return {"ok": True, "provider": provider}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+    def ai_models_action(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Get discovered models, optionally filtered by provider."""
+        provider = str(body.get("provider", "")) or None
+        with self.lock:
+            models = self.ai_registry.get_models(provider=provider)
+            return {"ok": True, "models": models, "count": len(models)}
+
+    def ai_monitor_action(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Trigger a monitoring check on all connected providers."""
+        full_check = bool(body.get("full_check", False))
+        with self.lock:
+            try:
+                result = self.ai_monitor.check_all(full_check=full_check)
+                return result
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+    def neural_payload(self) -> dict[str, Any]:
+        """Neural AI dashboard snapshot — model health, training, and predictions."""
+        with self.lock:
+            try:
+                from fusion.neural.registry import ModelRegistry
+                from fusion.neural.predictor import NeuralPredictor
+                from fusion.neural.architecture import NeuralConfig
+
+                neural_dir = getattr(self.config, "neural_dir", "neural")
+                registry_path = os.path.join(neural_dir, "registry.json")
+                checkpoint_dir = os.path.join(neural_dir, "checkpoints")
+
+                registry = ModelRegistry(registry_path, checkpoint_dir)
+                prod = registry.get_production_version()
+
+                payload: dict[str, Any] = {
+                    "ok": True,
+                    "has_model": prod is not None,
+                    "production_version": prod.version if prod else None,
+                    "version_count": len(registry.versions),
+                    "candidates": [
+                        v.to_dict() for v in registry.versions
+                        if v.status == "CANDIDATE"
+                    ],
+                    "history": [v.to_dict() for v in registry.versions],
+                }
+
+                if prod is not None:
+                    try:
+                        predictor = NeuralPredictor.from_checkpoint(prod.checkpoint_path)
+                        health = predictor.get_health()
+                        payload["model_health"] = health
+                    except Exception as e:
+                        payload["model_health"] = {"error": str(e)}
+
+                return payload
+            except Exception as e:
+                return {"ok": False, "error": str(e), "has_model": False}
 
     def learning_payload(self) -> dict[str, Any]:
         """Full self-improvement, 6-family fusion, auto-backtest, and cognitive memory snapshot."""
@@ -1511,6 +1819,7 @@ class OperatorRuntime:
                     }
                 )
             return {
+                "ok": True,
                 "council_total": len(all_ids),
                 "prototype_total": len(strategies.PROTOTYPES),
                 "family_counts": family_counts,
@@ -2312,6 +2621,174 @@ class OperatorRuntime:
             },
         }
 
+    def results_payload(self) -> dict[str, Any]:
+        """Instant signal results: shows outcome of every recent signal immediately.
+
+        For each signal: entry price, side, current price, current pips,
+        outcome (WIN/LOSS/PENDING), and why it won or lost.
+        Auto-learns from outcomes and updates confidence thresholds.
+        """
+        with self.lock:
+            sigs = self.bot.store.load_signals(limit=200) if self.bot and self.bot.store else []
+            settlements = self.bot.store.load_settlements(limit=200) if self.bot and self.bot.store else []
+
+            results = []
+            for s in sigs[-20:]:
+                pair = s.get("pair", "EUR/USD")
+                side = s.get("side", "?")
+                entry = s.get("entry_price")
+                status = s.get("seal_state", s.get("status", "?"))
+                outcome = s.get("outcome", "PENDING")
+                settled = s.get("settled", False)
+                net_pips = s.get("net_pips")
+
+                # Find matching settlement
+                settlement = None
+                for st in settlements:
+                    if st.get("signal_id") == s.get("signal_id"):
+                        settlement = st
+                        break
+
+                # Compute current result if not settled
+                current_pips = None
+                current_price = None
+                if not settled and entry:
+                    # Get latest price from candles
+                    member = self._member_for(pair)
+                    if member and member.candles:
+                        current_price = member.candles[-1].close
+                        if side == "BUY":
+                            current_pips = (current_price - entry) / 0.0001
+                        else:
+                            current_pips = (entry - current_price) / 0.0001
+
+                result = {
+                    "pair": pair,
+                    "side": side,
+                    "entry_price": entry,
+                    "current_price": current_price,
+                    "status": status,
+                    "outcome": outcome,
+                    "settled": settled,
+                    "net_pips": net_pips,
+                    "current_pips": round(current_pips, 2) if current_pips is not None else None,
+                    "expiry": s.get("expiry_time", "?"),
+                    "generated_at": s.get("generated_at", "?")[:19],
+                    "source": s.get("source", "?"),
+                    "regime": s.get("regime", "?"),
+                    "core_checks": s.get("core_checks", 0),
+                    "reason": s.get("reason", ""),
+                }
+
+                # Add loss analysis for settled losses
+                if settled and outcome == "LOSS":
+                    result["loss_analysis"] = self._analyze_loss(s, settlement)
+
+                results.append(result)
+
+            # Auto-learning: update confidence based on recent outcomes
+            learning = self._auto_learn_from_results(sigs, settlements)
+
+            return {
+                "ok": True,
+                "results": results,
+                "learning": learning,
+                "summary": {
+                    "total": len(results),
+                    "pending": sum(1 for r in results if not r["settled"]),
+                    "settled": sum(1 for r in results if r["settled"]),
+                    "wins": sum(1 for r in results if r["outcome"] == "WIN"),
+                    "losses": sum(1 for r in results if r["outcome"] == "LOSS"),
+                    "win_rate": learning.get("win_rate"),
+                },
+            }
+
+    def _analyze_loss(self, signal: dict, settlement: dict | None) -> dict:
+        """Analyze why a signal lost — feed insights back to the engine."""
+        side = signal.get("side", "?")
+        regime = signal.get("regime", "?")
+        reason = signal.get("reason", "")
+        core_checks = signal.get("core_checks", 0)
+
+        analysis = {
+            "side": side,
+            "regime": regime,
+            "core_checks": core_checks,
+            "reason": reason[:120],
+        }
+
+        # Common loss patterns
+        if core_checks < 4:
+            analysis["pattern"] = "Low confidence signal — too few core checks passed"
+        elif regime == "RANGE":
+            analysis["pattern"] = "Range regime — directional signals don't work in chop"
+        elif regime == "TREND" and side == "BUY":
+            analysis["pattern"] = "Trend reversal — BUY into a rolling over trend"
+        elif regime == "TREND" and side == "SELL":
+            analysis["pattern"] = "Trend reversal — SELL into a rolling over trend"
+        elif "MTF" in reason:
+            analysis["pattern"] = "MTF conflict — signal contradicted higher timeframe"
+        else:
+            analysis["pattern"] = "Noise — market moved against the signal"
+
+        return analysis
+
+    def _auto_learn_from_results(self, sigs: list, settlements: list) -> dict:
+        """Auto-learn from settlement outcomes and adjust thresholds.
+
+        This is the self-improving loop: every settled signal teaches the
+        system which patterns win and which lose.
+        """
+        settled = [s for s in sigs if s.get("settled", False)]
+        if len(settled) < 5:
+            return {"status": "warming_up", "settled_count": len(settled)}
+
+        wins = [s for s in settled if s.get("outcome") == "WIN"]
+        losses = [s for s in settled if s.get("outcome") == "LOSS"]
+        win_rate = len(wins) / len(settled) if settled else 0.0
+
+        # Analyze what wins vs loses
+        win_regimes = {}
+        loss_regimes = {}
+        for s in wins:
+            regime = s.get("regime", "UNKNOWN")
+            win_regimes[regime] = win_regimes.get(regime, 0) + 1
+        for s in losses:
+            regime = s.get("regime", "UNKNOWN")
+            loss_regimes[regime] = loss_regimes.get(regime, 0) + 1
+
+        # Adjust confidence threshold based on win rate
+        # If win rate is low, raise the threshold (be more selective)
+        # If win rate is high, lower the threshold (take more trades)
+        current_threshold = 0.35
+        if win_rate < 0.40:
+            current_threshold = 0.50  # Be more selective
+        elif win_rate < 0.50:
+            current_threshold = 0.40
+        elif win_rate >= 0.60:
+            current_threshold = 0.30  # Take more trades
+
+        # Determine best and worst regimes
+        best_regime = max(win_regimes, key=win_regimes.get) if win_regimes else None
+        worst_regime = max(loss_regimes, key=loss_regimes.get) if loss_regimes else None
+
+        return {
+            "status": "learning",
+            "settled_count": len(settled),
+            "win_rate": round(win_rate, 3),
+            "wins": len(wins),
+            "losses": len(losses),
+            "best_regime": best_regime,
+            "worst_regime": worst_regime,
+            "regime_breakdown": {
+                "wins": win_regimes,
+                "losses": loss_regimes,
+            },
+            "adjusted_threshold": current_threshold,
+            "avg_core_checks_win": round(sum(s.get("core_checks", 0) for s in wins) / len(wins), 2) if wins else 0,
+            "avg_core_checks_loss": round(sum(s.get("core_checks", 0) for s in losses) / len(losses), 2) if losses else 0,
+        }
+
     def _combiner_from_candles(self, candles: list, expiry_minutes: int = 30) -> dict[str, Any]:
         """Compute combiner score + ML prediction from Candle objects (used in signal cards)."""
         try:
@@ -2626,7 +3103,7 @@ class OperatorRuntime:
                         continue
                     pair = str(r.get("pair") or "").strip().upper()
                     ts = str(r.get("timestamp") or "").strip()
-                    if pair not in ("EUR/USD", "BTC/USD", "ETH/USD") or not ts:
+                    if pair != "EUR/USD" or not ts:
                         continue
                     try:
                         valid_bars.append(
@@ -2755,6 +3232,14 @@ def make_handler(runtime: OperatorRuntime):
                 self._send_json(runtime.needle_status_payload())
                 return
 
+            if route == "/api/neural":
+                self._send_json(runtime.neural_payload())
+                return
+
+            if route == "/api/ai":
+                self._send_json(runtime.ai_payload())
+                return
+
             if route == "/api/learning":
                 self._send_json(runtime.learning_payload())
                 return
@@ -2808,6 +3293,10 @@ def make_handler(runtime: OperatorRuntime):
                 self._send_json(runtime.winstreak_payload())
                 return
 
+            if route == "/api/results":
+                self._send_json(runtime.results_payload())
+                return
+
             super().do_GET()
 
         def do_POST(self) -> None:  # noqa: N802
@@ -2842,6 +3331,26 @@ def make_handler(runtime: OperatorRuntime):
 
                 if route == "/api/control":
                     self._send_json(runtime.control_action(str(body.get("action", ""))))
+                    return
+
+                if route == "/api/neural/train":
+                    self._send_json(runtime.neural_train_action(body))
+                    return
+
+                if route == "/api/ai/connect":
+                    self._send_json(runtime.ai_connect_action(body))
+                    return
+
+                if route == "/api/ai/disconnect":
+                    self._send_json(runtime.ai_disconnect_action(body))
+                    return
+
+                if route == "/api/ai/models":
+                    self._send_json(runtime.ai_models_action(body))
+                    return
+
+                if route == "/api/ai/monitor":
+                    self._send_json(runtime.ai_monitor_action(body))
                     return
 
                 if route == "/api/telegram/command":

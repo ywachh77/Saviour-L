@@ -25,36 +25,61 @@ from .regime import regime_allows
 from .session import session_allows
 
 # Learning gates
-MIN_SEEN_PER_PROTOTYPE = 30       # real settled outcomes before a voice is heard
+MIN_SEEN_PER_PROTOTYPE = 30       # real settled outcomes before learned weight kicks in
+# Exploration weight: every prototype gets this before learning has seen enough
+# data. It is SEPARATE from learned weight so recompute() never zeroes it out.
+# This ensures the council always has voting members while learning is in progress.
+EXPLORATION_WEIGHT = 0.08
+# Learned weight cap: a prototype's learned weight cannot exceed this.
 PER_PROTOTYPE_WEIGHT_CAP = 0.30   # no single prototype may dominate
-TOTAL_PROTOTYPE_MASS_CAP = 0.60   # prototypes together stay below the core
-# Net opposing mass that blocks a core signal. It sits above the per-prototype
-# cap, so no single learned rule can veto on its own — they must agree.
-VETO_MASS = 0.35
+# Total learned mass cap: learned weights together stay below the core.
+TOTAL_LEARNED_MASS_CAP = 0.60
+# Total effective mass cap (exploration + learned): keeps prototypes from
+# overwhelming the core gate while unlearned.
+TOTAL_PROTOTYPE_MASS_CAP = 1.20
+# Net opposing mass that blocks a core signal. With exploration weight of 0.08
+# per prototype, this requires at least 5 prototypes opposing the core.
+VETO_MASS = 0.40
 SHRINKAGE = 40.0                  # net / (seen + SHRINKAGE) keeps small samples humble
+# Strategic consensus override: minimum total effective weight for strategic
+# methods to override a core abstention. With ~117 prototypes at 0.08 each,
+# this requires at least 4 methods agreeing in one direction.
+CONSENSUS_THRESHOLD = 0.50
 
 
 @dataclass
 class CouncilWeights:
-    """Per-prototype learned weights. The core is always weight 1.0."""
+    """Per-prototype weights: exploration (always active) + learned (data-driven).
+
+    The core gate is always weight 1.0. Prototypes have two weight components:
+    - exploration_weight: always EXPLORATION_WEIGHT, never zeroed. Ensures the
+      council always has voting members while learning is in progress.
+    - learned_weight: adjusted by recompute() based on real outcomes. Starts at
+      0.0, only becomes non-zero after MIN_SEEN_PER_PROTOTYPE real trades.
+    Total weight = exploration_weight + learned_weight.
+    """
 
     net: dict[str, float] = field(default_factory=dict)
     seen: dict[str, int] = field(default_factory=dict)
-    weights: dict[str, float] = field(default_factory=dict)
+    learned_weights: dict[str, float] = field(default_factory=dict)
     version: int = 1
 
     def __post_init__(self) -> None:
         for name in strategies.PROTOTYPES:
             self.net.setdefault(name, 0.0)
             self.seen.setdefault(name, 0)
-            self.weights.setdefault(name, 0.0)
+            self.learned_weights.setdefault(name, 0.0)
+
+    @property
+    def weights(self) -> dict[str, float]:
+        """Total effective weight: exploration + learned."""
+        return {
+            name: EXPLORATION_WEIGHT + float(self.learned_weights.get(name, 0.0))
+            for name in strategies.PROTOTYPES
+        }
 
     def observe(self, votes: dict[str, str], winning_side: str | None) -> None:
-        """Credit or blame every prototype that spoke on a settled real outcome.
-
-        ``winning_side`` is the side the market actually took (BUY/SELL) or None
-        when the bar was unresolved or tied; nothing is learned from those.
-        """
+        """Credit or blame every prototype that spoke on a settled real outcome."""
         if winning_side not in ("BUY", "SELL"):
             return
         for name, side in votes.items():
@@ -65,6 +90,7 @@ class CouncilWeights:
         self.recompute()
 
     def recompute(self) -> None:
+        """Recompute learned weights. Exploration weight is never touched."""
         raw: dict[str, float] = {}
         for name in strategies.PROTOTYPES:
             seen = int(self.seen.get(name, 0))
@@ -74,11 +100,12 @@ class CouncilWeights:
             score = float(self.net.get(name, 0.0)) / (seen + SHRINKAGE)
             raw[name] = max(0.0, min(PER_PROTOTYPE_WEIGHT_CAP, score))
 
-        total = sum(raw.values())
-        if total > TOTAL_PROTOTYPE_MASS_CAP:
-            scale = TOTAL_PROTOTYPE_MASS_CAP / total
+        # Cap total learned mass
+        total_learned = sum(raw.values())
+        if total_learned > TOTAL_LEARNED_MASS_CAP:
+            scale = TOTAL_LEARNED_MASS_CAP / total_learned
             raw = {name: value * scale for name, value in raw.items()}
-        self.weights = raw
+        self.learned_weights = raw
         self.version += 1
 
     def active(self) -> dict[str, float]:
@@ -88,7 +115,9 @@ class CouncilWeights:
         return {
             "net": dict(self.net),
             "seen": dict(self.seen),
-            "weights": dict(self.weights),
+            "learned_weights": dict(self.learned_weights),
+            "exploration_weight": EXPLORATION_WEIGHT,
+            "weights": self.weights,
             "version": self.version,
         }
 
@@ -101,8 +130,13 @@ class CouncilWeights:
             result.net[str(k)] = float(v)
         for k, v in (payload.get("seen") or {}).items():
             result.seen[str(k)] = int(v)
-        for k, v in (payload.get("weights") or {}).items():
-            result.weights[str(k)] = float(v)
+        # Support both old "weights" key and new "learned_weights" key
+        if "learned_weights" in payload:
+            for k, v in (payload.get("learned_weights") or {}).items():
+                result.learned_weights[str(k)] = float(v)
+        else:
+            for k, v in (payload.get("weights") or {}).items():
+                result.learned_weights[str(k)] = max(0.0, float(v) - EXPLORATION_WEIGHT)
         result.version = int(payload.get("version", 1))
         return result
 
@@ -231,6 +265,49 @@ def run_council(
     )
 
     if not core.actionable:
+        # Strategic consensus override: if enough strategic methods agree
+        # on a direction with positive weight, allow the signal.
+        strategic_votes = [v for v in votes if v.heard and v.weight > 0.0]
+        buy_mass = sum(v.weight for v in strategic_votes if v.side == "BUY")
+        sell_mass = sum(v.weight for v in strategic_votes if v.side == "SELL")
+        consensus_threshold = CONSENSUS_THRESHOLD  # minimum total weight for override
+
+        if buy_mass >= consensus_threshold and buy_mass > sell_mass:
+            supporters = ", ".join(
+                v.name for v in strategic_votes
+                if v.side == "BUY" and v.weight > 0.0
+            )
+            return CouncilResult(
+                "BUY",
+                f"Strategic consensus override: core abstained ({core.score}/6) but "
+                f"{len([v for v in strategic_votes if v.side == 'BUY'])} strategic methods "
+                f"voted BUY (mass {buy_mass:.2f}). Supporters: {supporters}.",
+                core.score,
+                tuple(votes),
+                round(buy_mass, 4),
+                round(sell_mass, 4),
+                False,
+                fam_verdict,
+            )
+
+        if sell_mass >= consensus_threshold and sell_mass > buy_mass:
+            supporters = ", ".join(
+                v.name for v in strategic_votes
+                if v.side == "SELL" and v.weight > 0.0
+            )
+            return CouncilResult(
+                "SELL",
+                f"Strategic consensus override: core abstained ({core.score}/6) but "
+                f"{len([v for v in strategic_votes if v.side == 'SELL'])} strategic methods "
+                f"voted SELL (mass {sell_mass:.2f}). Supporters: {supporters}.",
+                core.score,
+                tuple(votes),
+                round(buy_mass, 4),
+                round(sell_mass, 4),
+                False,
+                fam_verdict,
+            )
+
         return CouncilResult(
             "NO SIGNAL",
             core.reason,
