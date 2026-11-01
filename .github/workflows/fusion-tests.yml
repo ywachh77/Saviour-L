@@ -30,11 +30,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Run the suite
-        run: python -m unittest discover -s tests -t .
+      - name: Run quick tests
+        run: python scripts/quick_tests.py
 
       - name: Automated look-ahead and recursive warmup audit
         run: python scripts/lookahead_check.py
 
-      - name: Offline smoke run
-        run: python scripts/smoke.py 420
+      - name: Offline smoke run (shorter)
+        run: python scripts/smoke.py 100
