@@ -103,8 +103,8 @@ class TestOperatorDashboardAPI(unittest.TestCase):
     def test_strategies_and_runtime_config_toggle(self):
         code, strat = self._get("/api/strategies")
         self.assertEqual(code, 200)
-        self.assertEqual(len(strat["members"]), 128)
-        self.assertEqual(strat["prototype_total"], 127)
+        self.assertEqual(len(strat["members"]), 133)
+        self.assertEqual(strat["prototype_total"], 132)
 
         code, updated = self._post(
             "/api/config",
