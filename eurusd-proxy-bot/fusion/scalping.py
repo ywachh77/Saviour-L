@@ -80,6 +80,11 @@ SCALPING_PROTOTYPES = (
     "scalp_volume_surge",
     "scalp_adx_slope",
     "scalp_candle_pattern",
+    "scalp_order_block",
+    "scalp_fvg",
+    "scalp_liquidity_sweep",
+    "scalp_bos_reversal",
+    "scalp_regime_filter",
 )
 
 SCALPING_MEMBERS = {
@@ -104,6 +109,11 @@ SCALPING_MEMBERS = {
     "scalp_volume_surge": "Scalp: volume spike with price action confirmation",
     "scalp_adx_slope": "Scalp: ADX rising to confirm trend strength",
     "scalp_candle_pattern": "Scalp: bullish/bearish engulfing and hammer patterns",
+    "scalp_order_block": "Scalp: SMC order block trading at institutional clusters",
+    "scalp_fvg": "Scalp: SMC fair value gap trading at unfilled demand/supply zones",
+    "scalp_liquidity_sweep": "Scalp: liquidity sweep trading at stop-loss triggers",
+    "scalp_bos_reversal": "Scalp: BOS reversal trading at failed breakouts",
+    "scalp_regime_filter": "Scalp: market regime filter for trending vs ranging markets",
 }
 
 NOT_ENOUGH_BARS = "Not enough completed candles to calculate indicators."
@@ -1278,6 +1288,362 @@ def scalp_candle_pattern(
         )
     return Decision("NO SIGNAL", "No candle pattern.", probability_up, 0)
 
+def scalp_order_block(
+    candle: Candle,
+    previous_close: float,
+    features: dict[str, float] | None,
+    probability_up: float | None = None,
+    *,
+    spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
+    **_ignored,
+) -> Decision:
+    """SMC Order Block — trade at institutional order clusters.
+
+    An order block is the last opposite-color candle before a strong move.
+    Trade the return to the block with rejection confirmation.
+    """
+    blocked = _cost_guard(features, spread_pips)
+    if blocked:
+        return Decision("NO SIGNAL", blocked.reason, None if features is None else probability_up, 0)
+    assert features is not None
+
+    close = candle.close
+    body_atr = float(features.get("body_atr", 0.0))
+    close_pos = float(features.get("close_position", 0.5))
+    prev_candle_body = float(features.get("prev_candle_body", 0.0))
+    prev_candle_bullish = float(features.get("prev_candle_bullish", 0.0))
+
+    # Bullish order block: last bearish candle before strong move up
+    if (
+        prev_candle_bullish < 0.5  # Previous candle was bearish
+        and close > previous_close
+        and close_pos >= 0.65
+        and body_atr >= 0.15
+    ):
+        return Decision(
+            "BUY",
+            f"Order block: bullish continuation from bearish OB, body {body_atr:.2f} ATR",
+            probability_up,
+            2,
+        )
+
+    # Bearish order block: last bullish candle before strong move down
+    if (
+        prev_candle_bullish > 0.5  # Previous candle was bullish
+        and close < previous_close
+        and close_pos <= 0.35
+        and body_atr >= 0.15
+    ):
+        return Decision(
+            "SELL",
+            f"Order block: bearish continuation from bullish OB, body {body_atr:.2f} ATR",
+            probability_up,
+            2,
+        )
+
+    return Decision("NO SIGNAL", "No order block pattern.", probability_up, 0)
+
+
+def scalp_fvg(
+    candle: Candle,
+    previous_close: float,
+    features: dict[str, float] | None,
+    probability_up: float | None = None,
+    *,
+    spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
+    **_ignored,
+) -> Decision:
+    """SMC Fair Value Gap — trade unfilled demand/supply zones.
+
+    A 3-candle pattern where the middle candle's range doesn't overlap
+    with the first and third candles. Represents unfilled demand/supply.
+    """
+    blocked = _cost_guard(features, spread_pips)
+    if blocked:
+        return Decision("NO SIGNAL", blocked.reason, None if features is None else probability_up, 0)
+    assert features is not None
+
+    close = candle.close
+    close_pos = float(features.get("close_position", 0.5))
+    body_atr = float(features.get("body_atr", 0.0))
+    candle_high = candle.high
+    candle_low = candle.low
+    prev_candle_body = float(features.get("prev_candle_body", 0.0))
+    prev_candle_bullish = float(features.get("prev_candle_bullish", 0.0))
+
+    # Bullish FVG: gap below candle 1's low and candle 3's low
+    bullish_fvg = float(features.get("bullish_fvg_score", 0.0))
+    if bullish_fvg > 0.5 and close > candle_low and close_pos >= 0.55:
+        return Decision(
+            "BUY",
+            f"Bullish FVG: unfilled demand zone, close at {close_pos:.2f} position",
+            probability_up,
+            2,
+        )
+
+    # Fallback: use wick rejection pattern as proxy for FVG
+    range_width = candle_high - candle_low
+    lower_wick = (min(candle.open, candle.close) - candle_low) / range_width if range_width > 0 else 0.0
+    if lower_wick >= 0.35 and close_pos >= 0.60 and body_atr >= 0.10:
+        return Decision(
+            "BUY",
+            f"FVG proxy: lower wick rejection {lower_wick:.2f}, close at {close_pos:.2f}",
+            probability_up,
+            2,
+        )
+
+    # Bearish FVG: gap above candle 1's high and candle 3's high
+    bearish_fvg = float(features.get("bearish_fvg_score", 0.0))
+    if bearish_fvg > 0.5 and close < candle_high and close_pos <= 0.45:
+        return Decision(
+            "SELL",
+            f"Bearish FVG: unfilled supply zone, close at {close_pos:.2f} position",
+            probability_up,
+            2,
+        )
+
+    # Fallback: use upper wick rejection pattern as proxy for FVG
+    upper_wick = (candle_high - max(candle.open, candle.close)) / range_width if range_width > 0 else 0.0
+    if upper_wick >= 0.35 and close_pos <= 0.40 and body_atr >= 0.10:
+        return Decision(
+            "SELL",
+            f"FVG proxy: upper wick rejection {upper_wick:.2f}, close at {close_pos:.2f}",
+            probability_up,
+            2,
+        )
+
+    return Decision("NO SIGNAL", "No FVG pattern.", probability_up, 0)
+
+
+def scalp_liquidity_sweep(
+    candle: Candle,
+    previous_close: float,
+    features: dict[str, float] | None,
+    probability_up: float | None = None,
+    *,
+    spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
+    **_ignored,
+) -> Decision:
+    """Liquidity Sweep — trade stop-loss triggers and reversals.
+
+    Price temporarily pierces a level to trigger stop-losses, then reverses.
+    Trade the reversal back above/below the swept level.
+    """
+    blocked = _cost_guard(features, spread_pips)
+    if blocked:
+        return Decision("NO SIGNAL", blocked.reason, None if features is None else probability_up, 0)
+    assert features is not None
+
+    close = candle.close
+    candle_high = candle.high
+    candle_low = candle.low
+    close_pos = float(features.get("close_position", 0.5))
+    body_atr = float(features.get("body_atr", 0.0))
+    range_width = candle_high - candle_low
+
+    # Bullish sweep: price drops below swing low, then reverses up
+    sweep_low = float(features.get("sweep_low", 0.0))
+    if (
+        sweep_low > 0.0
+        and candle_low < sweep_low
+        and close > sweep_low
+        and close_pos >= 0.60
+        and body_atr >= 0.10
+    ):
+        return Decision(
+            "BUY",
+            f"Liquidity sweep: swept low at {sweep_low:.5f}, reversed above",
+            probability_up,
+            2,
+        )
+
+    # Fallback: bullish sweep proxy — lower wick rejection
+    lower_wick = (min(candle.open, candle.close) - candle_low) / range_width if range_width > 0 else 0.0
+    if lower_wick >= 0.30 and close_pos >= 0.60 and body_atr >= 0.06:
+        return Decision(
+            "BUY",
+            f"Sweep proxy: lower wick {lower_wick:.2f}, close at {close_pos:.2f}",
+            probability_up,
+            2,
+        )
+
+    # Bearish sweep: price rises above swing high, then reverses down
+    sweep_high = float(features.get("sweep_high", 0.0))
+    if (
+        sweep_high > 0.0
+        and candle_high > sweep_high
+        and close < sweep_high
+        and close_pos <= 0.40
+        and body_atr >= 0.10
+    ):
+        return Decision(
+            "SELL",
+            f"Liquidity sweep: swept high at {sweep_high:.5f}, reversed below",
+            probability_up,
+            2,
+        )
+
+    # Fallback: bearish sweep proxy — upper wick rejection
+    upper_wick = (candle_high - max(candle.open, candle.close)) / range_width if range_width > 0 else 0.0
+    if upper_wick >= 0.30 and close_pos <= 0.40 and body_atr >= 0.06:
+        return Decision(
+            "SELL",
+            f"Sweep proxy: upper wick {upper_wick:.2f}, close at {close_pos:.2f}",
+            probability_up,
+            2,
+        )
+
+    return Decision("NO SIGNAL", "No liquidity sweep pattern.", probability_up, 0)
+
+
+def scalp_bos_reversal(
+    candle: Candle,
+    previous_close: float,
+    features: dict[str, float] | None,
+    probability_up: float | None = None,
+    *,
+    spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
+    **_ignored,
+) -> Decision:
+    """BOS Reversal — trade Break of Structure with reversal confirmation.
+
+    Price breaks a key level (swing high/low) but fails to continue,
+    indicating potential reversal.
+    """
+    blocked = _cost_guard(features, spread_pips)
+    if blocked:
+        return Decision("NO SIGNAL", blocked.reason, None if features is None else probability_up, 0)
+    assert features is not None
+
+    close = candle.close
+    close_pos = float(features.get("close_position", 0.5))
+    body_atr = float(features.get("body_atr", 0.0))
+    swing_high = float(features.get("swing_high", 0.0))
+    swing_low = float(features.get("swing_low", 0.0))
+    candle_high = candle.high
+    candle_low = candle.low
+    range_width = candle_high - candle_low
+
+    # Bearish BOS reversal: breaks above swing high, fails to hold
+    if (
+        swing_high > 0.0
+        and close > swing_high
+        and candle_high > swing_high
+        and close_pos <= 0.45
+        and body_atr >= 0.10
+    ):
+        return Decision(
+            "SELL",
+            f"BOS reversal: broke {swing_high:.5f} but closed weak, potential fakeout",
+            probability_up,
+            2,
+        )
+
+    # Fallback: bearish BOS proxy — upper wick rejection at resistance
+    upper_wick = (candle_high - max(candle.open, candle.close)) / range_width if range_width > 0 else 0.0
+    if upper_wick >= 0.35 and close_pos <= 0.40 and body_atr >= 0.08:
+        return Decision(
+            "SELL",
+            f"BOS proxy: upper wick {upper_wick:.2f}, close at {close_pos:.2f}",
+            probability_up,
+            2,
+        )
+
+    # Bullish BOS reversal: breaks below swing low, fails to hold
+    if (
+        swing_low > 0.0
+        and close < swing_low
+        and candle_low < swing_low
+        and close_pos >= 0.55
+        and body_atr >= 0.10
+    ):
+        return Decision(
+            "BUY",
+            f"BOS reversal: broke {swing_low:.5f} but closed strong, potential fakeout",
+            probability_up,
+            2,
+        )
+
+    # Fallback: bullish BOS proxy — lower wick rejection at support
+    lower_wick = (min(candle.open, candle.close) - candle_low) / range_width if range_width > 0 else 0.0
+    if lower_wick >= 0.35 and close_pos >= 0.60 and body_atr >= 0.08:
+        return Decision(
+            "BUY",
+            f"BOS proxy: lower wick {lower_wick:.2f}, close at {close_pos:.2f}",
+            probability_up,
+            2,
+        )
+
+    return Decision("NO SIGNAL", "No BOS reversal pattern.", probability_up, 0)
+
+
+def scalp_regime_filter(
+    candle: Candle,
+    previous_close: float,
+    features: dict[str, float] | None,
+    probability_up: float | None = None,
+    *,
+    spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
+    **_ignored,
+) -> Decision:
+    """Market Regime Filter — only trade in favorable regimes.
+
+    Uses ADX and volatility to identify trending vs ranging regimes.
+    In trending regimes, trade with trend. In ranging regimes, fade extremes.
+    """
+    blocked = _cost_guard(features, spread_pips)
+    if blocked:
+        return Decision("NO SIGNAL", blocked.reason, None if features is None else probability_up, 0)
+    assert features is not None
+
+    close = candle.close
+    close_pos = float(features.get("close_position", 0.5))
+    adx = float(features.get("adx", 0.0))
+    atr_pips = float(features.get("atr_pips", 0.0))
+    body_atr = float(features.get("body_atr", 0.0))
+
+    # Trending regime: ADX > 25, trade with trend
+    if adx > 25:
+        # Bullish trend: price above VWAP, buy dips
+        vwap = float(features.get("vwap", 0.0))
+        if close > vwap and close_pos >= 0.55 and body_atr >= 0.15:
+            return Decision(
+                "BUY",
+                f"Trend filter: ADX {adx:.1f}, above VWAP, trend continuation",
+                probability_up,
+                2,
+            )
+        # Bearish trend: price below VWAP, sell rallies
+        if close < vwap and close_pos <= 0.45 and body_atr >= 0.15:
+            return Decision(
+                "SELL",
+                f"Trend filter: ADX {adx:.1f}, below VWAP, trend continuation",
+                probability_up,
+                2,
+            )
+
+    # Ranging regime: ADX < 20, fade extremes
+    if adx < 20:
+        # Overbought: fade rally
+        if close_pos >= 0.80 and body_atr >= 0.10:
+            return Decision(
+                "SELL",
+                f"Range filter: ADX {adx:.1f}, overbought at {close_pos:.2f} position",
+                probability_up,
+                1,
+            )
+        # Oversold: fade drop
+        if close_pos <= 0.20 and body_atr >= 0.10:
+            return Decision(
+                "BUY",
+                f"Range filter: ADX {adx:.1f}, oversold at {close_pos:.2f} position",
+                probability_up,
+                1,
+            )
+
+    return Decision("NO SIGNAL", "No regime filter signal.", probability_up, 0)
+
+
 SCALPING_REGISTRY: dict[str, Callable[..., Decision]] = {
     "scalp_impulse": scalp_impulse,
     "scalp_reversion": scalp_reversion,
@@ -1300,4 +1666,9 @@ SCALPING_REGISTRY: dict[str, Callable[..., Decision]] = {
     "scalp_volume_surge": scalp_volume_surge,
     "scalp_adx_slope": scalp_adx_slope,
     "scalp_candle_pattern": scalp_candle_pattern,
+    "scalp_order_block": scalp_order_block,
+    "scalp_fvg": scalp_fvg,
+    "scalp_liquidity_sweep": scalp_liquidity_sweep,
+    "scalp_bos_reversal": scalp_bos_reversal,
+    "scalp_regime_filter": scalp_regime_filter,
 }
