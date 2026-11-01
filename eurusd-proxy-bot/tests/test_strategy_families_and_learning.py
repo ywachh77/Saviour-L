@@ -36,9 +36,9 @@ def _base_feature_row() -> tuple[Candle, float, dict[str, float]]:
 
 class TestMultiFamilyStrategies(unittest.TestCase):
     def test_all_nine_new_methods_registered_in_council_regime_and_session(self) -> None:
-        self.assertEqual(len(methods.METHOD_PROTOTYPES), 9)
-        self.assertEqual(len(strategies.MEMBERS), 22)
-        self.assertEqual(len(strategies.PROTOTYPES), 21)
+        self.assertEqual(len(methods.METHOD_PROTOTYPES), 94)
+        self.assertEqual(len(strategies.MEMBERS), 133)
+        self.assertEqual(len(strategies.PROTOTYPES), 132)
 
         for name in methods.METHOD_PROTOTYPES:
             self.assertIn(name, strategies.PROTOTYPES)
@@ -272,7 +272,7 @@ class TestAutoSettleZeroBiasAndWholeSystemFixes(unittest.TestCase):
             try:
                 st = rt.status_payload()
                 self.assertTrue(st["ledger"]["auto_settle_active"])
-                self.assertEqual(st["council_members"], 22)
+                self.assertEqual(st["council_members"], 133)
 
                 candles = make_candles(140, seed=41, volatility=0.0003, drift=0.00006)
                 feat_row = feat_mod.compute_features(candles[:120])[-1]

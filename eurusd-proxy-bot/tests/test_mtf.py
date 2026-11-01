@@ -230,7 +230,7 @@ class TestFeaturesCarryTheTilt(unittest.TestCase):
             "mtf_ready_60",
         ):
             self.assertNotIn(name, FEATURE_NAMES)
-        self.assertEqual(5, FEATURE_VERSION)
+        self.assertEqual(9, FEATURE_VERSION)
 
     def test_clear_trend_dead_zone_and_slope_filter(self):
         gentle = make_candles(200, seed=11, drift=0.00001, volatility=0.000005)

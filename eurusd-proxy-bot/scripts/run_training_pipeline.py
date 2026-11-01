@@ -8,7 +8,7 @@ but works locally too.
 
 Usage:
     python3 scripts/run_training_pipeline.py
-    python3 scripts/run_training_pipeline.py --pairs EUR/USD,BTC/USD --candles 5000
+    python3 scripts/run_training_pipeline.py --pairs EUR/USD --candles 5000
     python3 scripts/run_training_pipeline.py --pair EUR/USD --candles 2000
 
 Environment variables (set in GitHub Actions secrets):
@@ -38,7 +38,7 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CANDLE_DIR = PROJECT_ROOT / "var" / "real_candles"
 
-DEFAULT_PAIRS = "EUR/USD,BTC/USD,ETH/USD"
+DEFAULT_PAIRS = "EUR/USD"
 DEFAULT_CANDLESTICK_COUNT = 2000
 BATCH_SIZE = 200
 
@@ -538,7 +538,7 @@ def main():
     parser.add_argument("--pair", action="append", default=None,
                         help="Pair to process (can be repeated). Default: all")
     parser.add_argument("--pairs", type=str, default=None,
-                        help="Comma-separated pairs. Default: EUR/USD,BTC/USD,ETH/USD")
+                        help="Comma-separated pairs. Default: EUR/USD")
     parser.add_argument("--candles", type=int, default=DEFAULT_CANDLESTICK_COUNT,
                         help=f"Candles per pair (default: {DEFAULT_CANDLESTICK_COUNT})")
     parser.add_argument("--skip-fetch", action="store_true",

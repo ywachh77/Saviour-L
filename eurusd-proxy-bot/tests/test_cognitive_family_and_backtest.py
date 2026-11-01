@@ -238,10 +238,10 @@ class TestSaviourCognitivePartnerAndWebEndpoints(unittest.TestCase):
                 self.assertTrue(heal_res["ok"])
                 self.assertTrue(heal_res["heal"]["causality_ok"])
 
-                # 3. Walk-forward auto-backtest action across all 3 markets
+                # 3. Walk-forward auto-backtest action across all markets (EUR/USD only)
                 bt_res = rt.run_backtest_action("ALL")
                 self.assertTrue(bt_res["ok"])
-                self.assertEqual(len(bt_res["runs"]), 3)
+                self.assertEqual(len(bt_res["runs"]), 1)
                 self.assertTrue(all(r["ok"] for r in bt_res["runs"]))
 
                 # 4. Learning payload includes 6-family weights, synergies, backtests & cognitive state

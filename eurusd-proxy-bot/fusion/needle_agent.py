@@ -53,7 +53,7 @@ DEFAULT_ADAPTER_REL = "needle/saviour_lora.safetensors"
 DEFAULT_REPORT_REL = "needle/finetune_report.json"
 DEFAULT_MIN_CONFIDENCE = 0.55
 
-SUPPORTED_PAIRS = ("ALL", "EUR/USD", "BTC/USD", "ETH/USD")
+SUPPORTED_PAIRS = ("ALL", "EUR/USD")
 SUPPORTED_SIGNAL_STYLES = ("standard", "brief", "tactical", "compact")
 SUPPORTED_RESULT_STYLES = ("standard", "compact")
 SUPPORTED_MTF_MINUTES = (5, 15, 60)

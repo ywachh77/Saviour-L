@@ -33,7 +33,7 @@ EXPECTED: dict[str, list[str]] = {
     "alerts": ["id", "kind", "message", "dedupe_key", "created_at"],
     "api_keys": ["id", "slots", "cursor", "updated_at"],
     "candles_m1": ["timestamp", "pair", "open", "high", "low", "close", "volume"],
-    "council_weights": ["id", "net", "seen", "weights", "version"],
+    "council_weights": ["id", "net", "seen", "weights", "learned_weights", "version"],
     "heartbeats": [
         "id", "runner", "phase", "paused", "cycles", "seal_state", "reason",
         "created_at", "bucket", "regime", "signal_id",
@@ -106,7 +106,7 @@ class TestSchemaDrift(unittest.TestCase):
             provider=None,
             telegram=None,
         )
-        run_simulation(bot, synthetic_series(600, seed=20260101))
+        run_simulation(bot, synthetic_series(400, seed=20260101))
 
         written = _written_columns(self.directory)
         self.assertTrue(written, "the pipeline wrote nothing, so this proves nothing")

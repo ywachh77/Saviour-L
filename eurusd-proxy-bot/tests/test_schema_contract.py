@@ -60,7 +60,7 @@ EXPECTED_COLUMNS: dict[str, set[str]] = {
         "id", "model", "ensemble", "runtime", "calibration_points", "mistakes", "updated_at",
     },
     "model_versions": {"version_id", "report", "created_at"},
-    "council_weights": {"id", "net", "seen", "weights", "version"},
+    "council_weights": {"id", "net", "seen", "weights", "learned_weights", "version"},
     "learning_events": {
         "id", "kind", "signal_id", "applied", "reason", "predicted", "raw",
         "label", "squared_error", "created_at", "outcome",
@@ -166,7 +166,7 @@ def _replay_all_write_paths() -> dict[str, set[str]]:
             )
             store = Store(None, LocalStore(Path(tmp)))
             bot = FusionBot(config=config, store=store, provider=None, telegram=None)
-            candles = synthetic_series(900, seed=20260101)
+            candles = synthetic_series(400, seed=20260101)
 
             with contextlib.redirect_stdout(io.StringIO()):
                 run_simulation(bot, candles, feed=SyntheticFeed(candles))

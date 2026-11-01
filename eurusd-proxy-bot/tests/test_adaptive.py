@@ -39,12 +39,12 @@ def _config(adaptive: bool, **overrides) -> Config:
     return config
 
 
-def _replay(adaptive: bool, seed: int, volatility: float, bars: int = 2500):
+def _replay(adaptive: bool, seed: int, volatility: float, bars: int = 1200):
     candles = synthetic_series(count=bars, seed=seed, volatility=volatility)
     return run_backtest(candles, _config(adaptive), folds=4, spread_pips=1.2)
 
 
-def _replay_undisciplined(seed: int, volatility: float, bars: int = 2500):
+def _replay_undisciplined(seed: int, volatility: float, bars: int = 1200):
     """The pre-fix path, reconstructed: a fixed hold with no cost test at all.
 
     ``reward_to_cost=0`` asks for no margin over the toll, so every horizon

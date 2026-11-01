@@ -59,22 +59,22 @@ class TestOperatorDashboardAPI(unittest.TestCase):
         code, data = self._get("/api/status")
         self.assertEqual(code, 200)
         self.assertEqual(data["engine"], "SAVIOUR")
-        self.assertEqual(data["active_pairs"], ["EUR/USD", "BTC/USD", "ETH/USD"])
-        self.assertEqual(len(data["markets"]), 3)
+        self.assertEqual(data["active_pairs"], ["EUR/USD"])
+        self.assertEqual(len(data["markets"]), 1)
         self.assertTrue(data["runtime_config"]["mtf_filter"])
 
     def test_generate_signal_works_standalone_without_telegram(self):
         # Scan mode walks paper bars through unmodified engine gates to return a real sealed signal.
         code, data = self._post(
             "/api/signals",
-            {"pair": "BTC/USD", "mode": "scan", "dispatch_telegram": False, "balance_usd": 10000, "risk_pct": 1.0},
+            {"pair": "EUR/USD", "mode": "scan", "dispatch_telegram": False, "balance_usd": 10000, "risk_pct": 1.0},
         )
         self.assertEqual(code, 200)
         self.assertTrue(data["ok"])
         self.assertFalse(data["dispatch_telegram"])
         self.assertEqual(len(data["evaluations"]), 1)
         card = data["evaluations"][0]
-        self.assertEqual(card["pair"], "BTC/USD")
+        self.assertEqual(card["pair"], "EUR/USD")
         self.assertEqual(card["feed_source"], "PAPER_SIMULATION")
         self.assertIn("risk_plan", card)
         self.assertIn("stop_price", card["risk_plan"])
@@ -98,22 +98,22 @@ class TestOperatorDashboardAPI(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertFalse(res["sent_to_chat"])
         self.assertIn("FUSION BOT status", res["reply"])
-        self.assertIn("pairs EUR/USD, BTC/USD, ETH/USD", res["reply"])
+        self.assertIn("pair EUR/USD", res["reply"])
 
     def test_strategies_and_runtime_config_toggle(self):
         code, strat = self._get("/api/strategies")
         self.assertEqual(code, 200)
-        self.assertEqual(len(strat["members"]), 22)
-        self.assertEqual(strat["prototype_total"], 21)
+        self.assertEqual(len(strat["members"]), 133)
+        self.assertEqual(strat["prototype_total"], 132)
 
         code, updated = self._post(
             "/api/config",
-            {"mtf_minutes": 5, "pairs": ["BTC/USD", "ETH/USD"], "news_filter": False},
+            {"mtf_minutes": 5, "pairs": ["EUR/USD"], "news_filter": False},
         )
         self.assertEqual(code, 200)
         rc = updated["strategies"]["runtime_config"]
         self.assertEqual(rc["mtf_minutes"], 5)
-        self.assertEqual(rc["pairs"], ["BTC/USD", "ETH/USD"])
+        self.assertEqual(rc["pairs"], ["EUR/USD"])
         self.assertFalse(rc["news_filter"])
 
     def test_credentials_vault_masks_secrets_and_never_echoes_plaintext(self):
@@ -166,11 +166,11 @@ class TestOperatorDashboardAPI(unittest.TestCase):
         bars = [
             {
                 "timestamp": format_datetime(t0 + timedelta(minutes=i)),
-                "pair": "BTC/USD",
-                "open": 80200.0 + i,
-                "high": 80215.0 + i,
-                "low": 80190.0 + i,
-                "close": 80210.0 + i,
+                "pair": "EUR/USD",
+                "open": 1.1200 + i * 0.00001,
+                "high": 1.1201 + i * 0.00001,
+                "low": 1.1199 + i * 0.00001,
+                "close": 1.12005 + i * 0.00001,
                 "volume": 0.0,
             }
             for i in range(90)
@@ -180,8 +180,8 @@ class TestOperatorDashboardAPI(unittest.TestCase):
         self.runtime.reload()
         _, status = self._get("/api/status")
         self.assertEqual(status["feed_mode"], "SUPABASE_SYNC")
-        btc_mkt = [m for m in status["markets"] if m["symbol"] == "BTC/USD"][0]
-        self.assertAlmostEqual(btc_mkt["latest_price"], 80299.0, places=2)
+        eur_mkt = [m for m in status["markets"] if m["symbol"] == "EUR/USD"][0]
+        self.assertAlmostEqual(eur_mkt["latest_price"], 1.12094, places=4)
 
         _, creds = self._get("/api/credentials")
         self.assertTrue(creds["twelvedata"]["configured"])
@@ -354,7 +354,7 @@ class TestOperatorDashboardAPI(unittest.TestCase):
         code, synced = self._post("/api/cloud_sync", snap)
         self.assertEqual(code, 200)
         self.assertTrue(synced["ok"])
-        self.assertEqual(synced["synced_candles"], 2040)
+        self.assertEqual(synced["synced_candles"], 680)
         self.assertEqual(synced["status"]["feed_mode"], "SUPABASE_SYNC")
         for mkt in synced["status"]["markets"]:
             self.assertEqual(mkt["candles"], 680)

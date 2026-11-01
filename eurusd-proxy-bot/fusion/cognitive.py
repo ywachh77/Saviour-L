@@ -517,7 +517,7 @@ class SaviourCognitivePartner:
                 )
             else:
                 lines.append(
-                    f"I just completed a {chk_cnt}-point diagnostic & causality sweep across EUR/USD, BTC/USD, and ETH/USD — "
+                    f"I just completed a {chk_cnt}-point diagnostic & causality sweep across EUR/USD — "
                     "zero flaws, zero overdue settlements, and 5/5 look-ahead invariance checks passed cleanly."
                 )
             if tool_reply:

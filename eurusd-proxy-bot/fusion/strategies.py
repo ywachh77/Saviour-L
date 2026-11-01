@@ -52,7 +52,12 @@ def strategy_family(strategy_id: str) -> str:
 
 # Volatility band the core gate was written for. Outside it the gate abstains
 # rather than pretending a rule set tuned on calm bars still applies.
-ATR_PCT_MIN = 0.0
+# Lower bound: 0.015% of price. For EUR/USD at 1.11, this is ~1.66 pips.
+# Below this, the bar is too quiet for the 6-check gate to have any edge —
+# the spread alone would eat the projected move.
+# Upper bound: 0.4% of price (~44 pips for EUR/USD). Above this, the market
+# is in panic mode and the gate's rules don't apply.
+ATR_PCT_MIN = 0.00015
 ATR_PCT_MAX = 0.004
 
 
@@ -74,7 +79,7 @@ def orbix_confluence(
 
     Requires at least ``min_checks`` of six checks AND the mandatory checks
     for the active entry mode. Tuned on 2025 real M1 bars and validated
-    out-of-sample on 2026 EUR/USD, BTC/USD, and ETH/USD M1 candles under both
+    out-of-sample on 2026 EUR/USD M1 candles under both
     minute-boundary and 1-bar next-candle forward execution.
     """
     if features is None:

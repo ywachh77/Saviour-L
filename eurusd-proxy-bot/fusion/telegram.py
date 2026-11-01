@@ -34,7 +34,7 @@ COMMANDS = ("/start", "/help", "/signals", "/status", "/pause", "/resume")
 POLL_TIMEOUT_MARGIN_SECONDS = 10.0
 
 HELP_TEXT = (
-    "FUSION BOT — FX & crypto M1 research signals (EUR/USD, BTC/USD, ETH/USD · paper only).\n"
+    "SAVIOUR — EUR/USD M1 research signals (paper only).\n"
     "\n"
     "Commands:\n"
     "/start — begin receiving signals\n"

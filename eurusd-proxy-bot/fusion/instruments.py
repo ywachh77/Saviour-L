@@ -139,27 +139,9 @@ EURUSD = Instrument(
     "round trip costs about twice what the market moves in a minute.",
 )
 
-BTCUSD = Instrument(
-    symbol="BTC/USD",
-    pip=1.0,
-    spread_pips=8.0,
-    precision=2,
-    crypto=True,
-    note="One dollar. Spread 0.01% of an ~80,500 price; M1 ATR ~58 pips "
-    "from a $2,188 daily ATR scaled by sqrt(1440).",
-)
+BTCUSD = None  # Crypto removed — EUR/USD only
 
-ETHUSD = Instrument(
-    symbol="ETH/USD",
-    pip=0.1,
-    spread_pips=2.4,
-    precision=2,
-    crypto=True,
-    note="Ten cents. Spread 0.01% of an ~2,380 price; M1 ATR ~23 pips from "
-    "44% annualised realised volatility scaled to one minute.",
-)
-
-REGISTRY: dict[str, Instrument] = {item.symbol: item for item in (EURUSD, BTCUSD, ETHUSD)}
+REGISTRY: dict[str, Instrument] = {EURUSD.symbol: EURUSD}
 
 # The instrument every existing call site means when it does not say. Keeping
 # EUR/USD as the default is what makes this whole change additive rather than
@@ -214,9 +196,7 @@ def spread_to_atr(symbol: str | None, atr_pips: float) -> float:
 
 __all__ = [
     "ALLOWED_SYMBOLS",
-    "BTCUSD",
     "DEFAULT",
-    "ETHUSD",
     "EURUSD",
     "REGISTRY",
     "DEFAULT_SPREAD_PIPS",
