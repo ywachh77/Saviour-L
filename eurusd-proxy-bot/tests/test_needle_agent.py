@@ -199,13 +199,13 @@ class TestNativeCactConfidenceSemantics(unittest.TestCase):
                 fake_instance.next_resp = {
                     "type": "tool_call",
                     "confidence": None,
-                    "function_calls": [{"name": "scan_market", "arguments": {"pair": "BTC/USD", "mode": "now"}}],
+                    "function_calls": [{"name": "scan_market", "arguments": {"pair": "EUR/USD", "mode": "now"}}],
                 }
-                dec_lora = agent.route("scan btc/usd now")
+                dec_lora = agent.route("scan eurusd now")
                 self.assertEqual(dec_lora.type, "tool_call")
                 self.assertIsNone(dec_lora.confidence)
                 self.assertEqual(dec_lora.engine, "needle3_cact")
-                self.assertEqual(dec_lora.function_calls[0]["arguments"]["pair"], "BTC/USD")
+                self.assertEqual(dec_lora.function_calls[0]["arguments"]["pair"], "EUR/USD")
 
                 # 2. Base .cact with low numeric confidence (< 0.60) -> must refuse
                 fake_instance.next_resp = {

@@ -75,7 +75,7 @@ SCALPING_PROTOTYPES = (
     "scalp_adx_surge",
     "scalp_candle_cluster",
     "scalp_ema_cross_scalp",
-    "scalp_micro_breakout",
+    "scalp_donchian_breakout",
     "scalp_rsi_divergence_micro",
     "scalp_volume_surge",
     "scalp_adx_slope",
@@ -99,6 +99,7 @@ SCALPING_MEMBERS = {
     "scalp_adx_surge": "Scalp: ADX rising with dominant DI direction",
     "scalp_candle_cluster": "Scalp: consecutive same-direction candles",
     "scalp_ema_cross_scalp": "Scalp: fresh EMA cross with momentum",
+    "scalp_donchian_breakout": "Scalp: break of 20-bar Donchian range",
     "scalp_rsi_divergence_micro": "Scalp: short-term RSI divergence for reversal",
     "scalp_volume_surge": "Scalp: volume spike with price action confirmation",
     "scalp_adx_slope": "Scalp: ADX rising to confirm trend strength",
@@ -465,7 +466,7 @@ def scalp_wick_reversal(
 
     rng = candle.high - candle.low
     body = abs(candle.close - candle.open)
-    if rng < 1e-15 or body / rng > 0.4:
+    if rng < 1e-15 or body / rng > 0.6:
         return _abstain("No clear wick to fade — body too large relative to range.")
     if body < 1e-15:
         return _abstain("No clear wick to fade — body too small.")
@@ -474,13 +475,13 @@ def scalp_wick_reversal(
     lower_wick = min(candle.open, candle.close) - candle.low
 
     # Hammer: long lower wick
-    if lower_wick >= 2.0 * body and lower_wick >= upper_wick * 1.5:
-        prob = 0.60 + 0.10 * (lower_wick / body - 2.0)
+    if lower_wick >= 1.5 * body and lower_wick >= upper_wick * 1.2:
+        prob = 0.58 + 0.10 * (lower_wick / body - 1.5)
         return Decision("BUY", "Wick reversal scalp: hammer pattern with long lower wick rejection.", prob, 2)
 
     # Shooting star: long upper wick
-    if upper_wick >= 2.0 * body and upper_wick >= lower_wick * 1.5:
-        prob = 0.60 + 0.10 * (upper_wick / body - 2.0)
+    if upper_wick >= 1.5 * body and upper_wick >= lower_wick * 1.2:
+        prob = 0.58 + 0.10 * (upper_wick / body - 1.5)
         return Decision("SELL", "Wick reversal scalp: shooting star pattern with long upper wick rejection.", 1 - prob, 2)
 
     return _abstain("No clear wick reversal pattern present.")
@@ -510,14 +511,14 @@ def scalp_volume_spike(
     vol_ratio = float(features.get("volume_ratio", 0.0))
     body_ratio = abs(candle.close - candle.open) / (candle.high - candle.low) if (candle.high - candle.low) > 1e-15 else 0.0
 
-    if vol_ratio < 1.8 or body_ratio < 0.4:
+    if vol_ratio < 1.2 or body_ratio < 0.3:
         return _abstain("No volume spike or weak candle body.")
 
     if candle.close > candle.open:
-        prob = 0.62 + 0.08 * min(vol_ratio, 3.0) / 3.0
+        prob = 0.60 + 0.08 * min(vol_ratio, 2.0) / 2.0
         return Decision("BUY", f"Volume spike scalp: {vol_ratio:.1f}x average volume with bullish body.", prob, 2)
     else:
-        prob = 0.62 + 0.08 * min(vol_ratio, 3.0) / 3.0
+        prob = 0.60 + 0.08 * min(vol_ratio, 2.0) / 2.0
         return Decision("SELL", f"Volume spike scalp: {vol_ratio:.1f}x average volume with bearish body.", 1 - prob, 2)
 
 
@@ -545,26 +546,41 @@ def scalp_trend_pullback(
     ema_fast = float(features.get("ema_fast", 0.0))
     ema_slope = float(features.get("ema_slope", 0.0))
     price = candle.close
+    close_pos = float(features.get("close_position", 0.5))
+    body_atr = float(features.get("body_atr", 0.0))
 
-    # Need trend slope
-    if abs(ema_slope) < 0.00005:
+    # Need strong trend slope
+    if abs(ema_slope) < 0.0001:
         return _abstain("No clear EMA trend slope.")
 
-    # Price should be near the EMA (within 5 pips for EUR/USD)
+    # Price should be near the EMA (within 3 pips for EUR/USD)
     dist_pips = abs(price - ema_fast) / 0.0001
-    if dist_pips > 8.0:
+    if dist_pips > 4.0:
         return _abstain(f"Price too far from EMA ({dist_pips:.1f} pips away).")
 
-    # Candle should show rejection
+    # Candle should show rejection — small body or wick at EMA
     rng = candle.high - candle.low
     if rng < 1e-15:
         return _abstain("No range in candle.")
+    body = abs(candle.close - candle.open)
+    upper_wick = candle.high - max(candle.close, candle.open)
+    lower_wick = min(candle.close, candle.open) - candle.low
+    has_rejection = (
+        lower_wick >= rng * 0.25  # hammer-like lower wick
+        or upper_wick >= rng * 0.25  # shooting star-like upper wick
+        or body <= rng * 0.2  # small body (doji-like)
+    )
+    if not has_rejection:
+        return _abstain("No rejection candle at EMA.")
 
-    if ema_slope > 0 and dist_pips < 5.0:
-        prob = 0.65 - 0.03 * dist_pips
+    if body_atr < 0.05:
+        return _abstain("Body too small to trade.")
+
+    if ema_slope > 0 and dist_pips < 3.0:
+        prob = 0.62 - 0.04 * dist_pips
         return Decision("BUY", "Trend pullback scalp: uptrend, price reclaimed EMA with rejection candle.", prob, 2)
-    elif ema_slope < 0 and dist_pips < 5.0:
-        prob = 0.65 - 0.03 * dist_pips
+    elif ema_slope < 0 and dist_pips < 3.0:
+        prob = 0.62 - 0.04 * dist_pips
         return Decision("SELL", "Trend pullback scalp: downtrend, price rejected at EMA.", 1 - prob, 2)
 
     return _abstain("Price not at EMA for pullback entry.")
@@ -898,7 +914,7 @@ def scalp_ema_cross_scalp(
 
 
 
-def scalp_micro_breakout(
+def scalp_donchian_breakout(
     candle: Candle,
     previous_close: float,
     features: dict[str, float] | None,
@@ -907,15 +923,15 @@ def scalp_micro_breakout(
     spread_pips: float = charter.DEFAULT_SPREAD_PIPS,
     **_ignored,
 ) -> Decision:
-    """Micro Breakout — trade break of 10-bar range for short expiry.
+    """Donchian Breakout — trade break of 20-bar range for short expiry.
 
-    For 1-3 minute expiry: when price breaks above the 10-bar high (or below
-    the 10-bar low) with a strong candle and tight prior range, enter with
+    For 1-3 minute expiry: when price breaks above the 20-bar high (or below
+    the 20-bar low) with a strong candle and tight prior range, enter with
     the break. Tight range breakouts have high continuation probability.
     """
     blocked = _cost_guard(features, spread_pips)
     if blocked:
-        return Decision("NO SIGNAL", blocked, None if features is None else probability_up, 0)
+        return Decision("NO SIGNAL", blocked.reason, None if features is None else probability_up, 0)
     assert features is not None
 
     close = candle.close
@@ -975,7 +991,7 @@ def scalp_rsi_divergence_micro(
     """
     blocked = _cost_guard(features, spread_pips)
     if blocked:
-        return Decision("NO SIGNAL", blocked, None if features is None else probability_up, 0)
+        return Decision("NO SIGNAL", blocked.reason, None if features is None else probability_up, 0)
     assert features is not None
 
     rsi = float(features.get("rsi", 50.0))
@@ -993,10 +1009,10 @@ def scalp_rsi_divergence_micro(
     if (
         price_lower
         and rsi_higher
-        and rsi < 40.0
+        and rsi < 45.0
         and ema_fast >= ema_slow * 0.998
-        and body_atr >= 0.1
-        and close_pos >= 0.55
+        and body_atr >= 0.08
+        and close_pos >= 0.50
     ):
         return Decision(
             "BUY",
@@ -1011,15 +1027,28 @@ def scalp_rsi_divergence_micro(
     if (
         price_higher
         and rsi_lower
-        and rsi > 60.0
+        and rsi > 55.0
         and ema_fast <= ema_slow * 1.002
-        and body_atr >= 0.1
-        and close_pos <= 0.45
+        and body_atr >= 0.08
+        and close_pos <= 0.50
     ):
         return Decision(
             "SELL",
             f"RSI divergence: price higher high, RSI lower high ({rsi:.1f}), "
             f"bearish divergence in overbought zone.",
+            probability_up, 2,
+        )
+    # Fallback: simple RSI extreme reversal (when divergence doesn't trigger)
+    if rsi < 35.0 and close_pos >= 0.50 and body_atr >= 0.08 and ema_fast >= ema_slow * 0.998:
+        return Decision(
+            "BUY",
+            f"RSI oversold reversal: RSI at {rsi:.1f}, buying the bounce.",
+            probability_up, 2,
+        )
+    if rsi > 65.0 and close_pos <= 0.50 and body_atr >= 0.08 and ema_fast <= ema_slow * 1.002:
+        return Decision(
+            "SELL",
+            f"RSI overbought reversal: RSI at {rsi:.1f}, selling the drop.",
             probability_up, 2,
         )
     return Decision("NO SIGNAL", "No RSI divergence pattern.", probability_up, 0)
@@ -1042,7 +1071,7 @@ def scalp_volume_surge(
     """
     blocked = _cost_guard(features, spread_pips)
     if blocked:
-        return Decision("NO SIGNAL", blocked, None if features is None else probability_up, 0)
+        return Decision("NO SIGNAL", blocked.reason, None if features is None else probability_up, 0)
     assert features is not None
 
     volume_ratio = float(features.get("volume_ratio", 1.0))
@@ -1054,10 +1083,10 @@ def scalp_volume_surge(
 
     # Bullish volume surge
     if (
-        volume_ratio >= 1.5
+        volume_ratio >= 1.15
         and close > candle.open
-        and close_pos >= 0.6
-        and body_atr >= 0.15
+        and close_pos >= 0.55
+        and body_atr >= 0.10
         and ema_fast >= ema_slow * 0.998
     ):
         return Decision(
@@ -1069,10 +1098,10 @@ def scalp_volume_surge(
 
     # Bearish volume surge
     if (
-        volume_ratio >= 1.5
+        volume_ratio >= 1.15
         and close < candle.open
-        and close_pos <= 0.4
-        and body_atr >= 0.15
+        and close_pos <= 0.45
+        and body_atr >= 0.10
         and ema_fast <= ema_slow * 1.002
     ):
         return Decision(
@@ -1101,7 +1130,7 @@ def scalp_adx_slope(
     """
     blocked = _cost_guard(features, spread_pips)
     if blocked:
-        return Decision("NO SIGNAL", blocked, None if features is None else probability_up, 0)
+        return Decision("NO SIGNAL", blocked.reason, None if features is None else probability_up, 0)
     assert features is not None
 
     adx = float(features.get("adx", 0.0))
@@ -1163,7 +1192,7 @@ def scalp_candle_pattern(
     """
     blocked = _cost_guard(features, spread_pips)
     if blocked:
-        return Decision("NO SIGNAL", blocked, None if features is None else probability_up, 0)
+        return Decision("NO SIGNAL", blocked.reason, None if features is None else probability_up, 0)
     assert features is not None
 
     close = candle.close
@@ -1189,8 +1218,8 @@ def scalp_candle_pattern(
         close > open_price
         and open_price < prev_close_val
         and close >= prev_close_val
-        and body_atr >= 0.15
-        and lower_wick <= range_size * 0.3
+        and body_atr >= 0.08
+        and lower_wick <= range_size * 0.5
         and ema_fast >= ema_slow * 0.998
     ):
         return Decision(
@@ -1205,8 +1234,8 @@ def scalp_candle_pattern(
         close < open_price
         and open_price > prev_close_val
         and close <= prev_close_val
-        and body_atr >= 0.15
-        and upper_wick <= range_size * 0.3
+        and body_atr >= 0.08
+        and upper_wick <= range_size * 0.5
         and ema_fast <= ema_slow * 1.002
     ):
         return Decision(
@@ -1218,11 +1247,11 @@ def scalp_candle_pattern(
 
     # Hammer pattern (bullish reversal)
     if (
-        body <= range_size * 0.3
-        and lower_wick >= range_size * 0.5
-        and upper_wick <= range_size * 0.2
-        and close > open_price
-        and close_pos >= 0.7
+        body <= range_size * 0.4
+        and lower_wick >= range_size * 0.35
+        and upper_wick <= range_size * 0.4
+        and close >= open_price
+        and close_pos >= 0.55
         and ema_fast >= ema_slow * 0.998
     ):
         return Decision(
@@ -1234,11 +1263,11 @@ def scalp_candle_pattern(
 
     # Shooting star pattern (bearish reversal)
     if (
-        body <= range_size * 0.3
-        and upper_wick >= range_size * 0.5
-        and lower_wick <= range_size * 0.2
-        and close < open_price
-        and close_pos <= 0.3
+        body <= range_size * 0.4
+        and upper_wick >= range_size * 0.35
+        and lower_wick <= range_size * 0.4
+        and close <= open_price
+        and close_pos <= 0.45
         and ema_fast <= ema_slow * 1.002
     ):
         return Decision(
@@ -1266,7 +1295,7 @@ SCALPING_REGISTRY: dict[str, Callable[..., Decision]] = {
     "scalp_adx_surge": scalp_adx_surge,
     "scalp_candle_cluster": scalp_candle_cluster,
     "scalp_ema_cross_scalp": scalp_ema_cross_scalp,
-    "scalp_micro_breakout": scalp_micro_breakout,
+    "scalp_donchian_breakout": scalp_donchian_breakout,
     "scalp_rsi_divergence_micro": scalp_rsi_divergence_micro,
     "scalp_volume_surge": scalp_volume_surge,
     "scalp_adx_slope": scalp_adx_slope,

@@ -429,6 +429,7 @@ class OperatorRuntime:
         self._synced_pairs = {
             m.config.pair for m in self._all_members() if len(m.candles) >= 60
         }
+        self._paper_candle_pairs -= self._synced_pairs
         self._ensure_paper_candles_if_offline()
 
     def _all_members(self) -> list[FusionBot]:
@@ -3145,6 +3146,7 @@ class OperatorRuntime:
             self._synced_pairs = {
                 m.config.pair for m in self._all_members() if len(m.candles) >= 60
             }
+            self._paper_candle_pairs -= self._synced_pairs
             for member in self._all_members():
                 if self._has_real_candles(member) and member.model is None:
                     member._ensure_baseline_veto_model()

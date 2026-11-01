@@ -94,9 +94,9 @@ def classify(
 # Continuation scalps need something to continue. Reversal scalps need
 # something to revert from. Letting each family speak only in the conditions it
 # was written for is most of the value of having a regime at all.
-CONTINUATION_SCALPS = frozenset({"scalp_impulse", "scalp_micro_breakout", "scalp_expansion"})
-REVERSION_SCALPS = frozenset({"scalp_reversion", "scalp_vwap_reversion", "scalp_pivot_fade"})
-TREND_SCALPS = frozenset({"scalp_stoch_cross"})
+CONTINUATION_SCALPS = frozenset({"scalp_impulse", "scalp_micro_breakout", "scalp_expansion", "scalp_donchian_breakout", "scalp_volume_spike", "scalp_volume_surge"})
+REVERSION_SCALPS = frozenset({"scalp_reversion", "scalp_vwap_reversion", "scalp_pivot_fade", "scalp_wick_reversal", "scalp_rsi_divergence_micro", "scalp_candle_pattern"})
+TREND_SCALPS = frozenset({"scalp_stoch_cross", "scalp_trend_pullback", "scalp_breakout_retest", "scalp_adx_slope"})
 CONTINUATION_METHODS = frozenset(
     {
         "smc_fvg_displacement",
