@@ -18,6 +18,7 @@ from .registry import ModelRegistry, ModelInfo, ProviderInfo
 from .discovery import detect_provider, validate_and_discover, auto_discover
 from .store import CredentialStore
 from .monitor import AIMonitor
+from .auto_loader import initialize_ai_gateway, get_stored_credentials_info, refresh_credentials
 
 __all__ = [
     "AIGateway",
@@ -30,4 +31,7 @@ __all__ = [
     "auto_discover",
     "CredentialStore",
     "AIMonitor",
+    "initialize_ai_gateway",
+    "get_stored_credentials_info",
+    "refresh_credentials",
 ]
