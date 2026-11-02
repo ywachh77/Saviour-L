@@ -9,15 +9,7 @@ of spread). Those ratios are dimensionless, so the engine is already
 instrument-agnostic. The one thing that is not dimensionless is the pip, and
 that was the single hardcoded number tying the whole thing to EUR/USD.
 
-A pip is a unit of *price*, and what a pip is worth differs by market:
-
-    EUR/USD   1 pip = 0.0001 of price
-    BTC/USD   1 pip = 1 dollar
-    ETH/USD   1 pip = 10 cents
-
-Get that wrong and every number the bot reports is wrong by orders of
-magnitude -- not "slightly mispriced", wrong. A one-dollar move on bitcoin
-would have been recorded as a ten-thousand pip win.
+A pip is a unit of *price*, and what a pip is worth differs by market.
 
 Where the numbers come from
 ---------------------------
@@ -26,7 +18,7 @@ These are measured from quoted market data, not guessed. They are recorded
 with their sources because a constant without a provenance is a constant
 nobody can check or update.
 
-EUR/USD (the original instrument)
+EUR/USD (the supported instrument)
     pip            0.0001          fourth decimal, the FX convention
     spread         1.2 pips        0.011% of a 1.0850 price
     M1 ATR         0.61 pips       measured on real M1 bars
@@ -36,58 +28,21 @@ EUR/USD (the original instrument)
     this bot's honest conclusion about EUR/USD M1 is that it is a cost
     problem, not an accuracy problem.
 
-BTC/USD (price ~ $80,500, late October 2026)
-    pip            $1.00
-    spread         0.01% of price  CoinGecko exchange table: Binance, Gate
-                                   and Coinbase all quoting 0.01% on
-                                   BTC/USD(T). 0.01% of 80,500 = $8.05.
-    daily ATR      $2,188.61       ATR(14) daily, 23 Oct 2026
-    M1 ATR         ~ 58 pips       daily / sqrt(1440), the usual
-                                   square-root-of-time scaling. The 15-minute
-                                   figure quoted the same day ($255.61) sits
-                                   15% above what that rule predicts and the
-                                   hourly ($406.36) 9% below, so the estimate
-                                   is good to roughly +/-15%.
-
-ETH/USD (price ~ $2,380, late October 2026)
-    pip            $0.10
-    spread         0.01% of price  CoinGecko: Binance, OKX, Bitget and Gate
-                                   all quoting 0.01% on ETH/USDT.
-                                   0.01% of 2,380 = $0.238, so ~2.4 pips.
-    daily range    ~ 3.7%          30-day realised volatility of 44% a year
-                                   (Admiral Markets, to 11 Oct 2026) is a
-                                   2.30% daily sigma; a bar's high-low range
-                                   averages about 1.6 sigma.
-    M1 ATR         ~ 23 pips       daily range / sqrt(1440)
-
 The number that actually matters
 --------------------------------
 
     spread / M1 ATR          lower is better
 
     EUR/USD        1.97
-    BTC/USD        0.14
-    ETH/USD        0.10
-
-On one-minute bars, bitcoin and ether are somewhere between fourteen and
-twenty times cheaper to trade relative to how far they move. That is not a
-claim that crypto is easier to predict -- it is not, and nothing here says
-otherwise. It is a claim about cost, and cost is the binding constraint this
-bot has already measured itself against.
-
-This is why adding crypto is worth doing at all, and it is the honest form of
-the argument: not "crypto wins more", but "the same edge, if it exists, is not
-automatically eaten by the spread before it can be measured."
 
 What is NOT claimed
 -------------------
 
 No claim is made that these figures are stable. They are point estimates from
-late October 2026. Crypto spreads widen in a liquidation cascade and ATR
-expands in a trend, and the bot re-measures ATR every bar from real prices --
-only the pip and the assumed spread are fixed here. Both are overridable by
-environment variable, and both should be revisited if price moves a long way,
-since a $40,000 bitcoin pays half the dollar spread a $80,000 one does.
+late October 2026. Spreads widen in off-hours and ATR expands in a trend,
+and the bot re-measures ATR every bar from real prices -- only the pip and
+the assumed spread are fixed here. Both are overridable by environment
+variable, and both should be revisited if price moves a long way.
 """
 
 from __future__ import annotations
@@ -138,8 +93,6 @@ EURUSD = Instrument(
     note="Fourth decimal. M1 ATR measured at 0.61 pips on real bars, so a "
     "round trip costs about twice what the market moves in a minute.",
 )
-
-BTCUSD = None  # Crypto removed — EUR/USD only
 
 REGISTRY: dict[str, Instrument] = {EURUSD.symbol: EURUSD}
 
