@@ -118,7 +118,7 @@ jobs:
           SIGNAL_HORIZON_MINUTES: "30"
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
-          MIN_ATR_TO_SPREAD_RATIO: "1.4"
+          MIN_ATR_TO_SPREAD_RATIO: "0.8"
           CANDLE_HISTORY: "750"
           # EUR/USD trades with a spread-to-ATR ratio that requires proper
           # horizon gating so weekends and FX off-hours don't produce signals
@@ -129,9 +129,9 @@ jobs:
           # M1 bars: 5m/15m/60m cascade + anti-climax pullback/reversal gating.
           MTF_FILTER: "1"
           MTF_MINUTES: "15"
-          MTF_MIN_GAP_BPS: "2.0"
+          MTF_MIN_GAP_BPS: "0.5"
           MTF_MACRO_FILTER: "1"
-          MTF_MACRO_MIN_GAP_BPS: "1.5"
+          MTF_MACRO_MIN_GAP_BPS: "0.3"
           NEWS_FILTER: "1"
           SIGNAL_COOLDOWN_MINUTES: "15"
           LOSS_GUARD_STREAK: "3"

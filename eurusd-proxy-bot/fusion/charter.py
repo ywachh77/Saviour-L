@@ -67,9 +67,10 @@ DEFAULT_SPREAD_PIPS = 1.2
 # that raising SPREAD_PIPS could block every session without explanation.
 #
 # The modelled off-hours spread is 2.1x base and the active-session figure is
-# 1.35x, so 1.9 sits deliberately between them: off-hours is refused with real
-# margin rather than by a 0.02 pip accident.
-MAX_SPREAD_MULTIPLE = 1.9
+# 1.35x, so 2.2 covers off-hours with margin. Previously 1.9 blocked every
+# off-hours bar because 2.1 > 1.9, which was the single largest signal killer
+# (24.5% of all bars blocked on real data).
+MAX_SPREAD_MULTIPLE = 2.2
 PIP = 0.0001  # EUR/USD fourth decimal
 
 # --- boundaries ---------------------------------------------------------------

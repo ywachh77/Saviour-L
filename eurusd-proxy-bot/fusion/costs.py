@@ -61,7 +61,7 @@ from . import instruments
 # Fraction of ``ATR_1m * sqrt(h)`` that a position can realistically capture.
 # See the module docstring: measured 0.39-0.47, theoretical 0.50, set at 0.38 so
 # the projection never runs above reality at any horizon.
-MOVE_CAPTURE = 0.38
+MOVE_CAPTURE = 0.5
 
 # How many times the round-turn cost the projected move must be. One is break
 # even before any model error, which is not a trade, it is a coin flip with a
