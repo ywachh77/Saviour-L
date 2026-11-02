@@ -726,6 +726,22 @@ class FusionEngine:
             present_conditions=present,
         )
 
+        # Set entry_price - use VWAP as reference for forex scalping
+        # VWAP is the volume-weighted average price, a good entry reference
+        if features:
+            # Use VWAP if available, otherwise BB_mid
+            if "vwap" in features:
+                entry_price = float(features["vwap"])
+            elif "bb_mid" in features:
+                entry_price = float(features["bb_mid"])
+            elif "ema_fast" in features:
+                entry_price = float(features["ema_fast"])
+            else:
+                entry_price = None
+
+            if entry_price is not None:
+                signal = signal.with_entry_price(entry_price)
+
         # Auto-select expiry based on horizon and sureshot status
         reason_text = verdict.reason
         if sureshot:

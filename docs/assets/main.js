@@ -191,9 +191,7 @@
   };
 
   var MARKETS_STATIC = {
-    "EUR/USD": { pip: 0.0001, spread: 1.20, precision: 5, baseUnit: "EUR", entry: 1.08520, atr: 1.95, horizon: 30, crypto: false },
-    "BTC/USD": { pip: 1.00,   spread: 8.05, precision: 2, baseUnit: "BTC", entry: 80512.40, atr: 58.0, horizon: 30, crypto: true },
-    "ETH/USD": { pip: 0.10,   spread: 2.40, precision: 2, baseUnit: "ETH", entry: 2381.40, atr: 23.0, horizon: 30, crypto: true }
+    "EUR/USD": { pip: 0.0001, spread: 1.20, precision: 5, baseUnit: "EUR", entry: 1.08520, atr: 1.95, horizon: 30, crypto: false }
   };
 
   var HALF_NORMAL_SCALE = 0.7978845608;
@@ -667,7 +665,7 @@
   }
 
   function staticFallbackSignal(pair, balance, riskPct) {
-    var keys = pair === "ALL" ? ["EUR/USD", "BTC/USD", "ETH/USD"] : [pair];
+    var keys = pair === "ALL" ? ["EUR/USD"] : [pair];
     var now = new Date();
     var nextMin = new Date(Math.floor(now.getTime() / 60000) * 60000 + 60000);
     var secsUntil = Math.max(1, Math.round((nextMin.getTime() - now.getTime()) / 1000));
@@ -1155,7 +1153,7 @@
   /* Page 04 : Strategies & Runtime Gates --------------------------------- */
   function renderStrategies(data) {
     var rc = data.runtime_config || {};
-    var activePairs = rc.pairs || ["EUR/USD", "BTC/USD", "ETH/USD"];
+    var activePairs = rc.pairs || ["EUR/USD"];
     Array.prototype.forEach.call(document.querySelectorAll('input[name="cfg-pair"]'), function (cb) {
       cb.checked = activePairs.indexOf(cb.value) !== -1;
     });
@@ -1292,7 +1290,7 @@
 
     var btCards = document.getElementById("backtest-summary-cards");
     if (btCards && data.markets) {
-      var pairs = ["EUR/USD", "BTC/USD", "ETH/USD"];
+      var pairs = ["EUR/USD"];
       btCards.innerHTML = pairs.map(function (sym) {
         var mk = data.markets[sym] || {};
         var bt = mk.latest_backtest || null;
@@ -1704,7 +1702,7 @@
     var isPaused = Boolean(champ.runtime && champ.runtime.paused);
     syncBotStateUI(isPaused, "SUPABASE_SYNC");
 
-    var barsByPair = { "EUR/USD": [], "BTC/USD": [], "ETH/USD": [] };
+    var barsByPair = { "EUR/USD": [] };
     (Array.isArray(snap.candles_m1) ? snap.candles_m1 : []).forEach(function (b) {
       if (b && barsByPair[b.pair]) barsByPair[b.pair].push(b);
     });

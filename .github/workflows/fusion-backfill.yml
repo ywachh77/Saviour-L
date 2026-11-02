@@ -51,7 +51,7 @@ jobs:
       - name: Extend candle history
         env:
           BACKFILL: "1"
-          PAIRS: "EUR/USD,BTC/USD,ETH/USD"
+          PAIRS: "EUR/USD"
           # 40k bars per pair is 8 pages each (24 credits total across all
           # three markets against an 800/day free-tier allowance). Paced at
           # 8 seconds per page it stays under the 8-per-minute limit and
