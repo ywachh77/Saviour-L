@@ -62,6 +62,19 @@ def get_supabase_config() -> tuple[str, str, str]:
     return supabase_url, supabase_key, project_ref
 
 
+def _to_epoch_seconds(ts_value) -> int:
+    """Convert a timestamp value to Unix epoch seconds.
+
+    Handles both integer timestamps and ISO string timestamps
+    (PostgREST returns timestamp columns as ISO strings by default).
+    """
+    if isinstance(ts_value, (int, float)):
+        return int(ts_value)
+    from datetime import datetime
+    dt = datetime.fromisoformat(str(ts_value).replace("Z", "+00:00"))
+    return int(dt.timestamp())
+
+
 def fetch_candles_for_pair(
     supabase_url: str,
     supabase_key: str,
@@ -85,21 +98,27 @@ def fetch_candles_for_pair(
     headers = {
         "apikey": supabase_key,
         "Authorization": f"Bearer {supabase_key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
+        "Accept": "application/json",
     }
-    post_url = f"{supabase_url}/rest/v1/"
+    rest_url = f"{supabase_url}/rest/v1/candles_m1"
 
     print(f"\n{'='*60}")
     print(f"FETCHING {pair} — {num_candles} candles")
     print(f"{'='*60}")
 
-    # Get total count
-    count_query = f"SELECT count(*) as total FROM candles_m1 WHERE pair = '{pair}';"
+    # Get total count from Content-Range header
     try:
-        resp = requests.post(post_url, headers=headers, json={"query": count_query}, timeout=30)
+        resp = requests.get(rest_url, headers=headers, params={
+            "pair": f"eq.{pair}",
+            "select": "timestamp",
+            "limit": "1",
+        }, timeout=30)
         resp.raise_for_status()
-        total = int(resp.json()[0]["total"])
+        content_range = resp.headers.get("Content-Range", "")
+        if "/" in content_range:
+            total = int(content_range.split("/")[-1])
+        else:
+            total = len(resp.json())
         print(f"  Total in DB: {total}")
     except Exception as e:
         print(f"  Error checking count: {e}")
@@ -116,29 +135,26 @@ def fetch_candles_for_pair(
     for batch_idx in range(num_batches):
         offset = batch_idx * BATCH_SIZE
         # Use DESC order to get most recent candles first
-        query = f"""
-        SELECT string_agg(row_data, ';') as candles
-        FROM (
-            SELECT extract(epoch from timestamp)::bigint::text || ',' ||
-                   open::text || ',' || high::text || ',' || low::text ||
-                   ',' || close::text || ',' || volume::text as row_data
-            FROM candles_m1
-            WHERE pair = '{pair}'
-            ORDER BY timestamp DESC
-            LIMIT {BATCH_SIZE}
-            OFFSET {offset}
-        ) t;
-        """
-
         try:
-            resp = requests.post(post_url, headers=headers, json={"query": query}, timeout=30)
+            resp = requests.get(rest_url, headers=headers, params={
+                "pair": f"eq.{pair}",
+                "select": "timestamp,open,high,low,close,volume",
+                "order": "timestamp.desc",
+                "limit": str(BATCH_SIZE),
+                "offset": str(offset),
+            }, timeout=30)
             resp.raise_for_status()
             data = resp.json()
-            if not data or not data[0].get("candles"):
+            if not data:
                 print(f"  Batch {batch_idx+1}/{num_batches}: empty")
                 continue
 
-            candles_str = data[0]["candles"]
+            # Format as CSV rows separated by ';' (same format as before)
+            candles_str = ";".join(
+                f"{_to_epoch_seconds(row['timestamp'])},{row['open']:.5f},{row['high']:.5f},"
+                f"{row['low']:.5f},{row['close']:.5f},{row.get('volume', 0.0) or 0.0:.1f}"
+                for row in data
+            )
             candles = candles_str.split(";")
 
             # Save to batch file

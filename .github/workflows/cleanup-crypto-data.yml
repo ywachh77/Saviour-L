@@ -1,0 +1,65 @@
+name: cleanup-crypto-data
+
+# Automatically delete unwanted (crypto) data from Supabase.
+#
+# Since crypto (BTC/USD, ETH/USD) has been removed from the supported
+# instrument list, any leftover candle/signal/settlement rows for those
+# pairs are unwanted. This workflow purges them automatically on a schedule
+# so the Supabase database stays clean without manual intervention.
+#
+# Runs daily at 3:30 AM UTC (after the neural training at 3 AM completes).
+
+on:
+  schedule:
+    - cron: "30 3 * * *"  # Daily at 3:30 AM UTC
+  workflow_dispatch:
+
+concurrency:
+  group: cleanup-crypto-data
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests python-dotenv
+
+      - name: Purge unwanted data from Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          cd eurusd-proxy-bot
+          python3 scripts/cleanup_unwanted_data.py
+
+      - name: Commit cleanup summary
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add eurusd-proxy-bot/var/cleanup_summary.json
+
+          if git diff --staged --quiet; then
+            echo "No cleanup changes to commit"
+          else
+            git commit -m "chore: purge unwanted crypto data from Supabase [skip ci]"
+            git push origin HEAD
+          fi
+
+      - name: Upload cleanup artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleanup-crypto-data-${{ github.run_id }}
+          path: eurusd-proxy-bot/var/cleanup_summary.json
+          retention-days: 30

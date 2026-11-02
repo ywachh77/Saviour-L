@@ -119,7 +119,7 @@ class Config:
     # already measured. See fusion/costs.py for why 5 minutes at 1.2 pips is
     # usually not enough: at a realistic EUR/USD M1 ATR of 1.5 pips the same
     # trade needs about 36 minutes to clear three times its cost.
-    adaptive_horizon: bool = False
+    adaptive_horizon: bool = True
     # Narrow which strategies may speak by FX session. On by default: the
     # mapping is standard domain knowledge, and on a synthetic replay it is
     # inert anyway, because prototypes need 30 real outcomes to earn a voice
@@ -150,7 +150,7 @@ class Config:
     # any explicit UTC windows in NEWS_BLACKOUT_WINDOWS). See fusion/news.py.
     news_filter: bool = True
     news_blackout_windows: str = ""
-    reward_to_cost: float = 3.0
+    reward_to_cost: float = 2.0
     max_horizon_minutes: int = 120
     max_seal_latency_seconds: int = charter.MAX_SEAL_LATENCY_SECONDS
     max_candle_age_seconds: int = 130
@@ -209,7 +209,7 @@ class Config:
 
     # --- gates ---
     max_uncertainty: float = 0.10
-    min_confluence_checks: int = 5
+    min_confluence_checks: int = 3
     min_calibration_points: int = charter.MIN_CALIBRATION_POINTS
 
     # --- protections (Freqtrade & Nyao-style guards, opt-in on bare Config()) ---
@@ -359,7 +359,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         short_horizon_max_minutes=_int("SHORT_HORIZON_MAX_MINUTES", 3),
         short_horizon_min_reward=_float("SHORT_HORIZON_MIN_REWARD", 1.5),
         sureshot_confidence_threshold=_float("SURESHOT_CONFIDENCE_THRESHOLD", 0.72),
-        adaptive_horizon=_bool("ADAPTIVE_HORIZON", False),
+        adaptive_horizon=_bool("ADAPTIVE_HORIZON", True),
         session_filter=_bool("SESSION_FILTER", True),
         mtf_filter=_bool("MTF_FILTER", False),
         mtf_minutes=_int("MTF_MINUTES", 15),
@@ -368,7 +368,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         mtf_macro_min_gap_bps=_float("MTF_MACRO_MIN_GAP_BPS", 1.5),
         news_filter=_bool("NEWS_FILTER", True),
         news_blackout_windows=os.environ.get("NEWS_BLACKOUT_WINDOWS", "").strip(),
-        reward_to_cost=_float("REWARD_TO_COST", 3.0),
+        reward_to_cost=_float("REWARD_TO_COST", 2.0),
         max_horizon_minutes=_int("MAX_HORIZON_MINUTES", 120),
         max_seal_latency_seconds=_int("MAX_SEAL_LATENCY_SECONDS", charter.MAX_SEAL_LATENCY_SECONDS),
         max_candle_age_seconds=_int("MAX_CANDLE_AGE_SECONDS", 130),
@@ -376,7 +376,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         max_spread_pips=max_spread,
         spread_pips=spread,
         max_uncertainty=_float("MAX_UNCERTAINTY", 0.10),
-        min_confluence_checks=_int("MIN_CONFLUENCE_CHECKS", 5),
+        min_confluence_checks=_int("MIN_CONFLUENCE_CHECKS", 3),
         min_calibration_points=_int("MIN_CALIBRATION_POINTS", charter.MIN_CALIBRATION_POINTS),
         signal_cooldown_minutes=_int("SIGNAL_COOLDOWN_MINUTES", 0),
         loss_guard_streak=_int("LOSS_GUARD_STREAK", 0),

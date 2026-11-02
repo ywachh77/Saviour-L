@@ -1,7 +1,7 @@
 # Saviour-L
 
 A research-only trading-signal engine for one-minute bars across **EUR/USD**,
-**BTC/USD**, and **ETH/USD**. Every prediction is sealed before its entry bar
+EUR/USD. Every prediction is sealed before its entry bar
 opens, every trade pays its full round-turn spread, and zero broker orders are
 ever placed.
 
@@ -13,7 +13,7 @@ control panel (`Signals`, `Telegram`, `Health`, `Strategies`, `Credentials`,
 ## Capabilities
 
 - **Multi-market unit accuracy (`fusion/instruments.py`)** — EUR/USD (`0.0001` pip,
-  24/5 FX sessions) alongside 24/7 spot BTC/USD (`$1.00` pip) and ETH/USD
+  24/5 FX sessions) for EUR/USD
   (`$0.10` pip), where spread-to-movement is 4–14x lower than one-minute FX.
 - **Real-data-validated signal improvements (`fusion/mtf.py`, `fusion/scalping.py`)**
   — 15-minute locally resampled higher-timeframe confirmation (lifted Oct 2026

@@ -275,6 +275,27 @@ class SupabaseStore:
             self.errors.append(str(error))
             return 0
 
+    def delete(self, table: str, filters: dict[str, str]) -> int:
+        """Delete rows matching the given PostgREST filters.
+
+        Returns the number of rows deleted (from Content-Range header),
+        or 0 on error. Used by cleanup scripts to purge unwanted data
+        (e.g. crypto candles removed from the supported instrument list).
+        """
+        params = "&".join(f"{key}={urllib.parse.quote(str(value))}" for key, value in filters.items())
+        try:
+            self.last_response_headers = {}
+            self._call("DELETE", f"{table}?{params}", headers={"Prefer": "return=minimal"})
+            content_range = self.last_response_headers.get("content-range", "")
+            if "/" in content_range:
+                deleted = content_range.rsplit("/", 1)[-1].strip()
+                if deleted.isdigit():
+                    return int(deleted)
+            return 0
+        except StoreError as error:
+            self.errors.append(str(error))
+            return 0
+
     def _degrade(self, table: str, rows: Sequence[dict], message: str) -> None:
         self.errors.append(message)
         if self.fallback is not None:

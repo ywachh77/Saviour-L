@@ -538,7 +538,6 @@ class OperatorRuntime:
         return {
             "symbol": inst.symbol,
             "kind": inst.kind,
-            "crypto": inst.crypto,
             "pip": inst.pip,
             "precision": inst.precision,
             "spread_pips": member.config.spread_pips,

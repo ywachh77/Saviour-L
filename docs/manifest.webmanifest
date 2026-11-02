@@ -1,7 +1,7 @@
 {
   "name": "SAVIOUR — Shinigami Control Console",
   "short_name": "SAVIOUR",
-  "description": "Multi-market paper research signal engine and operator control panel for EUR/USD, BTC/USD, and ETH/USD.",
+  "description": "Paper research signal engine and operator control panel for EUR/USD.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

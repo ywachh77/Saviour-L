@@ -7,7 +7,7 @@ name: fusion-nightly
 # fires.
 #
 # Separate from fusion-cycle for two reasons. It needs a much longer timeout --
-# walk-forward over months of bars across EUR/USD, BTC/USD and ETH/USD is
+# walk-forward over months of EUR/USD bars is
 # minutes of work, not seconds -- and it should not be in the path that
 # produces signals. The cycle job also calls the nightly when one of its runs
 # lands in the window, but job slots mean whichever gets there first wins and
@@ -55,14 +55,14 @@ jobs:
           SIGNAL_HORIZON_MINUTES: "30"
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
-          MIN_ATR_TO_SPREAD_RATIO: "1.4"
+          MIN_ATR_TO_SPREAD_RATIO: "0.8"
           CANDLE_HISTORY: "750"
-          PAIRS: "EUR/USD,BTC/USD,ETH/USD"
+          PAIRS: "EUR/USD"
           MTF_FILTER: "1"
           MTF_MINUTES: "15"
-          MTF_MIN_GAP_BPS: "2.0"
+          MTF_MIN_GAP_BPS: "0.5"
           MTF_MACRO_FILTER: "1"
-          MTF_MACRO_MIN_GAP_BPS: "1.5"
+          MTF_MACRO_MIN_GAP_BPS: "0.3"
           NEWS_FILTER: "1"
           SIGNAL_COOLDOWN_MINUTES: "15"
           LOSS_GUARD_STREAK: "3"

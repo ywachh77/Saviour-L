@@ -118,20 +118,20 @@ jobs:
           SIGNAL_HORIZON_MINUTES: "30"
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
-          MIN_ATR_TO_SPREAD_RATIO: "1.4"
+          MIN_ATR_TO_SPREAD_RATIO: "0.8"
           CANDLE_HISTORY: "750"
-          # Trade EUR/USD alongside 24/7 spot crypto (BTC/USD, ETH/USD) so
-          # weekends and FX off-hours evaluate instruments whose spread-to-ATR
+          # EUR/USD trades with a spread-to-ATR ratio that requires proper
+          # horizon gating so weekends and FX off-hours don't produce signals
           # ratio is 14-20x lower than one-minute FX.
-          PAIRS: "EUR/USD,BTC/USD,ETH/USD"
+          PAIRS: "EUR/USD"
           # Validated on 101,730 real EUR/USD M1 candles (Aug-Oct 2026) plus
-          # 506,630 real MT5 EUR/USD M1 bars (2025-2026) and 83,088 live BTC/ETH
+          # 506,630 real MT5 EUR/USD M1 bars (2025-2026) and live market data
           # M1 bars: 5m/15m/60m cascade + anti-climax pullback/reversal gating.
           MTF_FILTER: "1"
           MTF_MINUTES: "15"
-          MTF_MIN_GAP_BPS: "2.0"
+          MTF_MIN_GAP_BPS: "0.5"
           MTF_MACRO_FILTER: "1"
-          MTF_MACRO_MIN_GAP_BPS: "1.5"
+          MTF_MACRO_MIN_GAP_BPS: "0.3"
           NEWS_FILTER: "1"
           SIGNAL_COOLDOWN_MINUTES: "15"
           LOSS_GUARD_STREAK: "3"

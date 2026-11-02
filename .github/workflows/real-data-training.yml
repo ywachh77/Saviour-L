@@ -1,7 +1,7 @@
 # Real-Data Training Pipeline
 #
 # Automates the full training cycle on a schedule:
-#   1. Fetch real candles from Supabase (EUR/USD, BTC/USD, ETH/USD)
+#   1. Fetch real candles from Supabase (EUR/USD)
 #   2. Train GBDT ensemble models on real candle data
 #   3. Run walk-forward backtest
 #   4. Upload artifacts + commit summary report
@@ -22,7 +22,7 @@ on:
       pairs:
         description: "Comma-separated pairs to process"
         required: false
-        default: "EUR/USD,BTC/USD,ETH/USD"
+        default: "EUR/USD"
       candles:
         description: "Number of candles per pair"
         required: false
@@ -72,7 +72,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
-          PAIRS="${{ github.event.inputs.pairs || 'EUR/USD,BTC/USD,ETH/USD' }}"
+          PAIRS="${{ github.event.inputs.pairs || 'EUR/USD' }}"
           CANDLESTICK_COUNT="${{ github.event.inputs.candles || '2000' }}"
           python3 scripts/run_training_pipeline.py --pairs "$PAIRS" --candles "$CANDLESTICK_COUNT"
 
@@ -85,12 +85,6 @@ jobs:
             eurusd-proxy-bot/var/real_candles/EURUSD/ensemble_model*.json
             eurusd-proxy-bot/var/real_candles/EURUSD/training_report.json
             eurusd-proxy-bot/var/real_candles/EURUSD/backtest_report.json
-            eurusd-proxy-bot/var/real_candles/BTCUSD/ensemble_model*.json
-            eurusd-proxy-bot/var/real_candles/BTCUSD/training_report.json
-            eurusd-proxy-bot/var/real_candles/BTCUSD/backtest_report.json
-            eurusd-proxy-bot/var/real_candles/ETHUSD/ensemble_model*.json
-            eurusd-proxy-bot/var/real_candles/ETHUSD/training_report.json
-            eurusd-proxy-bot/var/real_candles/ETHUSD/backtest_report.json
             eurusd-proxy-bot/var/real_candles/pipeline_summary.json
           retention-days: 30
 
@@ -102,7 +96,7 @@ jobs:
           if [ -f "$SUMMARY_FILE" ]; then
             cp "$SUMMARY_FILE" reports/pipeline_summary.json
             # Also copy individual training reports
-            for pair_dir in EURUSD BTCUSD ETHUSD; do
+            for pair_dir in EURUSD; do
               for report in training_report.json backtest_report.json; do
                 if [ -f "eurusd-proxy-bot/var/real_candles/$pair_dir/$report" ]; then
                   mkdir -p "reports/$pair_dir"
