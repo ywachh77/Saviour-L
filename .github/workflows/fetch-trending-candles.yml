@@ -1,0 +1,62 @@
+name: Fetch Trending Candles for 95% Win Rate
+
+on:
+  schedule:
+    - cron: '0 */4 * * 1-5'  # Every 4 hours on weekdays
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: 'How many days back to fetch'
+        required: false
+        default: '30'
+
+jobs:
+  fetch-and-train:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r eurusd-proxy-bot/requirements.txt
+          pip install requests pandas
+
+      - name: Fetch trending candles from Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          DAYS_BACK: ${{ github.event.inputs.days_back || '30' }}
+        run: |
+          cd eurusd-proxy-bot
+          python3 scripts/fetch_trending_candles.py --days-back $DAYS_BACK
+
+      - name: Train models on trending data
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          cd eurusd-proxy-bot
+          python3 scripts/train_trending_model.py
+
+      - name: Test for 95% win rate
+        run: |
+          cd eurusd-proxy-bot
+          python3 scripts/test_95_winrate_batches.py
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: trending-candle-results
+          path: |
+            eurusd-proxy-bot/var/real_candles/
+            eurusd-proxy-bot/var/*.json
+          retention-days: 30
