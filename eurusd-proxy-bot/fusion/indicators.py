@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from typing import Sequence
 
+from . import version as version_mod
 from .domain import Candle
 
 
@@ -810,5 +811,10 @@ def pivot_points(candles: list[Candle], period: int = 14) -> tuple[list[float | 
         s2[i] = p - (h - l)
 
     return pivot, r1, r2, s1, s2
+
+
+def indicators_version() -> str:
+    """Return the current system version for indicators module."""
+    return version_mod.get_version()
 
 
