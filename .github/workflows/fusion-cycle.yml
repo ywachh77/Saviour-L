@@ -140,6 +140,13 @@ jobs:
           NEEDLE_ENABLED: "1"
           NEEDLE_TELEMETRY: "0"
           DO_NOT_TRACK: "1"
+          # Self-learning module parameters
+          TARGET_WIN_RATE: "0.95"
+          LOSS_LEARNING_MULTIPLIER: "2.0"
+          LOSS_LEARNING_RATE_CAP: "0.08"
+          PAPER_TRADING_MAX_TRADES: "80"
+          LOSS_FOCUSED_RETRAIN_ENABLED: "1"
+          MIN_TRADE_CONFIDENCE: "0.15"
           # Hold the Telegram connection open after the cycle so commands are
           # answered while the container still exists. Twelve minutes of a
           # fifteen-minute interval leaves a gap of about two minutes, which is

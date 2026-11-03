@@ -40,9 +40,11 @@ from .timeutil import add_minutes, format_datetime, now
 
 # A candidate must clear all of these to replace the champion.
 MIN_WALK_FORWARD_FOLDS = 3
-PROMOTION_MIN_ACCURACY = 0.505  # direction, barely better than a coin
-PROMOTION_MIN_SKILL = 0.0  # Brier better than a 0.50 base rate
+PROMOTION_MIN_ACCURACY = 0.58  # direction, must be meaningfully better than coin
+PROMOTION_MIN_SKILL = 0.08  # Brier skill must show real predictive power
 MAX_WALK_FORWARD_TRAIN = 12_000
+# Trade threshold: only trade when model is confident (pushes toward 19/20)
+MIN_TRADE_CONFIDENCE = 0.15  # abs(prob - 0.5) >= 0.15 means prob >= 0.65 or <= 0.35
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,8 +413,8 @@ def walk_forward(
         for sample in test:
             probability = model.predict_up(sample.features)
             points.append((probability, sample.label))
-            # Only bars where the model actually took a side are traded.
-            if abs(probability - 0.5) >= 0.02:
+            # Only trade when model is confident — high threshold pushes win rate toward 19/20
+            if abs(probability - 0.5) >= MIN_TRADE_CONFIDENCE:
                 direction = 1.0 if probability > 0.5 else -1.0
                 trade_pips.append(direction * sample.gross_pips - spread_pips)
                 gross_total += trade_pips[-1]

@@ -226,10 +226,12 @@ class Config:
     online_learning_rate: float = 0.02
     # Self-learning module parameters
     target_win_rate: float = 0.95  # 19/20 = 95%
-    loss_learning_multiplier: float = 1.35  # Losses get 35% higher learning rate
-    loss_learning_rate_cap: float = 0.05  # Cap for loss-focused online learning
-    paper_trading_max_trades: int = 50  # Max paper trades per nightly loop
+    loss_learning_multiplier: float = 2.0  # Losses get 2x higher learning rate
+    loss_learning_rate_cap: float = 0.08  # Cap for loss-focused online learning
+    paper_trading_max_trades: int = 80  # Max paper trades per nightly loop
     loss_focused_retrain_enabled: bool = True  # Enable loss-focused nightly retraining
+    # High-confidence trade threshold: only trade when model is very confident
+    min_trade_confidence: float = 0.15  # abs(prob - 0.5) >= 0.15
 
     # --- runtime ---
     tick_seconds: int = 15
@@ -394,10 +396,11 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         nightly_train_fraction=_float("NIGHTLY_TRAIN_FRACTION", 0.70),
         online_learning_rate=_float("ONLINE_LEARNING_RATE", 0.02),
         target_win_rate=_float("TARGET_WIN_RATE", 0.95),
-        loss_learning_multiplier=_float("LOSS_LEARNING_MULTIPLIER", 1.35),
-        loss_learning_rate_cap=_float("LOSS_LEARNING_RATE_CAP", 0.05),
-        paper_trading_max_trades=_int("PAPER_TRADING_MAX_TRADES", 50),
+        loss_learning_multiplier=_float("LOSS_LEARNING_MULTIPLIER", 2.0),
+        loss_learning_rate_cap=_float("LOSS_LEARNING_RATE_CAP", 0.08),
+        paper_trading_max_trades=_int("PAPER_TRADING_MAX_TRADES", 80),
         loss_focused_retrain_enabled=_bool("LOSS_FOCUSED_RETRAIN_ENABLED", True),
+        min_trade_confidence=_float("MIN_TRADE_CONFIDENCE", 0.15),
         tick_seconds=_int("TICK_SECONDS", 15),
         heartbeat_stale_seconds=_int("HEARTBEAT_STALE_SECONDS", charter.HEARTBEAT_STALE_SECONDS),
         digest_hour_utc=_int("DIGEST_HOUR_UTC", 0),

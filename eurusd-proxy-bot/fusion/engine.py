@@ -34,9 +34,9 @@ from .timeutil import add_minutes, floor_minute, now as utcnow
 # Meta-model margins. VETO only blocks a read it confidently disagrees with;
 # ADVISORY (promoted) additionally requires agreement, with a tighter bar on a
 # calibrated score than on a raw one.
-VETO_MARGIN = 0.03
-AGREE_MARGIN_CALIBRATED = 0.01
-AGREE_MARGIN_RAW = 0.02
+VETO_MARGIN = 0.08
+AGREE_MARGIN_CALIBRATED = 0.05
+AGREE_MARGIN_RAW = 0.08
 
 RAW = "RAW"
 CALIBRATED = "CALIBRATED"

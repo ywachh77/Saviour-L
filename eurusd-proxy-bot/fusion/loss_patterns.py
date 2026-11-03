@@ -188,9 +188,9 @@ def calculate_loss_learning_rate(base_rate: float, loss_count: int, win_rate: fl
 
     # Scale up based on how far below target we are
     deficit = 0.95 - win_rate
-    multiplier = 1.0 + (deficit * 3.0)  # 3x amplification per unit deficit
+    multiplier = 1.0 + (deficit * 4.0)  # 4x amplification per unit deficit
 
     # More losses = higher rate
-    loss_multiplier = min(2.5, 1.0 + (loss_count / 100.0))
+    loss_multiplier = min(3.0, 1.0 + (loss_count / 50.0))
 
-    return min(0.15, base_rate * multiplier * loss_multiplier)
+    return min(0.12, base_rate * multiplier * loss_multiplier)

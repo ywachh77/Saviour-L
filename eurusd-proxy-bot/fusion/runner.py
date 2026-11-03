@@ -1469,11 +1469,13 @@ class FusionBot:
         # confirmed real outcome updates online weights from trade #1.
         self._ensure_baseline_veto_model(before=signal.entry_time)
 
-        # Loss-focused learning rate: mistakes carry 1.35x gradient focus (capped
-        # at 0.05) so repeating losing setups are down-weighted promptly.
+        # Loss-focused learning rate: mistakes carry higher gradient focus (capped
+        # at loss_learning_rate_cap) so repeating losing setups are down-weighted promptly.
         effective_lr = float(self.config.online_learning_rate)
         if settlement.outcome == charter.LOSS:
-            effective_lr = min(0.05, effective_lr * 1.35)
+            multiplier = float(getattr(self.config, "loss_learning_multiplier", 2.0))
+            cap = float(getattr(self.config, "loss_learning_rate_cap", 0.08))
+            effective_lr = min(cap, effective_lr * multiplier)
 
         # Model learning: test before learn, once per confirmed non-tied outcome.
         step = learning.online_step(
@@ -1993,7 +1995,9 @@ class FusionBot:
                     self._ensure_baseline_veto_model(before=sig.entry_time)
                     eff_lr = float(self.config.online_learning_rate)
                     if stl.outcome == charter.LOSS:
-                        eff_lr = min(0.05, eff_lr * 1.35)
+                        multiplier = float(getattr(self.config, "loss_learning_multiplier", 2.0))
+                    cap = float(getattr(self.config, "loss_learning_rate_cap", 0.08))
+                    eff_lr = min(cap, eff_lr * multiplier)
                     step = learning.online_step(
                         self.model,
                         sig.features,

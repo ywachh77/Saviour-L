@@ -103,7 +103,9 @@ def simulate_paper_trades(
             effective_lr = base_lr
 
             if label == 0:  # Loss
-                effective_lr = min(0.05, base_lr * 1.35)
+                multiplier = float(getattr(config, "loss_learning_multiplier", 2.0))
+                cap = float(getattr(config, "loss_learning_rate_cap", 0.08))
+                effective_lr = min(cap, base_lr * multiplier)
                 result.learned = True
                 result.learning_detail = f"Loss learning at {effective_lr:.3f} rate"
             else:  # Win

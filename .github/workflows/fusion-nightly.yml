@@ -73,8 +73,9 @@ jobs:
           DO_NOT_TRACK: "1"
           # Self-learning module parameters
           TARGET_WIN_RATE: "0.95"
-          LOSS_LEARNING_MULTIPLIER: "1.35"
-          LOSS_LEARNING_RATE_CAP: "0.05"
-          PAPER_TRADING_MAX_TRADES: "50"
+          LOSS_LEARNING_MULTIPLIER: "2.0"
+          LOSS_LEARNING_RATE_CAP: "0.08"
+          PAPER_TRADING_MAX_TRADES: "80"
           LOSS_FOCUSED_RETRAIN_ENABLED: "1"
+          MIN_TRADE_CONFIDENCE: "0.15"
         run: python3 scripts/nightly.py
