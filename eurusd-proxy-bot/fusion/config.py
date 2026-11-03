@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import charter, instruments
 from .timeutil import UTC
+from .version import get_version, get_full_version, get_version_info
 
 
 def _load_dotenv(path: str | Path = ".env") -> None:
@@ -77,6 +78,12 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass
 class Config:
+    # --- system version ---
+    version: str = get_version()
+    full_version: str = get_full_version()
+    feature_version: int = 10
+    model_version: int = 3
+
     # --- Telegram (owner-only) ---
     telegram_token: str = ""
     telegram_owner_chat_id: str = ""
@@ -269,6 +276,10 @@ class Config:
 
     def redacted(self) -> dict:
         return {
+            "version": self.version,
+            "full_version": self.full_version,
+            "feature_version": self.feature_version,
+            "model_version": self.model_version,
             "telegram_ready": self.telegram_ready,
             "supabase_ready": self.supabase_ready,
             "provider_keys": len(self.twelve_data_keys),

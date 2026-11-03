@@ -150,6 +150,9 @@ jobs:
           PAPER_TRADING_MAX_TRADES: "80"
           LOSS_FOCUSED_RETRAIN_ENABLED: "1"
           MIN_TRADE_CONFIDENCE: "0.15"
+          # System version
+          BUILD_TIMESTAMP: ${{ github.event.head_commit.timestamp }}
+          GIT_COMMIT: ${{ github.sha }}
           # Hold the Telegram connection open after the cycle so commands are
           # answered while the container still exists. Twelve minutes of a
           # fifteen-minute interval leaves a gap of about two minutes, which is

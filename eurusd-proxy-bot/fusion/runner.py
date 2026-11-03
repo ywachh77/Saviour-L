@@ -1708,6 +1708,9 @@ class FusionBot:
             ):
                 self.family_fusion = FamilyFusionEngine.from_dict(report.system.family_state)
         self.nightly_report = report.to_dict()
+        # Add version info to the report
+        from .version import get_version_info
+        self.nightly_report["version"] = get_version_info()
         if paper_feedback is not None:
             self.nightly_report["paper_trading"] = paper_feedback.to_dict()
         self.store.save_model_version(
