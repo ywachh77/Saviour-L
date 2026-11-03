@@ -50,16 +50,18 @@ class MetaController(nn.Module):
 
     def __init__(
         self,
-        num_features: int = 28,  # Aggressive: 28 features
-        num_models: int = 8,     # Aggressive: 8 models in ensemble
-        num_strategies: int = 30,  # Aggressive: 30 strategies
-        regime_dim: int = 12,    # Aggressive: 12 regime dimensions
+        num_features: int = 50,  # MAXIMUM: 50 features
+        num_models: int = 15,    # MAXIMUM: 15 models in ensemble
+        num_strategies: int = 50,  # MAXIMUM: 50 strategies
+        regime_dim: int = 20,    # MAXIMUM: 20 regime dimensions
     ):
         super().__init__()
 
-        # Market regime detector — deeper network for better regime identification
+        # Market regime detector — MAXIMUM depth
         self.regime_detector = nn.Sequential(
-            nn.Linear(num_features, 128),
+            nn.Linear(num_features, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -69,20 +71,24 @@ class MetaController(nn.Module):
             nn.Softmax(dim=-1),
         )
 
-        # Hyperparameter adapter — learns to adjust model parameters
+        # Hyperparameter adapter — MAXIMUM depth
         self.hyper_adapter = nn.Sequential(
-            nn.Linear(regime_dim + num_features, 256),
+            nn.Linear(regime_dim + num_features, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, num_models * 6),  # 6 hyperparams per model (expanded)
+            nn.Linear(64, num_models * 8),  # 8 hyperparams per model (MAXIMUM)
         )
 
-        # Policy network — RL agent for trading decisions
+        # Policy network — MAXIMUM depth
         self.policy_network = nn.Sequential(
-            nn.Linear(regime_dim + num_features + num_models + num_strategies, 256),
+            nn.Linear(regime_dim + num_features + num_models + num_strategies, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
@@ -91,9 +97,11 @@ class MetaController(nn.Module):
             nn.Linear(64, 3),  # BUY, SELL, NO_TRADE
         )
 
-        # Value network — estimates expected reward
+        # Value network — MAXIMUM depth
         self.value_network = nn.Sequential(
-            nn.Linear(regime_dim + num_features + num_models + num_strategies, 256),
+            nn.Linear(regime_dim + num_features + num_models + num_strategies, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
@@ -102,9 +110,11 @@ class MetaController(nn.Module):
             nn.Linear(64, 1),
         )
 
-        # Counterfactual reasoning network — estimates what would have happened
+        # Counterfactual reasoning network — MAXIMUM depth
         self.counterfactual_network = nn.Sequential(
-            nn.Linear(regime_dim + num_features + num_models + num_strategies, 256),
+            nn.Linear(regime_dim + num_features + num_models + num_strategies, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),

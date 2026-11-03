@@ -109,7 +109,7 @@ class Config:
     candle_history: int = 320
     # Bars the nightly job trains on. Separate from candle_history, which is the
     # rolling window the live cycle keeps in memory for signal generation.
-    training_history: int = 500_000  # Aggressive: 500K training history for deeper learning
+    training_history: int = 1_000_000  # MAXIMUM: 1M training history for absolute maximum learning
 
     # --- signal shape ---
     horizon_minutes: int = 30
@@ -229,17 +229,17 @@ class Config:
     fx_rollover_guard: bool = False
 
     # --- learning ---
-    nightly_min_samples: int = 600  # Aggressive: 600 samples for nightly training
+    nightly_min_samples: int = 1000  # MAXIMUM: 1000 samples for nightly training
     nightly_train_fraction: float = 0.70
     online_learning_rate: float = 0.02
     # Self-learning module parameters
     target_win_rate: float = 0.95  # 19/20 = 95%
-    loss_learning_multiplier: float = 3.0  # Aggressive: Losses get 3x higher learning rate
-    loss_learning_rate_cap: float = 0.12  # Aggressive: Higher cap for loss-focused learning
-    paper_trading_max_trades: int = 150  # Aggressive: More paper trades for faster learning
+    loss_learning_multiplier: float = 5.0  # MAXIMUM: Losses get 5x higher learning rate
+    loss_learning_rate_cap: float = 0.15  # MAXIMUM: Highest cap for loss-focused learning
+    paper_trading_max_trades: int = 300  # MAXIMUM: Most paper trades for fastest learning
     loss_focused_retrain_enabled: bool = True  # Enable loss-focused nightly retraining
     # High-confidence trade threshold: only trade when model is very confident
-    min_trade_confidence: float = 0.20  # Aggressive: 0.20 for higher conviction trades  # abs(prob - 0.5) >= 0.15
+    min_trade_confidence: float = 0.25  # MAXIMUM: 0.25 for highest conviction trades  # abs(prob - 0.5) >= 0.15
 
     # --- runtime ---
     tick_seconds: int = 15
@@ -374,7 +374,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         pairs=pairs,
         timeframe=os.environ.get("TIMEFRAME", charter.ALLOWED_TIMEFRAME).strip(),
         candle_history=_int("CANDLE_HISTORY", 320),
-        training_history=_int("TRAINING_HISTORY", 500_000),
+        training_history=_int("TRAINING_HISTORY", 1_000_000),
         horizon_minutes=_int("SIGNAL_HORIZON_MINUTES", 30),
         short_horizon_max_minutes=_int("SHORT_HORIZON_MAX_MINUTES", 3),
         short_horizon_min_reward=_float("SHORT_HORIZON_MIN_REWARD", 1.5),
@@ -404,15 +404,15 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         loss_guard_cooldown_minutes=_int("LOSS_GUARD_COOLDOWN_MINUTES", 60),
         loss_guard_shadow_recovery=_bool("LOSS_GUARD_SHADOW_RECOVERY", False),
         fx_rollover_guard=_bool("FX_ROLLOVER_GUARD", False),
-        nightly_min_samples=_int("NIGHTLY_MIN_SAMPLES", 600),
+        nightly_min_samples=_int("NIGHTLY_MIN_SAMPLES", 1000),
         nightly_train_fraction=_float("NIGHTLY_TRAIN_FRACTION", 0.70),
         online_learning_rate=_float("ONLINE_LEARNING_RATE", 0.02),
         target_win_rate=_float("TARGET_WIN_RATE", 0.95),
-        loss_learning_multiplier=_float("LOSS_LEARNING_MULTIPLIER", 3.0),
-        loss_learning_rate_cap=_float("LOSS_LEARNING_RATE_CAP", 0.12),
-        paper_trading_max_trades=_int("PAPER_TRADING_MAX_TRADES", 150),
+        loss_learning_multiplier=_float("LOSS_LEARNING_MULTIPLIER", 5.0),
+        loss_learning_rate_cap=_float("LOSS_LEARNING_RATE_CAP", 0.15),
+        paper_trading_max_trades=_int("PAPER_TRADING_MAX_TRADES", 300),
         loss_focused_retrain_enabled=_bool("LOSS_FOCUSED_RETRAIN_ENABLED", True),
-        min_trade_confidence=_float("MIN_TRADE_CONFIDENCE", 0.20),
+        min_trade_confidence=_float("MIN_TRADE_CONFIDENCE", 0.25),
         tick_seconds=_int("TICK_SECONDS", 15),
         heartbeat_stale_seconds=_int("HEARTBEAT_STALE_SECONDS", charter.HEARTBEAT_STALE_SECONDS),
         digest_hour_utc=_int("DIGEST_HOUR_UTC", 0),

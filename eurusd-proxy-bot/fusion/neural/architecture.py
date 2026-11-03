@@ -36,16 +36,16 @@ import torch.nn.functional as F
 @dataclass
 class NeuralConfig:
     """Hyperparameters for the Temporal Transformer."""
-    # Input
-    input_window: int = 240          # Aggressive: 240 candles (4 hours of data)
-    num_features: int = 28           # Aggressive: 28 features (expanded feature set)
+    # Input — MAXIMUM
+    input_window: int = 500          # MAXIMUM: 500 candles (8+ hours of data)
+    num_features: int = 50           # MAXIMUM: 50 features (expanded to v13)
 
-    # Transformer
-    d_model: int = 256               # Aggressive: 256 embedding dimension
-    n_heads: int = 8                 # Aggressive: 8 attention heads
-    n_layers: int = 8                # Aggressive: 8 transformer layers
-    d_ff: int = 512                  # Aggressive: 512 feed-forward dimension
-    dropout: float = 0.15            # Aggressive: 15% dropout for more regularization
+    # Transformer — MAXIMUM
+    d_model: int = 512               # MAXIMUM: 512 embedding dimension
+    n_heads: int = 16                # MAXIMUM: 16 attention heads
+    n_layers: int = 12               # MAXIMUM: 12 transformer layers
+    d_ff: int = 1024                 # MAXIMUM: 1024 feed-forward dimension
+    dropout: float = 0.20            # MAXIMUM: 20% dropout for maximum regularization
 
     # Heads
     horizon_minutes: int = 1         # Initial prediction horizon
