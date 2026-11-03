@@ -713,6 +713,7 @@ class FusionBot:
             last_cycle=self.last_cycle.to_dict() if self.last_cycle else None,
             store_errors=self.store.errors[-5:],
             system=self._latest_system_report(),
+            version=self.config.full_version,
         )
 
     # ---------------------------------------------------------- minute cycle

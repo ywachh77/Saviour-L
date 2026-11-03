@@ -124,6 +124,7 @@ def build_status(
     last_cycle: dict | None,
     store_errors: Sequence[str],
     system: dict | None = None,
+    version: str = "unknown",
 ) -> str:
     age = heartbeat.heartbeat_age_seconds(heartbeat_row)
     active_pairs = tuple(getattr(config, "active_pairs", None) or (config.pair,))
@@ -134,6 +135,7 @@ def build_status(
     )
     lines = [
         "FUSION BOT status",
+        f"  version: {version}",
         f"  clock: {format_display_datetime(utcnow())}",
         f"  {pair_label} · horizon {config.horizon_minutes}m · runner {runner}",
         f"  signals: {'PAUSED' if paused else 'LIVE'}",
