@@ -494,8 +494,9 @@ class Store:
         }
     )
 
-    def log_event(self, event: dict) -> None:
+    def log_event(self, event: dict, *, version: str = "unknown") -> None:
         raw_row = dict(event)
+        raw_row.setdefault("version", version)
         extras = {k: v for k, v in raw_row.items() if k not in self._LEARNING_EVENT_COLUMNS}
         row = {k: v for k, v in raw_row.items() if k in self._LEARNING_EVENT_COLUMNS}
         if extras:
