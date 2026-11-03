@@ -81,12 +81,12 @@ class OnlineLogisticModel:
     def fit(
         self,
         samples: Iterable[tuple[dict[str, float], int]],
-        epochs: int = 200,  # More epochs for better convergence
-        learning_rate: float = 0.03,  # Lower rate for more stable learning
-        l2: float = 0.005,  # Higher L2 for more regularization
-        validation_fraction: float = 0.20,  # More validation for better generalization
+        epochs: int = 500,  # Aggressive: 500 epochs for maximum convergence
+        learning_rate: float = 0.08,  # Aggressive: 0.08 for faster learning
+        l2: float = 0.001,  # Minimal regularization for maximum capacity
+        validation_fraction: float = 0.15,  # Less validation, more training data
         min_samples: int = 40,
-        patience: int = 30,  # More patience for longer training
+        patience: int = 80,  # High patience for extended training
     ) -> "OnlineLogisticModel":
         rows = [
             (features, int(label))
@@ -228,8 +228,8 @@ class OnlineLogisticModel:
         self,
         features: dict[str, float],
         label: int,
-        learning_rate: float = 0.02,
-        l2: float = 0.001,
+        learning_rate: float = 0.05,  # Aggressive: 0.05 for faster online learning
+        l2: float = 0.0005,  # Minimal regularization for online updates
     ) -> None:
         """One guarded online update after a confirmed real outcome."""
         if not self.trained:
@@ -310,9 +310,9 @@ class BootstrapEnsemble:
     def fit(
         cls,
         samples: Sequence[tuple[dict[str, float], int]],
-        member_count: int = 8,
+        member_count: int = 12,  # Aggressive: 12 members for more diversity
         seed: int = 20240501,
-        epochs: int = 120,
+        epochs: int = 200,  # Aggressive: 200 epochs per member
     ) -> "BootstrapEnsemble":
         rows = list(samples)
         if len(rows) < 80 or member_count < 2:
@@ -338,7 +338,7 @@ class BootstrapEnsemble:
         features: dict[str, float] | None,
         label: int | None,
         *,
-        learning_rate: float = 0.02,
+        learning_rate: float = 0.05,  # Aggressive: 0.05 for faster ensemble learning
         sample_key: str = "",
     ) -> int:
         """Online Oza-Russell bootstrap update so uncertainty adapts on every real trade."""
