@@ -36,12 +36,25 @@ def main() -> int:
 
     if report.get("skipped"):
         return 0
-    if telegram is not None and (report.get("promoted") or report.get("rolled_back")):
+
+    # Report paper trading loop results if available
+    paper = report.get("paper_trading")
+    paper_line = ""
+    if paper:
+        paper_line = (
+            f"\nPaper Trading: {paper.get('total_trades', 0)} trades, "
+            f"{paper.get('wins', 0)}W {paper.get('losses', 0)}L "
+            f"({paper.get('win_rate', 0):.1%}), "
+            f"learned from {paper.get('learned_from_losses', 0)} losses"
+        )
+
+    if telegram is not None and (report.get("promoted") or report.get("rolled_back") or paper):
         telegram.send(
             "FUSION BOT nightly\n"
-            f"{'Promoted' if report.get('promoted') else 'Rolled back'}: {report.get('reason', '')}\n"
+            f"{'Promoted' if report.get('promoted') else 'Rolled back' if report.get('rolled_back') else 'Updated'}: {report.get('reason', '')}\n"
             f"Accuracy {report.get('accuracy')}, Brier skill {report.get('brier_skill')}, "
             f"{report.get('trades')} cost-charged trades for {report.get('net_pips')} pips."
+            + paper_line
         )
     return 0
 

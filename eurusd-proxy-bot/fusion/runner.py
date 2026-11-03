@@ -1652,6 +1652,38 @@ class FusionBot:
             return {"skipped": True, "reason": "Nightly already ran for this date."}
 
         settlements = self.store.load_settlements(limit=4000)
+
+        # STEP 1: Paper trading loop — learn from every loss before nightly training
+        paper_feedback = None
+        if not getattr(self.provider, "synthetic", False) and self.model is not None and self.model.trained:
+            try:
+                from . import paper_trading_loop
+                self.model, paper_feedback = paper_trading_loop.paper_trading_loop(
+                    self._training_candles(),
+                    settlements,
+                    self.config,
+                    self.model,
+                )
+                if paper_feedback.losses > 0:
+                    self.store.log_event(
+                        {
+                            "kind": "paper_trading_loop",
+                            "total_trades": paper_feedback.total_trades,
+                            "wins": paper_feedback.wins,
+                            "losses": paper_feedback.losses,
+                            "win_rate": round(paper_feedback.win_rate, 4),
+                            "learned_from_losses": paper_feedback.learned_from_losses,
+                        }
+                    )
+            except Exception as error:
+                self.store.log_event(
+                    {
+                        "kind": "paper_trading_loop_error",
+                        "reason": str(error)[:300],
+                    }
+                )
+
+        # STEP 2: Nightly walk-forward with loss-focused learning integrated
         model, ensemble, report = learning.run_nightly(
             self._training_candles(),
             settlements,
@@ -1674,6 +1706,8 @@ class FusionBot:
             ):
                 self.family_fusion = FamilyFusionEngine.from_dict(report.system.family_state)
         self.nightly_report = report.to_dict()
+        if paper_feedback is not None:
+            self.nightly_report["paper_trading"] = paper_feedback.to_dict()
         self.store.save_model_version(
             {
                 "version_id": job_bucket,

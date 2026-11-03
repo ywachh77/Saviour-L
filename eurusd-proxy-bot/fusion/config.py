@@ -224,6 +224,12 @@ class Config:
     nightly_min_samples: int = 400
     nightly_train_fraction: float = 0.70
     online_learning_rate: float = 0.02
+    # Self-learning module parameters
+    target_win_rate: float = 0.95  # 19/20 = 95%
+    loss_learning_multiplier: float = 1.35  # Losses get 35% higher learning rate
+    loss_learning_rate_cap: float = 0.05  # Cap for loss-focused online learning
+    paper_trading_max_trades: int = 50  # Max paper trades per nightly loop
+    loss_focused_retrain_enabled: bool = True  # Enable loss-focused nightly retraining
 
     # --- runtime ---
     tick_seconds: int = 15
@@ -387,6 +393,11 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         nightly_min_samples=_int("NIGHTLY_MIN_SAMPLES", 400),
         nightly_train_fraction=_float("NIGHTLY_TRAIN_FRACTION", 0.70),
         online_learning_rate=_float("ONLINE_LEARNING_RATE", 0.02),
+        target_win_rate=_float("TARGET_WIN_RATE", 0.95),
+        loss_learning_multiplier=_float("LOSS_LEARNING_MULTIPLIER", 1.35),
+        loss_learning_rate_cap=_float("LOSS_LEARNING_RATE_CAP", 0.05),
+        paper_trading_max_trades=_int("PAPER_TRADING_MAX_TRADES", 50),
+        loss_focused_retrain_enabled=_bool("LOSS_FOCUSED_RETRAIN_ENABLED", True),
         tick_seconds=_int("TICK_SECONDS", 15),
         heartbeat_stale_seconds=_int("HEARTBEAT_STALE_SECONDS", charter.HEARTBEAT_STALE_SECONDS),
         digest_hour_utc=_int("DIGEST_HOUR_UTC", 0),
