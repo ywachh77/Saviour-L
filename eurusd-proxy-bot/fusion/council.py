@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 from . import charter, strategies
+from . import version as version_mod
 from .domain import Candle, Decision
 from .family_fusion import FamilyFusionEngine, FamilyFusionVerdict
 from .mistakes import MistakeMemory
@@ -54,6 +55,7 @@ class CouncilWeights:
     seen: dict[str, int] = field(default_factory=dict)
     learned_weights: dict[str, float] = field(default_factory=dict)
     version: int = 1
+    last_system_version: str = ""
 
     def __post_init__(self) -> None:
         for name in strategies.PROTOTYPES:
@@ -79,6 +81,8 @@ class CouncilWeights:
             self.seen[name] = int(self.seen.get(name, 0)) + 1
             self.net[name] = float(self.net.get(name, 0.0)) + (1.0 if side == winning_side else -1.0)
         self.recompute()
+        self.version += 1
+        self.last_system_version = version_mod.get_version()
 
     def recompute(self) -> None:
         """Recompute learned weights. Exploration weight is never touched."""
