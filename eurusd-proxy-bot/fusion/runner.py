@@ -1718,6 +1718,9 @@ class FusionBot:
                 "version_id": job_bucket,
                 "report": report.to_dict(),
                 "created_at": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "system_version": self.config.version,
+                "feature_version": self.config.feature_version,
+                "model_version": self.config.model_version,
             }
         )
         self._save_state(force=True)
