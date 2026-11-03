@@ -1762,6 +1762,8 @@ class FusionBot:
             runner=self.config.runner,
             alerts=self.store.recent_alerts(limit=50),
             nightly=self.nightly_report,
+            version=self.config.version,
+            full_version=self.config.full_version,
         )
         if self.telegram is not None and self.telegram.configured:
             self.telegram.send(text)
@@ -2084,6 +2086,9 @@ class FusionBot:
             "runtime": runtime_blob,
             "calibration_points": [[point[0], point[1]] for point in self.calibration_points[-2000:]],
             "mistakes": self.mistakes.to_dict(),
+            "version": self.config.version,
+            "feature_version": self.config.feature_version,
+            "model_version": self.config.model_version,
         }
         self.store.save_model_state(payload, pair=self.config.pair)
         self.store.save_council_weights(self.weights.to_dict(), pair=self.config.pair)

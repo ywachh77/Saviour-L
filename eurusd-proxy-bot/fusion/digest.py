@@ -50,8 +50,10 @@ def build_digest(
     runner: str,
     alerts: Sequence[dict],
     nightly: dict | None = None,
+    version: str = "unknown",
+    full_version: str = "unknown",
 ) -> str:
-    lines = [f"FUSION BOT daily digest — {day} ({DISPLAY_TZ_LABEL})", f"Runner: {runner}", ""]
+    lines = [f"FUSION BOT daily digest — {day} ({DISPLAY_TZ_LABEL})", f"Runner: {runner}", f"Version: {full_version}", ""]
 
     sent = sum(1 for row in signals if row.get("delivery_state") == charter.DELIVERY_SENT)
     suppressed = sum(1 for row in signals if row.get("delivery_state") == charter.DELIVERY_SUPPRESSED)
