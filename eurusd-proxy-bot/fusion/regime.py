@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
+from . import version as version_mod
 from .domain import Candle
 from .indicators import atr, mean
 
@@ -32,6 +33,7 @@ class RegimeState:
     ema_separation: float
     confidence: float
     note: str
+    version: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -41,6 +43,7 @@ class RegimeState:
             "ema_separation": round(self.ema_separation, 8),
             "confidence": round(self.confidence, 4),
             "note": self.note,
+            "version": self.version,
         }
 
 
