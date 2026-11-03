@@ -585,10 +585,10 @@ class Store:
         return self._read("outbox", limit=limit, state="in.(PENDING,UNRESOLVED)")
 
     # ----------------------------------------------------------------- alerts
-    def alert(self, kind: str, message: str, *, dedupe_key: str | None = None) -> None:
+    def alert(self, kind: str, message: str, *, dedupe_key: str | None = None, version: str = "unknown") -> None:
         self._write(
             "alerts",
-            [{"kind": kind, "message": message, "dedupe_key": dedupe_key, "created_at": format_datetime(_utcnow())}],
+            [{"kind": kind, "message": message, "dedupe_key": dedupe_key, "version": version, "created_at": format_datetime(_utcnow())}],
         )
 
     def alert_seen(self, dedupe_key: str) -> bool:

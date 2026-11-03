@@ -1803,7 +1803,7 @@ class FusionBot:
             self.alerted_today.add(key)
             return
         self.alerted_today.add(key)
-        self.store.alert(kind, detail, dedupe_key=key)
+        self.store.alert(kind, detail, dedupe_key=key, version=self.config.full_version)
         if notify and self.telegram is not None and self.telegram.configured:
             self.telegram.send(digest.alert_message(kind, detail))
 
