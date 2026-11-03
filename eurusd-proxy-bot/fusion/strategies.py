@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Callable
 
 from . import methods, scalping, scalping_expiry
+from . import version as version_mod
 from .domain import Candle, Decision
 
 CORE = "orbix_confluence"
@@ -54,6 +55,11 @@ def strategy_family(strategy_id: str) -> str:
 # Widened significantly for 90% signal rate target
 ATR_PCT_MIN = 0.00005  # Lowered from 0.00015 (5x more permissive)
 ATR_PCT_MAX = 0.008   # Increased from 0.004 (2x more permissive)
+
+
+def strategy_version() -> str:
+    """Return the current system version for strategies module."""
+    return version_mod.get_version()
 
 
 def side_of(value: float, *, bullish: bool) -> bool:
