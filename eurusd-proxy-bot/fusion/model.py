@@ -81,12 +81,12 @@ class OnlineLogisticModel:
     def fit(
         self,
         samples: Iterable[tuple[dict[str, float], int]],
-        epochs: int = 120,
-        learning_rate: float = 0.05,
-        l2: float = 0.002,
-        validation_fraction: float = 0.15,
+        epochs: int = 200,  # More epochs for better convergence
+        learning_rate: float = 0.03,  # Lower rate for more stable learning
+        l2: float = 0.005,  # Higher L2 for more regularization
+        validation_fraction: float = 0.20,  # More validation for better generalization
         min_samples: int = 40,
-        patience: int = 20,
+        patience: int = 30,  # More patience for longer training
     ) -> "OnlineLogisticModel":
         rows = [
             (features, int(label))
