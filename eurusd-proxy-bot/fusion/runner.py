@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any, Sequence
 
 from . import backtest, charter, cognitive, instruments, digest, heartbeat, learning, needle_agent, protections, settle, stats
-from .meta_controller import MetaController, RLTrainer, EnsembleArbiter
+from .meta_controller import MetaController, RLTrainer, EnsembleArbiter, SelfImprovingLoop
 from .config import Config
 from .council import CouncilWeights, Vote
 from .domain import Candle, Signal, closed_before
@@ -121,6 +121,9 @@ class FusionBot:
     meta_controller: MetaController = field(default_factory=MetaController)
     rl_trainer: RLTrainer = field(default_factory=lambda: RLTrainer(MetaController()))
     ensemble_arbiter: EnsembleArbiter = field(default_factory=EnsembleArbiter)
+    self_improving: SelfImprovingLoop = field(default_factory=lambda: SelfImprovingLoop(
+        MetaController(), RLTrainer(MetaController()), None, EnsembleArbiter()
+    ))
     learning_journal: list[dict[str, Any]] = field(default_factory=list)
     auto_backtest_history: list[dict[str, Any]] = field(default_factory=list)
     cognitive_state: dict[str, Any] = field(default_factory=dict)
@@ -149,6 +152,15 @@ class FusionBot:
         self.meta_controller = MetaController()
         self.rl_trainer = RLTrainer(self.meta_controller)
         self.ensemble_arbiter = EnsembleArbiter()
+        # Self-improving loop uses the actual instances
+        from .meta_controller import GeneticStrategyEvolver
+        self.evolver = GeneticStrategyEvolver()
+        self.self_improving = SelfImprovingLoop(
+            self.meta_controller,
+            self.rl_trainer,
+            self.evolver,
+            self.ensemble_arbiter,
+        )
         for symbol in self.config.active_pairs[1:]:
             self.peer_bots[symbol] = FusionBot(
                 config=self.config.for_pair(symbol),
@@ -1527,6 +1539,32 @@ class FusionBot:
             self._refit_calibration()
 
         if settlement.outcome in (charter.WIN, charter.LOSS):
+            # Meta-Controller self-improving loop: feed trade result to RL + ensemble
+            try:
+                import torch
+                feature_vec = {k: float(v) for k, v in (signal.features or {}).items()}
+                model_preds = []
+                if self.model and self.model.trained and signal.features:
+                    model_preds.append(self.model.predict_up(signal.features))
+                if self.ensemble and self.ensemble.ready and signal.features:
+                    mean_p, _ = self.ensemble.predict(signal.features)
+                    model_preds.append(float(mean_p))
+                action_map = {"BUY": "BUY", "SELL": "SELL"}
+                meta_action = action_map.get(signal.side, "NO_TRADE")
+                reward = float(settlement.net_pips or 0.0)
+                self.self_improving.on_trade_result(
+                    feature_vec,
+                    model_preds,
+                    meta_action,
+                    settlement.outcome,
+                    reward,
+                )
+            except Exception as meta_err:
+                self.store.log_event({
+                    "kind": "meta_controller_error",
+                    "reason": str(meta_err)[:200],
+                })
+
             episode = cognitive.build_trade_reflection(
                 pair=self.config.pair,
                 signal_id=signal.signal_id,
@@ -1737,6 +1775,50 @@ class FusionBot:
                 "model_version": self.config.model_version,
             }
         )
+        # STEP 3: Meta-Controller RL update — train the root AI brain
+        try:
+            import torch
+            # Build training samples from recent settlements for RL
+            rl_samples = []
+            recent_settlements = [s for s in settlements if not charter.is_synthetic(s.get("source", ""))]
+            for s in recent_settlements[-200:]:  # Last 200 settlements
+                if s.get("outcome") in (charter.WIN, charter.LOSS) and s.get("features"):
+                    features = s["features"]
+                    if isinstance(features, dict):
+                        feature_vec = torch.tensor([list(features.values())], dtype=torch.float32)
+                        action_str = s.get("side", "NO_TRADE")
+                        action_map = {"BUY": 1, "SELL": 2, "NO_TRADE": 0}
+                        action_idx = action_map.get(action_str, 0)
+                        reward = float(s.get("net_pips", 0.0))
+                        rl_samples.append((feature_vec, action_idx, reward))
+
+            # Update RL trainer with recent trades
+            for feature_vec, action_idx, reward in rl_samples:
+                self.rl_trainer.remember(
+                    feature_vec,
+                    None,  # model_predictions
+                    None,  # strategy_votes
+                    action_idx,
+                    reward,
+                    True,
+                )
+
+            # Run RL update
+            rl_report = self.rl_trainer.update()
+            if rl_report.get("loss", 0) > 0:
+                self.nightly_report["meta_controller_rl"] = rl_report
+                self.store.log_event({
+                    "kind": "meta_controller_rl_update",
+                    "policy_loss": rl_report.get("policy_loss", 0),
+                    "value_loss": rl_report.get("value_loss", 0),
+                    "entropy": rl_report.get("entropy", 0),
+                })
+        except Exception as rl_err:
+            self.store.log_event({
+                "kind": "meta_controller_rl_error",
+                "reason": str(rl_err)[:300],
+            })
+
         self._save_state(force=True)
         if report.rolled_back:
             self._alert_once(digest.ALERT_ROLLBACK, report.reason, key=f"rollback|{job_bucket}")
