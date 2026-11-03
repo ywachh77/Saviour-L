@@ -195,12 +195,12 @@ class GradientBoostingModel:
 
     feature_names: tuple[str, ...] = FEATURE_NAMES
     feature_version: int = FEATURE_VERSION
-    n_estimators: int = 40
-    learning_rate: float = 0.1
-    max_depth: int = 3
-    subsample: float = 0.7
-    min_samples_split: int = 20
-    min_samples_leaf: int = 10
+    n_estimators: int = 80
+    learning_rate: float = 0.08
+    max_depth: int = 4
+    subsample: float = 0.6
+    min_samples_split: int = 15
+    min_samples_leaf: int = 8
     trees: list = field(default_factory=list)
     initial_prediction: float = 0.0
     means: list[float] = field(default_factory=list)

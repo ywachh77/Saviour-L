@@ -310,9 +310,9 @@ class BootstrapEnsemble:
     def fit(
         cls,
         samples: Sequence[tuple[dict[str, float], int]],
-        member_count: int = 4,
+        member_count: int = 8,
         seed: int = 20240501,
-        epochs: int = 60,
+        epochs: int = 120,
     ) -> "BootstrapEnsemble":
         rows = list(samples)
         if len(rows) < 80 or member_count < 2:
