@@ -33,11 +33,11 @@ TOTAL_LEARNED_MASS_CAP = 0.60
 # Total effective mass cap: keeps prototypes from overwhelming the core gate.
 TOTAL_PROTOTYPE_MASS_CAP = 1.20
 # Net opposing mass that blocks a core signal.
-VETO_MASS = 0.40
+VETO_MASS = 0.25  # Lower: more aggressive council veto for 19/20
 SHRINKAGE = 40.0                  # net / (seen + SHRINKAGE) keeps small samples humble
 # Strategic consensus override: minimum total effective weight for strategic
 # methods to override a core abstention. Requires multiple methods agreeing.
-CONSENSUS_THRESHOLD = 0.50
+CONSENSUS_THRESHOLD = 0.60  # Higher: require stronger consensus to override core
 
 
 @dataclass
