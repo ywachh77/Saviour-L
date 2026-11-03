@@ -254,6 +254,15 @@ FEATURE_LABELS = {
     "tick_volume_imbalance": "Tick volume imbalance proxy",
     "session_velocity_shift": "Session velocity shift",
     "kyle_lambda_proxy": "Kyle's Lambda price impact proxy",
+    "trend_persistence_10": "Trend persistence (10 bars)",
+    "trend_persistence_20": "Trend persistence (20 bars)",
+    "trend_reversal_count": "Trend reversal count (normalized)",
+    "momentum_acceleration": "Momentum acceleration",
+    "rsi_divergence": "RSI divergence signal",
+    "volume_profile_skew": "Volume profile skew",
+    "volume_concentration": "Volume concentration",
+    "htf_alignment_score": "HTF alignment score",
+    "htf_trend_strength": "HTF trend strength",
 }
 
 # How many bars are needed before a feature row is complete.
