@@ -544,9 +544,10 @@ class Store:
         return rows[-1] if rows else None
 
     # ------------------------------------------------------------------- keys
-    def save_key_pool(self, payload: dict) -> None:
+    def save_key_pool(self, payload: dict, *, version: str = "unknown") -> None:
         row = dict(payload)
         row["id"] = row.get("id", "keypool")
+        row.setdefault("version", version)
         if self.supabase is not None:
             self.supabase.upsert("api_keys", [row], on_conflict="id")
         else:

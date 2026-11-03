@@ -193,7 +193,7 @@ class FusionBot:
             and hasattr(self.provider, "pool")
             and getattr(self.provider.pool, "configured", False)
         ):
-            self.store.save_key_pool(self.provider.pool.to_dict())
+            self.store.save_key_pool(self.provider.pool.to_dict(), version=self.config.full_version)
 
     def _load_state(self) -> None:
         row = self.store.load_model_state(pair=self.config.pair) or {}
@@ -2103,7 +2103,7 @@ class FusionBot:
         self.store.save_council_weights(self.weights.to_dict(), pair=self.config.pair)
         self.settled_since_save = 0
         if self.provider is not None and hasattr(self.provider, "pool"):
-            self.store.save_key_pool(self.provider.pool.to_dict())
+            self.store.save_key_pool(self.provider.pool.to_dict(), version=self.config.full_version)
 
     def snapshot(self) -> dict:
         calibrator = self.model.calibrator if self.model else None
