@@ -2100,7 +2100,7 @@ class FusionBot:
             "model_version": self.config.model_version,
         }
         self.store.save_model_state(payload, pair=self.config.pair)
-        self.store.save_council_weights(self.weights.to_dict(), pair=self.config.pair)
+        self.store.save_council_weights(self.weights.to_dict(), pair=self.config.pair, version=self.config.full_version)
         self.settled_since_save = 0
         if self.provider is not None and hasattr(self.provider, "pool"):
             self.store.save_key_pool(self.provider.pool.to_dict(), version=self.config.full_version)

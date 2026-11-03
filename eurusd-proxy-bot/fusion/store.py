@@ -460,9 +460,10 @@ class Store:
         return self._read("model_versions", limit=limit)
 
     # --------------------------------------------------------- council weights
-    def save_council_weights(self, payload: dict, *, pair: str | None = None) -> None:
+    def save_council_weights(self, payload: dict, *, pair: str | None = None, version: str = "unknown") -> None:
         row = dict(payload)
         row["id"] = row.get("id") or self.council_weights_id(pair)
+        row.setdefault("version", version)
         if self.supabase is not None:
             self.supabase.upsert("council_weights", [row], on_conflict="id")
             return
