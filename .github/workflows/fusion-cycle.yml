@@ -119,6 +119,7 @@ jobs:
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
           MIN_ATR_TO_SPREAD_RATIO: "0.8"
+          SURESHOT_CONFIDENCE_THRESHOLD: "0.80"
           CANDLE_HISTORY: "750"
           # EUR/USD trades with a spread-to-ATR ratio that requires proper
           # horizon gating so weekends and FX off-hours don't produce signals

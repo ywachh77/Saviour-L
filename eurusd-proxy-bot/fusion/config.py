@@ -113,7 +113,8 @@ class Config:
     short_horizon_min_reward: float = 1.5
     # Sureshot detection: when model confidence exceeds this AND present
     # conditions align AND the cost gate passes, the signal is flagged SURESHOT.
-    sureshot_confidence_threshold: float = 0.72
+    # Raised from 0.72 to 0.80 for 19/20 win rate — only trade when very confident.
+    sureshot_confidence_threshold: float = 0.80
     # Hold long enough to pay for the trip. Off by default because it changes
     # which bars produce signals, and the default path stays the one that is
     # already measured. See fusion/costs.py for why 5 minutes at 1.2 pips is
@@ -366,7 +367,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         horizon_minutes=_int("SIGNAL_HORIZON_MINUTES", 30),
         short_horizon_max_minutes=_int("SHORT_HORIZON_MAX_MINUTES", 3),
         short_horizon_min_reward=_float("SHORT_HORIZON_MIN_REWARD", 1.5),
-        sureshot_confidence_threshold=_float("SURESHOT_CONFIDENCE_THRESHOLD", 0.72),
+        sureshot_confidence_threshold=_float("SURESHOT_CONFIDENCE_THRESHOLD", 0.80),
         adaptive_horizon=_bool("ADAPTIVE_HORIZON", True),
         session_filter=_bool("SESSION_FILTER", True),
         mtf_filter=_bool("MTF_FILTER", False),

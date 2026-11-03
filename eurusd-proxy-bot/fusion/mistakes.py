@@ -32,11 +32,11 @@ from typing import Iterable
 from . import charter
 
 # Below this the interval is too wide to say anything, however bad the record
-# looks. Twelve losses in a row still passes: that is the point.
-MIN_SAMPLES = 15
+# looks. Ten losses in a row still passes: that is the point.
+MIN_SAMPLES = 10
 # A cap and a decay, so a regime change can clear a stale ban. When a cell
 # fills, both counts are halved rather than frozen at the limit.
-MAX_SAMPLES = 200
+MAX_SAMPLES = 150
 
 # Refuse when even the optimistic end of the interval is below even money.
 BREAK_EVEN = 0.5
