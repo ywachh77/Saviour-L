@@ -33,8 +33,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .timeutil import format_display_hm, parse_datetime
 
-PRE_RELEASE_MINUTES = 5
-POST_RELEASE_MINUTES = 15
+PRE_RELEASE_MINUTES = 10  # Wider: block 10 min before high-impact releases
+POST_RELEASE_MINUTES = 30  # Wider: block 30 min after high-impact releases
 
 
 @dataclass(frozen=True, slots=True)

@@ -89,15 +89,9 @@ ALLOWED: dict[str, frozenset[str]] = {
     ASIA: frozenset(
         {
             "orbix_confluence",
-            "ml_consensus",
-            "orbix_cadence",
             "range_reversal",
             "scalp_reversion",
             "scalp_pivot_fade",
-            "scalp_vwap_reversion",
-            "scalp_stoch_cross",
-            "smc_liquidity_sweep",
-            "smc_order_block",
             "connors_rsi2_reversion",
             "vwap_sigma_reversion",
         }
@@ -175,8 +169,6 @@ ALLOWED: dict[str, frozenset[str]] = {
     OFF_HOURS: frozenset(
         {
             "orbix_confluence",
-            "ml_consensus",
-            "orbix_cadence",
             "range_reversal",
             "scalp_reversion",
             "scalp_pivot_fade",
