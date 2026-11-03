@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Callable
 
 from . import charter
+from . import version as version_mod
 from .domain import Candle, Decision
 
 # ─── Expiry-aware thresholds ─────────────────────────────────────────
@@ -472,3 +473,8 @@ SCALPING_EXPIRY_REGISTRY: dict[str, Callable[..., Decision]] = {
 }
 
 assert set(SCALPING_EXPIRY_REGISTRY) == set(SCALPING_EXPIRY_PROTOTYPES) == set(SCALPING_EXPIRY_MEMBERS)
+
+
+def scalping_expiry_version() -> str:
+    """Return the current system version for scalping_expiry module."""
+    return version_mod.get_version()
