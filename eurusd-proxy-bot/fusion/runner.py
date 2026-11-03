@@ -855,7 +855,7 @@ class FusionBot:
         job_bucket = bucket if self.config.pair == "EUR/USD" else f"{self.config.pair}|{bucket}"
         self.cycles += 1
 
-        if not self.store.claim_job("minute", job_bucket, runner=self.config.runner):
+        if not self.store.claim_job("minute", job_bucket, runner=self.config.runner, version=self.config.full_version):
             # Another runner already owns this minute. Nothing to do, no harm done.
             return CycleReport(bucket, "SKIPPED", "Another runner already claimed this minute.")
 
@@ -930,7 +930,7 @@ class FusionBot:
         """Execute a peer instrument's already-ingested minute evaluation with real post-ingest clock."""
         job_bucket = f"{self.config.pair}|{bucket}"
         self.cycles += 1
-        if not self.store.claim_job("minute", job_bucket, runner=self.config.runner):
+        if not self.store.claim_job("minute", job_bucket, runner=self.config.runner, version=self.config.full_version):
             return CycleReport(bucket, "SKIPPED", "Another runner already claimed this minute.")
         report = self.evaluate_minute(bucket=bucket, at=eval_stamp, causal_cutoff=causal_cutoff)
         self.last_cycle = report
@@ -1654,7 +1654,7 @@ class FusionBot:
         stamp = at or now()
         bucket = stamp.strftime("%Y-%m-%d")
         job_bucket = bucket if self.config.pair == "EUR/USD" else f"{self.config.pair}:{bucket}"
-        if not self.store.claim_job("nightly", job_bucket, runner=self.config.runner):
+        if not self.store.claim_job("nightly", job_bucket, runner=self.config.runner, version=self.config.full_version):
             return {"skipped": True, "reason": "Nightly already ran for this date."}
 
         settlements = self.store.load_settlements(limit=4000)
@@ -1737,7 +1737,7 @@ class FusionBot:
     def digest_job(self, at: datetime | None = None) -> str:
         stamp = at or now()
         bucket = stamp.strftime("%Y-%m-%d")
-        if not self.store.claim_job("digest", bucket, runner=self.config.runner):
+        if not self.store.claim_job("digest", bucket, runner=self.config.runner, version=self.config.full_version):
             return ""
 
         today = stamp.strftime("%Y-%m-%d")

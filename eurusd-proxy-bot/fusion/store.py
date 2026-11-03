@@ -510,13 +510,13 @@ class Store:
         return self._read("learning_events", limit=limit, order="created_at.desc")
 
     # ------------------------------------------------------------- job slots
-    def claim_job(self, job: str, bucket: str, *, runner: str = "github-actions") -> bool:
+    def claim_job(self, job: str, bucket: str, *, runner: str = "github-actions", version: str = "unknown") -> bool:
         """Idempotency slot. True only for the first caller for (job, bucket)."""
         key = f"{job}|{bucket}"
         if key in self.local._claimed:
             return False
         self.local._remember_claim(key)
-        row = {"job": job, "bucket": bucket, "runner": runner, "created_at": format_datetime(_utcnow())}
+        row = {"job": job, "bucket": bucket, "runner": runner, "version": version, "created_at": format_datetime(_utcnow())}
         if self.supabase is not None:
             # A unique index on (job, bucket) makes the second writer fail.
             before = len(self.supabase.errors)
