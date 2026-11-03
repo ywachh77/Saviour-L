@@ -1197,7 +1197,7 @@ class FusionBot:
             return CycleReport(bucket, charter.SEAL_ABSTAIN, result.reason, regime=result.regime)
 
         signal = result.signal
-        self.store.save_signal(dict(signal.to_dict(), seal_state=charter.SEAL_SIGNAL, settled=False, bucket=bucket))
+        self.store.save_signal(dict(signal.to_dict(), seal_state=charter.SEAL_SIGNAL, settled=False, bucket=bucket, system_version=self.config.version))
 
         if self.paused:
             self.store.update_signal(signal.signal_id, {"delivery_state": charter.DELIVERY_SUPPRESSED})
@@ -1413,7 +1413,7 @@ class FusionBot:
 
     def _settle_one(self, signal: Signal) -> None:
         settlement = settle.settle(signal, self.candles)
-        self.store.save_settlement(settlement.to_dict())
+        self.store.save_settlement(dict(settlement.to_dict(), system_version=self.config.version))
         label = settle.learning_label(signal, settlement)
         winning = settle.winning_side(settlement)
 
