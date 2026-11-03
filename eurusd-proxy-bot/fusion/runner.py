@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any, Sequence
 
 from . import backtest, charter, cognitive, instruments, digest, heartbeat, learning, needle_agent, protections, settle, stats
+from .meta_controller import MetaController, RLTrainer, EnsembleArbiter
 from .config import Config
 from .council import CouncilWeights, Vote
 from .domain import Candle, Signal, closed_before
@@ -117,6 +118,9 @@ class FusionBot:
     calibration_points: list[tuple[float, int]] = field(default_factory=list)
     mistakes: MistakeMemory = field(default_factory=MistakeMemory)
     family_fusion: FamilyFusionEngine = field(default_factory=FamilyFusionEngine)
+    meta_controller: MetaController = field(default_factory=MetaController)
+    rl_trainer: RLTrainer = field(default_factory=lambda: RLTrainer(MetaController()))
+    ensemble_arbiter: EnsembleArbiter = field(default_factory=EnsembleArbiter)
     learning_journal: list[dict[str, Any]] = field(default_factory=list)
     auto_backtest_history: list[dict[str, Any]] = field(default_factory=list)
     cognitive_state: dict[str, Any] = field(default_factory=dict)
@@ -141,6 +145,10 @@ class FusionBot:
             apply_to_signals_cmd=bool(getattr(self.config, "telegram_apply_to_signals_cmd", False)),
         )
         self.engine = FusionEngine(self.config)
+        # Initialize Meta-Controller as the root AI brain
+        self.meta_controller = MetaController()
+        self.rl_trainer = RLTrainer(self.meta_controller)
+        self.ensemble_arbiter = EnsembleArbiter()
         for symbol in self.config.active_pairs[1:]:
             self.peer_bots[symbol] = FusionBot(
                 config=self.config.for_pair(symbol),
