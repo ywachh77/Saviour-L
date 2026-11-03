@@ -85,7 +85,7 @@ def get_total_count(supabase_url: str, supabase_key: str) -> int:
     url = f"{supabase_url}/rest/v1/candles_m1"
     params = {
         "pair": "eq.EUR/USD",
-        "select": "timestamp",
+        "select": "*",
         "limit": "1",
     }
     try:
@@ -101,7 +101,28 @@ def get_total_count(supabase_url: str, supabase_key: str) -> int:
         return len(data)
     except Exception as e:
         print(f"Error checking count: {e}")
+        print(f"Response: {getattr(e, 'response', 'N/A')}")
         sys.exit(1)
+
+
+def _row_to_candle(row: dict) -> dict:
+    """Convert a Supabase row to a candle dict, handling column name variations.
+
+    The candles_m1 table may use long names (open, high, low, close, volume)
+    or short names (o, h, l, c, v). This handles both.
+    """
+    def _get(long_name, short_name, default=0.0):
+        val = row.get(long_name, row.get(short_name, default))
+        return float(val) if val is not None else default
+
+    return {
+        "timestamp": _to_epoch_seconds(row.get("timestamp", row.get("ts"))),
+        "open": _get("open", "o"),
+        "high": _get("high", "h"),
+        "low": _get("low", "l"),
+        "close": _get("close", "c"),
+        "volume": _get("volume", "v"),
+    }
 
 
 def fetch_candles_batch(
@@ -118,7 +139,7 @@ def fetch_candles_batch(
     url = f"{supabase_url}/rest/v1/candles_m1"
     params = {
         "pair": "eq.EUR/USD",
-        "select": "timestamp,open,high,low,close,volume",
+        "select": "*",
         "order": "timestamp.asc",
         "limit": str(limit),
         "offset": str(offset),
@@ -131,17 +152,7 @@ def fetch_candles_batch(
         if not data:
             return None
 
-        candles = []
-        for row in data:
-            candles.append({
-                "timestamp": _to_epoch_seconds(row["timestamp"]),
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": float(row.get("volume", 0.0) or 0.0),
-            })
-        return candles
+        return [_row_to_candle(row) for row in data]
     except Exception as e:
         print(f"Error fetching batch (offset={offset}): {e}")
         return None
