@@ -8,6 +8,7 @@ and says why.
 from __future__ import annotations
 
 from . import charter
+from . import version as version_mod
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,6 +31,7 @@ class GateResult:
     gaps: int
     candles: int
     reason: str
+    version: str = ""
 
     @property
     def usable(self) -> bool:
@@ -45,6 +47,7 @@ class GateResult:
             "gaps": self.gaps,
             "candles": self.candles,
             "reason": self.reason,
+            "version": self.version,
         }
 
 
