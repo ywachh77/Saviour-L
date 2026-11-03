@@ -61,7 +61,7 @@ jobs:
           PAIRS: "EUR/USD"
           MTF_FILTER: "1"
           MTF_MINUTES: "15"
-          MTF_MIN_GAP_BPS: "0.5"
+          MTF_MIN_GAP_BPS: "1.0"
           MTF_MACRO_FILTER: "1"
           MTF_MACRO_MIN_GAP_BPS: "0.3"
           NEWS_FILTER: "1"

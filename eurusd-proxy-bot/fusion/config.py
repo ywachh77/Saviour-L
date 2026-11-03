@@ -135,14 +135,14 @@ class Config:
     # 58.51% (-0.116 -> +0.338 net pips/trade after 1.20-pip spread). Kept
     # opt-in on Config() so synthetic random-walk unit replays stay unmoved,
     # and enabled in the live workflow via MTF_FILTER=1.
-    mtf_filter: bool = False
+    mtf_filter: bool = True
     mtf_minutes: int = 15
     # Minimum basis-point distance from the higher-timeframe EMA required to
     # count as a real trend rather than flat-EMA chop (dimensionless across FX
     # and spot crypto). Validated across 260,689 real MT5 EUR/USD M1 bars
     # (2025-2026) alongside shadow streak recovery: lifted OOS win rate in both
     # years and cut max drawdown by 31%-39%.
-    mtf_min_gap_bps: float = 0.0
+    mtf_min_gap_bps: float = 1.0  # Raised: require stronger HTF trend for 19/20
     # Optional 60-minute EMA(10) macro trend + rising/falling slope confirmation
     # (Nyao HTFTrendAllows-style clear-trend filter; zero extra API credits).
     mtf_macro_filter: bool = False
@@ -370,9 +370,9 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         sureshot_confidence_threshold=_float("SURESHOT_CONFIDENCE_THRESHOLD", 0.80),
         adaptive_horizon=_bool("ADAPTIVE_HORIZON", True),
         session_filter=_bool("SESSION_FILTER", True),
-        mtf_filter=_bool("MTF_FILTER", False),
+        mtf_filter=_bool("MTF_FILTER", True),
         mtf_minutes=_int("MTF_MINUTES", 15),
-        mtf_min_gap_bps=_float("MTF_MIN_GAP_BPS", 0.0),
+        mtf_min_gap_bps=_float("MTF_MIN_GAP_BPS", 1.0),
         mtf_macro_filter=_bool("MTF_MACRO_FILTER", False),
         mtf_macro_min_gap_bps=_float("MTF_MACRO_MIN_GAP_BPS", 1.5),
         news_filter=_bool("NEWS_FILTER", True),
