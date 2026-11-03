@@ -2,9 +2,8 @@
 """
 Automatically delete unwanted data from Supabase.
 
-Purges crypto (BTC/USD, ETH/USD) candle rows and any associated signals
-from the candles_m1 table, since crypto instruments are no longer
-supported by the trading system.
+Purges crypto (BTC/USD, ETH/USD) candle and signal rows, since crypto
+instruments are no longer supported by the trading system.
 
 Can be run locally or from GitHub Actions:
 
@@ -17,17 +16,22 @@ Environment variables:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import time
+import urllib.parse
 from pathlib import Path
 
+try:
+    import requests
+except ImportError:
+    print("Error: 'requests' library not installed.")
+    print("Install with: pip install requests")
+    sys.exit(1)
+
+
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
-from fusion.config import load_config  # noqa: E402
-from fusion.store import build_store  # noqa: E402
-from fusion.instruments import symbols  # noqa: E402
-
 
 # Pairs to purge — anything that is NOT in the allowed symbols list
 UNWANTED_PAIRS = ["BTC/USD", "ETH/USD"]
@@ -40,7 +44,6 @@ def load_supabase_config():
 
     if not supabase_url or not supabase_key:
         # Fall back to .env file
-        from fusion.store import SupabaseStore
         env_file = ROOT / ".env"
         if env_file.exists():
             for line in env_file.read_text().splitlines():
@@ -55,179 +58,101 @@ def load_supabase_config():
 
     if not supabase_url or not supabase_key:
         print("Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.")
-        print("Set them as environment variables or in .env file.")
         sys.exit(1)
 
     return supabase_url, supabase_key
 
 
-def cleanup_candles(store, supabase, unwanted_pairs: list[str]) -> dict:
-    """Delete unwanted candle rows from candles_m1 table."""
-    results = {}
-    for pair in unwanted_pairs:
-        # Count before delete
-        count_before = supabase.count("candles_m1", filters={"pair": f"eq.{pair}"})
-        if count_before is None:
-            # Fallback: try paged select
-            rows = supabase.select("candles_m1", filters={"pair": f"eq.{pair}"}, limit=1)
-            count_before = len(rows) if rows else 0
-
-        if count_before == 0:
-            results[pair] = {"count_before": 0, "deleted": 0, "status": "already clean"}
-            continue
-
-        # Delete in batches to avoid PostgREST timeout on large tables
-        batch_size = 1000
-        total_deleted = 0
-        remaining = count_before
-
-        while remaining > 0:
-            # Get one batch of IDs to delete
-            batch = supabase.select(
-                "candles_m1",
-                filters={"pair": f"eq.{pair}"},
-                order="timestamp.asc",
-                limit=batch_size,
-            )
-            if not batch:
-                break
-
-            # Delete by timestamp range (first and last in batch)
-            first_ts = batch[0].get("timestamp")
-            last_ts = batch[-1].get("timestamp")
-
-            deleted = supabase.delete(
-                "candles_m1",
-                {
-                    "pair": f"eq.{pair}",
-                    "timestamp": f"gte.{first_ts},lte.{last_ts}",
-                }
-            )
-            total_deleted += deleted
-            remaining -= len(batch)
-
-            print(f"  Deleting batch: {len(batch)} rows (deleted={deleted})")
-
-        results[pair] = {
-            "count_before": count_before,
-            "deleted": total_deleted,
-            "status": "purged" if total_deleted > 0 else "already clean",
-        }
-
-    return results
+def _headers(key: str) -> dict:
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+    }
 
 
-def cleanup_signals(store, supabase, unwanted_pairs: list[str]) -> dict:
-    """Delete unwanted signal rows from signals table."""
-    results = {}
-    for pair in unwanted_pairs:
-        try:
-            count_before = supabase.count("signals", filters={"pair": f"eq.{pair}"})
-            if count_before is None:
-                rows = supabase.select("signals", filters={"pair": f"eq.{pair}"}, limit=1)
-                count_before = len(rows) if rows else 0
-
-            if count_before == 0:
-                results[pair] = {"count_before": 0, "deleted": 0, "status": "already clean"}
-                continue
-
-            deleted = supabase.delete("signals", {"pair": f"eq.{pair}"})
-            results[pair] = {
-                "count_before": count_before,
-                "deleted": deleted,
-                "status": "purged" if deleted > 0 else "already clean",
-            }
-        except Exception as e:
-            # signals table might not have a pair column or might not exist
-            results[pair] = {"count_before": 0, "deleted": 0, "status": f"skipped ({e})"}
-
-    return results
+def count_rows(supabase_url: str, key: str, table: str, pair: str) -> int:
+    """Count rows for a pair using PostgREST Content-Range."""
+    url = f"{supabase_url}/rest/v1/{table}"
+    params = {"pair": f"eq.{pair}", "select": "*", "limit": "1"}
+    try:
+        resp = requests.get(url, headers=_headers(key), params=params, timeout=30)
+        if resp.status_code == 400:
+            # Table might not have a 'pair' column (e.g. settlements)
+            return 0
+        resp.raise_for_status()
+        cr = resp.headers.get("Content-Range", "")
+        if "/" in cr:
+            return int(cr.split("/")[-1])
+        return len(resp.json())
+    except Exception as e:
+        print(f"  Count error for {table}/{pair}: {e}")
+        return 0
 
 
-def cleanup_settlements(store, supabase, unwanted_pairs: list[str]) -> dict:
-    """Delete unwanted settlement rows from settlements table."""
-    results = {}
-    for pair in unwanted_pairs:
-        try:
-            count_before = supabase.count("settlements", filters={"pair": f"eq.{pair}"})
-            if count_before is None:
-                rows = supabase.select("settlements", filters={"pair": f"eq.{pair}"}, limit=1)
-                count_before = len(rows) if rows else 0
+def delete_by_pair(supabase_url: str, key: str, table: str, pair: str) -> int:
+    """Delete all rows for a pair using PostgREST DELETE.
 
-            if count_before == 0:
-                results[pair] = {"count_before": 0, "deleted": 0, "status": "already clean"}
-                continue
-
-            deleted = supabase.delete("settlements", {"pair": f"eq.{pair}"})
-            results[pair] = {
-                "count_before": count_before,
-                "deleted": deleted,
-                "status": "purged" if deleted > 0 else "already clean",
-            }
-        except Exception as e:
-            results[pair] = {"count_before": 0, "deleted": 0, "status": f"skipped ({e})"}
-
-    return results
+    Uses Prefer: return=minimal to avoid downloading deleted rows.
+    Returns the number of rows deleted (from Content-Range header).
+    """
+    url = f"{supabase_url}/rest/v1/{table}"
+    params = {"pair": f"eq.{pair}"}
+    headers = {**_headers(key), "Prefer": "return=minimal"}
+    try:
+        resp = requests.delete(url, headers=headers, params=params, timeout=60)
+        if resp.status_code == 400:
+            # Table doesn't have a 'pair' column
+            return 0
+        resp.raise_for_status()
+        # Content-Range header tells us how many were deleted
+        cr = resp.headers.get("Content-Range", "")
+        if "/" in cr:
+            return int(cr.rsplit("/", 1)[-1])
+        return 0
+    except Exception as e:
+        print(f"  Delete error for {table}/{pair}: {e}")
+        return 0
 
 
 def main() -> int:
-    allowed = symbols()
-    print(f"Allowed symbols: {allowed}")
-
-    # Determine what's unwanted (not in allowed list)
-    unwanted = [p for p in UNWANTED_PAIRS if p not in allowed]
-
-    if not unwanted:
-        print("No unwanted pairs to clean up.")
-        return 0
-
-    print(f"Unwanted pairs to purge: {unwanted}")
-    print()
-
     supabase_url, supabase_key = load_supabase_config()
     print(f"Supabase URL: {supabase_url}")
+    print(f"Unwanted pairs to purge: {UNWANTED_PAIRS}")
     print()
 
-    # Build store with Supabase
-    from fusion.store import SupabaseStore
+    results = {}
+    total_deleted = 0
 
-    supabase = SupabaseStore(supabase_url, supabase_key, timeout=30.0)
-    store = build_store(load_config(ROOT / ".env"))
-
-    # Use the Supabase store directly
-    if store.supabase is not None:
-        supabase = store.supabase
-
-    print("=" * 60)
-    print("PURGING CRYPTIC CANDLE DATA FROM SUPABASE")
-    print("=" * 60)
-    print()
-
-    # Clean candles
+    # Clean candles_m1
     print("Cleaning candles_m1 table...")
-    candle_results = cleanup_candles(store, supabase, unwanted)
-    for pair, result in candle_results.items():
-        print(f"  {pair}: {result['count_before']} rows → deleted {result['deleted']} ({result['status']})")
+    candle_results = {}
+    for pair in UNWANTED_PAIRS:
+        before = count_rows(supabase_url, supabase_key, "candles_m1", pair)
+        deleted = delete_by_pair(supabase_url, supabase_key, "candles_m1", pair)
+        candle_results[pair] = {"before": before, "deleted": deleted}
+        print(f"  {pair}: {before} rows -> deleted {deleted}")
+        total_deleted += deleted
+        time.sleep(0.5)
     print()
 
     # Clean signals
     print("Cleaning signals table...")
-    signal_results = cleanup_signals(store, supabase, unwanted)
-    for pair, result in signal_results.items():
-        print(f"  {pair}: {result['count_before']} rows → deleted {result['deleted']} ({result['status']})")
+    signal_results = {}
+    for pair in UNWANTED_PAIRS:
+        before = count_rows(supabase_url, supabase_key, "signals", pair)
+        deleted = delete_by_pair(supabase_url, supabase_key, "signals", pair)
+        signal_results[pair] = {"before": before, "deleted": deleted}
+        print(f"  {pair}: {before} rows -> deleted {deleted}")
+        total_deleted += deleted
+        time.sleep(0.5)
     print()
 
-    # Clean settlements
+    # settlements table has no 'pair' column — skip it
     print("Cleaning settlements table...")
-    settlement_results = cleanup_settlements(store, supabase, unwanted)
-    for pair, result in settlement_results.items():
-        print(f"  {pair}: {result['count_before']} rows → deleted {result['deleted']} ({result['status']})")
+    print("  Skipped: settlements table has no 'pair' column")
+    settlement_results = {}
     print()
-
-    # Summary
-    total_deleted = sum(r["deleted"] for r in candle_results.values()) + \
-                     sum(r["deleted"] for r in signal_results.values()) + \
-                     sum(r["deleted"] for r in settlement_results.values())
 
     print("=" * 60)
     print("CLEANUP COMPLETE")
@@ -236,16 +161,15 @@ def main() -> int:
     print()
 
     # Save summary
-    import json
     summary_file = ROOT / "var" / "cleanup_summary.json"
     summary_file.parent.mkdir(parents=True, exist_ok=True)
     summary = {
-        "cleaned_pairs": unwanted,
+        "cleaned_pairs": UNWANTED_PAIRS,
         "candles": candle_results,
         "signals": signal_results,
         "settlements": settlement_results,
         "total_deleted": total_deleted,
-        "cleaned_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+        "cleaned_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     summary_file.write_text(json.dumps(summary, indent=2))
     print(f"Summary saved to: {summary_file}")
