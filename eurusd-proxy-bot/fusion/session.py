@@ -45,6 +45,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from . import version as version_mod
+
 ASIA = "ASIA"
 LONDON = "LONDON"
 OVERLAP = "OVERLAP"
@@ -241,3 +243,8 @@ def window_of(session: str) -> tuple[int, int]:
         if name == session:
             return start, end
     return 0, 24  # ROUND_THE_CLOCK spans all 24 hours
+
+
+def session_version() -> str:
+    """Return the current system version for session module."""
+    return version_mod.get_version()
