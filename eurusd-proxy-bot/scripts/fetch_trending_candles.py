@@ -68,9 +68,9 @@ def fetch_candles_from_supabase(
         "Accept": "application/json",
     }
 
-    # Query parameters — use correct column names from candles_m1 schema
+    # Query parameters — use select=* to get all available columns
     params = {
-        "select": "timestamp,pair,open,high,low,close,volume",
+        "select": "*",
         "pair": f"eq.{pair}",
         "timestamp": f"gte.{start_iso},lte.{end_iso}",
         "order": "timestamp.asc",
@@ -114,15 +114,26 @@ def filter_trending_candles(candles: list[dict], adx_threshold: float = 22.0) ->
         print("  Too few candles for analysis")
         return candles
 
-    # Convert to pandas DataFrame using correct column names
+    # Convert to pandas DataFrame — normalize column names to long form
     df = pd.DataFrame(candles)
+    # Map short names to long names if needed
+    rename_map = {}
+    for short, long in [('o', 'open'), ('h', 'high'), ('l', 'low'), ('c', 'close'), ('v', 'volume'), ('ts', 'timestamp')]:
+        if short in df.columns and long not in df.columns:
+            rename_map[short] = long
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    # Ensure all expected columns exist
+    for col in ['timestamp', 'open', 'high', 'low', 'close', 'volume']:
+        if col not in df.columns:
+            df[col] = 0.0 if col != 'timestamp' else pd.Timestamp.now(utc=True)
     # Convert timestamp to datetime (handles both int and ISO string)
     df['dt'] = pd.to_datetime(df['timestamp'], unit='s', utc=True, errors='coerce')
     # If ISO strings were returned, re-parse
     if df['dt'].isna().all():
         df['dt'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
 
-    # Calculate ADX using correct column names
+    # Calculate ADX using normalized column names
     def calculate_adx(df, period=14):
         high = df['high']
         low = df['low']
@@ -187,12 +198,12 @@ def convert_to_batch_format(candles: list[dict], output_file: str):
 
     lines = []
     for candle in candles:
-        ts = _to_epoch_seconds(candle['timestamp'])
-        o = float(candle['open'])
-        h = float(candle['high'])
-        l = float(candle['low'])
-        c = float(candle['close'])
-        v = float(candle.get('volume', 0.0) or 0.0)
+        ts = _to_epoch_seconds(candle.get('timestamp', candle.get('ts')))
+        o = float(candle.get('open', candle.get('o', 0.0)))
+        h = float(candle.get('high', candle.get('h', 0.0)))
+        l = float(candle.get('low', candle.get('l', 0.0)))
+        c = float(candle.get('close', candle.get('c', 0.0)))
+        v = float(candle.get('volume', candle.get('v', 0.0)) or 0.0)
         lines.append(f"{ts},{o},{h},{l},{c},{v}")
 
     output = CANDLE_DIR / output_file

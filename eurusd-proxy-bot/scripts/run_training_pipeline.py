@@ -110,7 +110,7 @@ def fetch_candles_for_pair(
     try:
         resp = requests.get(rest_url, headers=headers, params={
             "pair": f"eq.{pair}",
-            "select": "timestamp",
+            "select": "*",
             "limit": "1",
         }, timeout=30)
         resp.raise_for_status()
@@ -138,7 +138,7 @@ def fetch_candles_for_pair(
         try:
             resp = requests.get(rest_url, headers=headers, params={
                 "pair": f"eq.{pair}",
-                "select": "timestamp,open,high,low,close,volume",
+                "select": "*",
                 "order": "timestamp.desc",
                 "limit": str(BATCH_SIZE),
                 "offset": str(offset),
@@ -150,9 +150,13 @@ def fetch_candles_for_pair(
                 continue
 
             # Format as CSV rows separated by ';' (same format as before)
+            def _g(row, long_name, short_name, default=0.0):
+                val = row.get(long_name, row.get(short_name, default))
+                return float(val) if val is not None else default
+
             candles_str = ";".join(
-                f"{_to_epoch_seconds(row['timestamp'])},{row['open']:.5f},{row['high']:.5f},"
-                f"{row['low']:.5f},{row['close']:.5f},{row.get('volume', 0.0) or 0.0:.1f}"
+                f"{_to_epoch_seconds(row.get('timestamp', row.get('ts')))},{_g(row,'open','o'):.5f},{_g(row,'high','h'):.5f},"
+                f"{_g(row,'low','l'):.5f},{_g(row,'close','c'):.5f},{_g(row,'volume','v'):.1f}"
                 for row in data
             )
             candles = candles_str.split(";")
