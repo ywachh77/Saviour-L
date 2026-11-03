@@ -1227,7 +1227,8 @@ class FusionBot:
                 "text": format_signal(signal, self.telegram_format),
                 "kind": "signal",
                 "state": charter.DELIVERY_PENDING,
-            }
+            },
+            version=self.config.full_version,
         )
         outgoing = (
             format_brief_signal(signal, self.telegram_format)
@@ -1272,7 +1273,8 @@ class FusionBot:
         if self.telegram is None or not self.telegram.configured:
             return
         self.store.outbox_append(
-            {"message_key": key, "text": text, "kind": "result", "state": charter.DELIVERY_PENDING}
+            {"message_key": key, "text": text, "kind": "result", "state": charter.DELIVERY_PENDING},
+            version=self.config.full_version,
         )
         result = self.telegram.send(text)
         if result.confirmed:

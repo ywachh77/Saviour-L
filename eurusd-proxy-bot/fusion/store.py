@@ -557,8 +557,9 @@ class Store:
         self._write("key_usage", list(rows))
 
     # ----------------------------------------------------------------- outbox
-    def outbox_append(self, row: dict) -> None:
+    def outbox_append(self, row: dict, *, version: str = "unknown") -> None:
         payload = dict(row)
+        payload.setdefault("version", version)
         payload.setdefault("created_at", format_datetime(_utcnow()))
         payload.setdefault("state", "PENDING")
         self._write("outbox", [payload], on_conflict="message_key")
