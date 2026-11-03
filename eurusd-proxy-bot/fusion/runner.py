@@ -385,6 +385,7 @@ class FusionBot:
                 runner=self.config.runner,
                 phase="tick",
                 extra={"paused": self.paused, "cycles": self.cycles},
+                version=self.config.full_version,
             )
         )
         self.poll_commands()
@@ -912,6 +913,7 @@ class FusionBot:
                 runner=self.config.runner,
                 phase="minute",
                 extra=hb_extra,
+                version=self.config.full_version,
             )
         )
         if not _as_peer:
@@ -941,6 +943,7 @@ class FusionBot:
                 runner=self.config.runner,
                 phase="minute",
                 extra=hb_extra,
+                version=self.config.full_version,
             )
         )
         return report

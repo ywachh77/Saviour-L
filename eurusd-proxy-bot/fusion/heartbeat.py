@@ -21,10 +21,11 @@ from . import charter
 from .timeutil import age_seconds, format_datetime, now, parse_datetime
 
 
-def build_heartbeat(*, runner: str, phase: str, extra: dict[str, Any] | None = None) -> dict:
+def build_heartbeat(*, runner: str, phase: str, extra: dict[str, Any] | None = None, version: str = "unknown") -> dict:
     row = {
         "runner": runner,
         "phase": phase,
+        "version": version,
         "created_at": format_datetime(now()),
     }
     if extra:
