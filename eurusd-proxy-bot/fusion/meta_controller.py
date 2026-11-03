@@ -50,16 +50,18 @@ class MetaController(nn.Module):
 
     def __init__(
         self,
-        num_features: int = 18,
-        num_models: int = 5,
-        num_strategies: int = 22,
-        regime_dim: int = 8,
+        num_features: int = 28,  # Aggressive: 28 features
+        num_models: int = 8,     # Aggressive: 8 models in ensemble
+        num_strategies: int = 30,  # Aggressive: 30 strategies
+        regime_dim: int = 12,    # Aggressive: 12 regime dimensions
     ):
         super().__init__()
 
-        # Market regime detector
+        # Market regime detector — deeper network for better regime identification
         self.regime_detector = nn.Sequential(
-            nn.Linear(num_features, 64),
+            nn.Linear(num_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 32),
             nn.ReLU(),
@@ -69,16 +71,20 @@ class MetaController(nn.Module):
 
         # Hyperparameter adapter — learns to adjust model parameters
         self.hyper_adapter = nn.Sequential(
-            nn.Linear(regime_dim + num_features, 128),
+            nn.Linear(regime_dim + num_features, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, num_models * 4),  # 4 hyperparams per model
+            nn.Linear(64, num_models * 6),  # 6 hyperparams per model (expanded)
         )
 
         # Policy network — RL agent for trading decisions
         self.policy_network = nn.Sequential(
-            nn.Linear(regime_dim + num_features + num_models + num_strategies, 128),
+            nn.Linear(regime_dim + num_features + num_models + num_strategies, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -87,11 +93,24 @@ class MetaController(nn.Module):
 
         # Value network — estimates expected reward
         self.value_network = nn.Sequential(
-            nn.Linear(regime_dim + num_features + num_models + num_strategies, 128),
+            nn.Linear(regime_dim + num_features + num_models + num_strategies, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
+        )
+
+        # Counterfactual reasoning network — estimates what would have happened
+        self.counterfactual_network = nn.Sequential(
+            nn.Linear(regime_dim + num_features + num_models + num_strategies, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 3),  # Counterfactual action outcomes
         )
 
         # Strategy evolution memory

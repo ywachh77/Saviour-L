@@ -37,15 +37,15 @@ import torch.nn.functional as F
 class NeuralConfig:
     """Hyperparameters for the Temporal Transformer."""
     # Input
-    input_window: int = 120          # Number of one-minute candles
-    num_features: int = 18           # OHLCV (5) + technical features (13)
+    input_window: int = 240          # Aggressive: 240 candles (4 hours of data)
+    num_features: int = 28           # Aggressive: 28 features (expanded feature set)
 
     # Transformer
-    d_model: int = 128               # Embedding dimension
-    n_heads: int = 4                 # Attention heads
-    n_layers: int = 4                # Transformer layers
-    d_ff: int = 256                  # Feed-forward dimension
-    dropout: float = 0.1             # Dropout rate
+    d_model: int = 256               # Aggressive: 256 embedding dimension
+    n_heads: int = 8                 # Aggressive: 8 attention heads
+    n_layers: int = 8                # Aggressive: 8 transformer layers
+    d_ff: int = 512                  # Aggressive: 512 feed-forward dimension
+    dropout: float = 0.15            # Aggressive: 15% dropout for more regularization
 
     # Heads
     horizon_minutes: int = 1         # Initial prediction horizon
