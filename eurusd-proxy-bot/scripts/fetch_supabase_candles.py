@@ -102,6 +102,23 @@ def get_total_count(supabase_url: str, supabase_key: str) -> int:
     except Exception as e:
         print(f"Error checking count: {e}")
         print(f"Response: {getattr(e, 'response', 'N/A')}")
+        # Last resort: try a count query
+        try:
+            count_url = f"{supabase_url}/rest/v1/candles_m1"
+            count_params = {
+                "pair": "eq.EUR/USD",
+                "select": "count",
+            }
+            response = requests.get(count_url, headers=_headers(supabase_key), params=count_params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            if data and isinstance(data[0], dict):
+                count_val = data[0].get("count")
+                if count_val is not None:
+                    return int(count_val)
+        except Exception:
+            pass
+        print("ERROR: Could not determine candle count. Exiting.")
         sys.exit(1)
 
 
