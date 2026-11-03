@@ -210,7 +210,7 @@ class Config:
 
     # --- gates ---
     max_uncertainty: float = 0.05  # Lower: require more ensemble agreement
-    min_confluence_checks: int = 4  # Raise: need 4/6 core checks for a signal
+    min_confluence_checks: int = 5  # Raise: need 5/6 core checks for a signal
     min_calibration_points: int = charter.MIN_CALIBRATION_POINTS
 
     # --- protections (Freqtrade & Nyao-style guards, opt-in on bare Config()) ---
@@ -385,7 +385,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         max_spread_pips=max_spread,
         spread_pips=spread,
         max_uncertainty=_float("MAX_UNCERTAINTY", 0.05),
-        min_confluence_checks=_int("MIN_CONFLUENCE_CHECKS", 4),
+        min_confluence_checks=_int("MIN_CONFLUENCE_CHECKS", 5),
         min_calibration_points=_int("MIN_CALIBRATION_POINTS", charter.MIN_CALIBRATION_POINTS),
         signal_cooldown_minutes=_int("SIGNAL_COOLDOWN_MINUTES", 0),
         loss_guard_streak=_int("LOSS_GUARD_STREAK", 0),

@@ -70,7 +70,7 @@ jobs:
           LOSS_GUARD_SHADOW_RECOVERY: "1"
           FX_ROLLOVER_GUARD: "1"
           MAX_UNCERTAINTY: "0.05"
-          MIN_CONFLUENCE_CHECKS: "4"
+          MIN_CONFLUENCE_CHECKS: "5"
           NEEDLE_ENABLED: "1"
           NEEDLE_TELEMETRY: "0"
           DO_NOT_TRACK: "1"
