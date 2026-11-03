@@ -346,8 +346,11 @@ class Store:
         return rows
 
     # --------------------------------------------------------------- candles
-    def save_candles(self, candles: Iterable[dict]) -> None:
-        self._write("candles_m1", list(candles), on_conflict="timestamp,pair")
+    def save_candles(self, candles: Iterable[dict], *, version: str = "unknown") -> None:
+        rows = list(candles)
+        for row in rows:
+            row.setdefault("system_version", version)
+        self._write("candles_m1", rows, on_conflict="timestamp,pair")
 
     def oldest_candle(self, pair: str) -> str | None:
         """The earliest bar we hold, or None on an empty table.

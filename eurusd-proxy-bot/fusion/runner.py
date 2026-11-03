@@ -998,7 +998,7 @@ class FusionBot:
         if rows:
             cap = max(MAX_STORED_CANDLES, int(getattr(self.config, "candle_history", 0) or 0))
             self.candles = sorted(known.values(), key=lambda item: item.timestamp)[-cap:]
-            self.store.save_candles(rows)
+            self.store.save_candles(rows, version=self.config.full_version)
         return added
 
     def _check_runtime_protections(self, at: datetime) -> protections.ProtectionVerdict:
