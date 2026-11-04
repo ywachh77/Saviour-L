@@ -625,6 +625,7 @@ def _trend_persistence(closes: list[float], index: int, window: int) -> float:
         return 0.0
     direction_changes = 0
     total_bars = 0
+    prev_dir = 0
     for i in range(index - window + 1, index):
         if closes[i] > closes[i - 1]:
             dir_i = 1

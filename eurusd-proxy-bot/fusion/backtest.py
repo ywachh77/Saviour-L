@@ -46,9 +46,9 @@ from .mistakes import MistakeMemory
 from .regime import classify
 from .stats import EdgeVerdict, MultiPathSummary, edge_verdict, summarise_paths
 
-MIN_TRAIN_PER_FOLD = 800  # MAXIMUM: 800 training samples per fold
-MIN_BARS_FOR_BACKTEST = 2000  # MAXIMUM: 2000 bars for absolute maximum backtesting
-MIN_SIGNALS_FOR_A_VIEW = 800  # MAXIMUM: 800 signals for absolute statistically significant views
+MIN_TRAIN_PER_FOLD = 1200  # HIGHER: 29/30 requires more training data per fold
+MIN_BARS_FOR_BACKTEST = 3000  # HIGHER: 29/30 requires more bars for backtesting
+MIN_SIGNALS_FOR_A_VIEW = 1200  # HIGHER: 29/30 requires more signals for statistical significance
 MAX_FOLD_TRAIN_SAMPLES = 12_000
 
 

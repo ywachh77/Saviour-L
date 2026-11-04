@@ -39,9 +39,9 @@ from .model import (
 from .timeutil import add_minutes, format_datetime, now
 
 # A candidate must clear all of these to replace the champion.
-MIN_WALK_FORWARD_FOLDS = 3
-PROMOTION_MIN_ACCURACY = 0.58  # direction, must be meaningfully better than coin
-PROMOTION_MIN_SKILL = 0.08  # Brier skill must show real predictive power
+MIN_WALK_FORWARD_FOLDS = 5
+PROMOTION_MIN_ACCURACY = 0.65  # HIGHER: 29/30 requires much better than coin
+PROMOTION_MIN_SKILL = 0.15  # HIGHER: 29/30 requires real predictive power
 MAX_WALK_FORWARD_TRAIN = 12_000
 # Trade threshold: only trade when model is confident (pushes toward 19/20)
 MIN_TRADE_CONFIDENCE = 0.15  # abs(prob - 0.5) >= 0.15 means prob >= 0.65 or <= 0.35

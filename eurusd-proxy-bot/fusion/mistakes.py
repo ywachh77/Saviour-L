@@ -34,7 +34,7 @@ from .version import get_version
 
 # Below this the interval is too wide to say anything, however bad the record
 # looks. Ten losses in a row still passes: that is the point.
-MIN_SAMPLES = 10
+MIN_SAMPLES = 15  # HIGHER: 29/30 requires more samples for mistake memory
 # A cap and a decay, so a regime change can clear a stale ban. When a cell
 # fills, both counts are halved rather than frozen at the limit.
 MAX_SAMPLES = 150
