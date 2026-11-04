@@ -233,7 +233,7 @@ class Config:
     nightly_train_fraction: float = 0.70
     online_learning_rate: float = 0.05  # HIGHER: 29/30 requires faster online adaptation
     # Self-learning module parameters
-    target_win_rate: float = 0.95  # 19/20 = 95%
+    target_win_rate: float = 0.97  # HIGHER: 29/30 = 96.7%
     loss_learning_multiplier: float = 8.0  # HIGHER: 29/30 requires even more aggressive loss learning
     loss_learning_rate_cap: float = 0.20  # HIGHER: 29/30 requires higher loss learning cap
     paper_trading_max_trades: int = 500  # HIGHER: 29/30 requires more paper trades for faster learning
