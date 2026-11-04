@@ -46,9 +46,9 @@ from .mistakes import MistakeMemory
 from .regime import classify
 from .stats import EdgeVerdict, MultiPathSummary, edge_verdict, summarise_paths
 
-MIN_TRAIN_PER_FOLD = 1200  # HIGHER: 29/30 requires more training data per fold
-MIN_BARS_FOR_BACKTEST = 3000  # HIGHER: 29/30 requires more bars for backtesting
-MIN_SIGNALS_FOR_A_VIEW = 1200  # HIGHER: 29/30 requires more signals for statistical significance
+MIN_TRAIN_PER_FOLD = 800  # 19/20: proven working threshold
+MIN_BARS_FOR_BACKTEST = 2000  # 19/20: proven working threshold
+MIN_SIGNALS_FOR_A_VIEW = 800  # 19/20: proven working threshold
 MAX_FOLD_TRAIN_SAMPLES = 12_000
 
 

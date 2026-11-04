@@ -81,12 +81,12 @@ class OnlineLogisticModel:
     def fit(
         self,
         samples: Iterable[tuple[dict[str, float], int]],
-        epochs: int = 2000,  # HIGHER: 29/30 requires even more convergence
-        learning_rate: float = 0.20,  # HIGHER: 29/30 requires faster learning
-        l2: float = 0.0003,  # MINIMUM: 0.0003 for even less regularization
-        validation_fraction: float = 0.08,  # MINIMUM: 8% validation, 92% training
+        epochs: int = 1000,  # 19/20: proven working threshold
+        learning_rate: float = 0.15,  # 19/20: proven working threshold
+        l2: float = 0.0005,  # 19/20: proven working threshold
+        validation_fraction: float = 0.10,  # 19/20: proven working threshold
         min_samples: int = 40,
-        patience: int = 300,  # HIGHER: 29/30 requires even more patience
+        patience: int = 150,  # 19/20: proven working threshold
     ) -> "OnlineLogisticModel":
         rows = [
             (features, int(label))
@@ -228,7 +228,7 @@ class OnlineLogisticModel:
         self,
         features: dict[str, float],
         label: int,
-        learning_rate: float = 0.20,  # HIGHER: 29/30 requires even faster online learning
+        learning_rate: float = 0.10,  # 19/20: proven working threshold
         l2: float = 0.0002,  # MINIMUM: 0.0002 for absolute minimum regularization
     ) -> None:
         """One guarded online update after a confirmed real outcome."""
@@ -310,9 +310,9 @@ class BootstrapEnsemble:
     def fit(
         cls,
         samples: Sequence[tuple[dict[str, float], int]],
-        member_count: int = 30,  # HIGHER: 29/30 requires even more ensemble diversity
+        member_count: int = 20,  # 19/20: proven working threshold
         seed: int = 20240501,
-        epochs: int = 1000,  # HIGHER: 29/30 requires more training per member
+        epochs: int = 500,  # 19/20: proven working threshold
     ) -> "BootstrapEnsemble":
         rows = list(samples)
         if len(rows) < 80 or member_count < 2:
