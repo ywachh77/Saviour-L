@@ -36,9 +36,16 @@ def _base_feature_row() -> tuple[Candle, float, dict[str, float]]:
 
 class TestMultiFamilyStrategies(unittest.TestCase):
     def test_all_nine_new_methods_registered_in_council_regime_and_session(self) -> None:
-        self.assertEqual(len(methods.METHOD_PROTOTYPES), 94)
-        self.assertEqual(len(strategies.MEMBERS), 133)
-        self.assertEqual(len(strategies.PROTOTYPES), 132)
+        # 93/132/131 rather than 94/133/132: smc_bull_flag was removed. It was
+        # a strict duplicate of smc_bear_flag's bullish branch, registered on
+        # its own, so its only reachable outcome was BUY -- a one-sided member
+        # that could add buy mass and never sell mass. See
+        # tests/test_directional_balance.py for the guard that keeps that from
+        # coming back. The counts are asserted exactly so that adding a member
+        # is still a deliberate act.
+        self.assertEqual(len(methods.METHOD_PROTOTYPES), 93)
+        self.assertEqual(len(strategies.MEMBERS), 132)
+        self.assertEqual(len(strategies.PROTOTYPES), 131)
 
         for name in methods.METHOD_PROTOTYPES:
             self.assertIn(name, strategies.PROTOTYPES)
@@ -272,7 +279,7 @@ class TestAutoSettleZeroBiasAndWholeSystemFixes(unittest.TestCase):
             try:
                 st = rt.status_payload()
                 self.assertTrue(st["ledger"]["auto_settle_active"])
-                self.assertEqual(st["council_members"], 133)
+                self.assertEqual(st["council_members"], 132)
 
                 candles = make_candles(140, seed=41, volatility=0.0003, drift=0.00006)
                 feat_row = feat_mod.compute_features(candles[:120])[-1]

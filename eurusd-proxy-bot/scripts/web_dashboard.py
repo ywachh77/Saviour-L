@@ -52,7 +52,11 @@ from fusion.cognitive import SaviourCognitivePartner, build_trade_reflection  # 
 from fusion.config import Config, load_config  # noqa: E402
 from fusion.custom_indicators import compute_custom_indicators, CUSTOM_INDICATOR_NAMES  # noqa: E402
 from fusion.domain import Candle, Settlement, Signal, closed_before  # noqa: E402
-from fusion.indicators import atr as calc_atr  # noqa: E402
+from fusion.indicators import (  # noqa: E402
+    atr as calc_atr,
+    rsi_composite_vote,
+    squeeze_composite_vote,
+)
 from fusion.keypool import MAX_SLOTS, mask_key  # noqa: E402
 from fusion.model import MODE_VETO  # noqa: E402
 from fusion.runner import FusionBot, format_brief_signal, format_result, format_signal  # noqa: E402
@@ -2084,7 +2088,8 @@ class OperatorRuntime:
                 vwap_zscore, kaufman_er, choppiness_index, keltner_squeeze,
                 supertrend_window, smc_structure, ichimoku_cloud, hurst_exponent,
                 fft_cycles, aroon, donchian_channel, pivot_points,
-            )
+                rsi_composite_vote,
+)
             # Convert dict candles to FusionCandle objects
             fc_candles: list[FusionCandle] = []
             for c in candles:
@@ -2253,9 +2258,10 @@ class OperatorRuntime:
             score = 1.0 if indicators["supertrend_direction"] > 0 else -1.0
             votes.append(("Supertrend", score, 0.15))
         if indicators.get("rsi_14") is not None:
-            rsi_val = indicators["rsi_14"]
-            score = 0.5 if rsi_val < 40 else (1.0 if rsi_val < 50 else (-0.5 if rsi_val > 60 else (-1.0 if rsi_val > 70 else 0.0)))
-            votes.append(("RSI", score, 0.10))
+            # One implementation, shared with the backtest and the live
+            # combiner. See fusion.indicators.rsi_composite_vote for why the
+            # previous hand-copied band set voted BUY on average.
+            votes.append(("RSI", rsi_composite_vote(indicators["rsi_14"]), 0.10))
         if indicators.get("stoch_k") is not None:
             score = 1.0 if indicators["stoch_k"] < 20 else (-1.0 if indicators["stoch_k"] > 80 else 0.0)
             votes.append(("Stochastic", score, 0.10))
@@ -2272,8 +2278,12 @@ class OperatorRuntime:
             score = -1.0 if indicators["choppiness"] > 70 else (1.0 if indicators["choppiness"] < 40 else 0.0)
             votes.append(("Choppiness", score, 0.05))
         if indicators.get("squeeze_on") is not None:
-            score = 1.0 if indicators["squeeze_on"] else 0.0
-            votes.append(("Squeeze Breakout", score, 0.05))
+            # Compression has no direction; the break side is the momentum.
+            votes.append((
+                "Squeeze Breakout",
+                squeeze_composite_vote(indicators["squeeze_on"], indicators.get("squeeze_momentum")),
+                0.05,
+            ))
         if indicators.get("hurst") is not None:
             score = 1.0 if indicators["hurst"] > 0.5 else (-1.0 if indicators["hurst"] < 0.45 else 0.0)
             votes.append(("Hurst", score, 0.03))
@@ -2867,8 +2877,9 @@ class OperatorRuntime:
             aroon_d = aroon_down[-1] if aroon_down else 50.0
             chop_vals = choppiness_index(candles, 14)
             chop_val = chop_vals[-1] if chop_vals else 50.0
-            squeeze_bools, _ = keltner_squeeze(candles, bb_period=20, bb_mult=2.0, kc_period=20, kc_mult=1.5)
+            squeeze_bools, squeeze_mom = keltner_squeeze(candles, bb_period=20, bb_mult=2.0, kc_period=20, kc_mult=1.5)
             squeeze_on = bool(squeeze_bools[-1]) if squeeze_bools else False
+            squeeze_momentum = squeeze_mom[-1] if squeeze_mom else None
             hurst_vals = hurst_exponent(closes, 20)
             hurst_val = hurst_vals[-1] if hurst_vals else 0.5
 
@@ -2916,13 +2927,13 @@ class OperatorRuntime:
             votes = [
                 ("ML Ensemble", ml_score, 0.368),
                 ("Supertrend", 1.0 if st_direction > 0 else -1.0, 0.105),
-                ("RSI", (0.5 if rsi_val < 40 else (1.0 if rsi_val < 50 else (-0.5 if rsi_val > 60 else (-1.0 if rsi_val > 70 else 0.0)))), 0.080),
+                ("RSI", rsi_composite_vote(rsi_val), 0.080),
                 ("Stochastic", 1.0 if stoch_val < 20 else (-1.0 if stoch_val > 80 else 0.0), 0.105),
                 ("VWAP", 1.0 if closes[last] > vwap_val else -1.0, 0.084),
                 ("Ichimoku", 1.0 if closes[last] > ichimoku_val else -1.0, 0.053),
                 ("Aroon", 1.0 if aroon_u > 70 else (-1.0 if aroon_d > 70 else 0.0), 0.053),
                 ("Choppiness", -1.0 if chop_val > 70 else (1.0 if chop_val < 40 else 0.0), 0.053),
-                ("Squeeze", 1.0 if squeeze_on else 0.0, 0.053),
+                ("Squeeze", squeeze_composite_vote(squeeze_on, squeeze_momentum), 0.053),
                 ("Hurst", 1.0 if hurst_val > 0.5 else (-1.0 if hurst_val < 0.45 else 0.0), 0.032),
             ]
             if mr_models:
