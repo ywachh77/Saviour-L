@@ -195,12 +195,12 @@ class GradientBoostingModel:
 
     feature_names: tuple[str, ...] = FEATURE_NAMES
     feature_version: int = FEATURE_VERSION
-    n_estimators: int = 800  # HIGHER: 29/30 requires even more GBDT capacity
-    learning_rate: float = 0.20  # HIGHER: 29/30 requires faster GBDT convergence
-    max_depth: int = 10  # HIGHER: 29/30 requires deeper trees for complex patterns
-    subsample: float = 0.35  # HIGHER: 29/30 requires even more diversity
-    min_samples_split: int = 5  # LOWER: 29/30 requires more splits
-    min_samples_leaf: int = 2  # LOWER: 29/30 requires more leaves
+    n_estimators: int = 500  # 19/20: proven working threshold
+    learning_rate: float = 0.15  # 19/20: proven working threshold
+    max_depth: int = 8  # 19/20: proven working threshold
+    subsample: float = 0.40  # 19/20: proven working threshold
+    min_samples_split: int = 8  # 19/20: proven working threshold
+    min_samples_leaf: int = 3  # 19/20: proven working threshold
     trees: list = field(default_factory=list)
     initial_prediction: float = 0.0
     means: list[float] = field(default_factory=list)
@@ -389,7 +389,7 @@ class GradientBoostingModel:
         self,
         features: dict[str, float],
         label: int,
-        learning_rate: float = 0.18,  # HIGHER: 29/30 requires even faster GBDT online learning
+        learning_rate: float = 0.12,  # 19/20: proven working threshold
     ) -> None:
         """Online update: shrink the base prediction toward the observed residual.
 

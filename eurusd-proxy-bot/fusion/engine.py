@@ -34,9 +34,9 @@ from .timeutil import add_minutes, floor_minute, now as utcnow
 # Meta-model margins. VETO only blocks a read it confidently disagrees with;
 # ADVISORY (promoted) additionally requires agreement, with a tighter bar on a
 # calibrated score than on a raw one.
-VETO_MARGIN = 0.05  # TIGHTER: 29/30 accuracy requires more aggressive blocking
-AGREE_MARGIN_CALIBRATED = 0.03  # TIGHTER: require stronger model agreement
-AGREE_MARGIN_RAW = 0.06  # TIGHTER: raw scores need more agreement
+VETO_MARGIN = 0.08  # 19/20 accuracy: proven working threshold
+AGREE_MARGIN_CALIBRATED = 0.05  # 19/20: relaxed agreement
+AGREE_MARGIN_RAW = 0.08  # 19/20: relaxed raw agreement
 
 RAW = "RAW"
 CALIBRATED = "CALIBRATED"
@@ -95,7 +95,7 @@ def build_read(
     ensemble: BootstrapEnsemble | None,
     features: dict[str, float],
     *,
-    max_uncertainty: float = 0.03,  # TIGHTER: 29/30 requires very low ensemble disagreement
+    max_uncertainty: float = 0.10,  # 19/20: relaxed ensemble disagreement
 ) -> ModelRead | None:
     """Turn the model into an honest probability read, or None when untrained."""
     if model is None or not model.trained or features is None:

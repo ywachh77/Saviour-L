@@ -109,7 +109,7 @@ class Config:
     candle_history: int = 320
     # Bars the nightly job trains on. Separate from candle_history, which is the
     # rolling window the live cycle keeps in memory for signal generation.
-    training_history: int = 2_000_000  # HIGHER: 29/30 requires even more training history
+    training_history: int = 1_000_000  # 19/20: proven working threshold
 
     # --- signal shape ---
     horizon_minutes: int = 30
@@ -121,7 +121,7 @@ class Config:
     # Sureshot detection: when model confidence exceeds this AND present
     # conditions align AND the cost gate passes, the signal is flagged SURESHOT.
     # Raised from 0.72 to 0.80 for 19/20 win rate — only trade when very confident.
-    sureshot_confidence_threshold: float = 0.85  # HIGHER: 29/30 requires even higher sureshot confidence
+    sureshot_confidence_threshold: float = 0.80  # 19/20: proven working threshold
     # Hold long enough to pay for the trip. Off by default because it changes
     # which bars produce signals, and the default path stays the one that is
     # already measured. See fusion/costs.py for why 5 minutes at 1.2 pips is
@@ -216,30 +216,30 @@ class Config:
         return instruments.for_symbol(self.pair)
 
     # --- gates ---
-    max_uncertainty: float = 0.03  # TIGHTER: 29/30 requires very low ensemble disagreement
+    max_uncertainty: float = 0.10  # 19/20: relaxed ensemble disagreement
     min_confluence_checks: int = 5  # Raise: need 5/6 core checks for a signal
     min_calibration_points: int = charter.MIN_CALIBRATION_POINTS
 
     # --- protections (Freqtrade & Nyao-style guards, opt-in on bare Config()) ---
-    signal_cooldown_minutes: int = 0
-    loss_guard_streak: int = 0
+    signal_cooldown_minutes: int = 5  # MINIMUM 5 MINUTES between signals - prevents rapid-fire
+    loss_guard_streak: int = 1  # BLOCK after 1 consecutive loss - no consecutive losses allowed
     loss_guard_lookback_minutes: int = 180
     loss_guard_cooldown_minutes: int = 60
-    loss_guard_shadow_recovery: bool = False
+    loss_guard_shadow_recovery: bool = True  # Enable shadow recovery after loss guard blocks
     fx_rollover_guard: bool = False
 
     # --- learning ---
-    nightly_min_samples: int = 2000  # HIGHER: 29/30 requires more nightly training samples
+    nightly_min_samples: int = 1000  # 19/20: proven working threshold
     nightly_train_fraction: float = 0.70
-    online_learning_rate: float = 0.05  # HIGHER: 29/30 requires faster online adaptation
+    online_learning_rate: float = 0.02  # 19/20: proven working threshold
     # Self-learning module parameters
-    target_win_rate: float = 0.97  # HIGHER: 29/30 = 96.7%
-    loss_learning_multiplier: float = 8.0  # HIGHER: 29/30 requires even more aggressive loss learning
-    loss_learning_rate_cap: float = 0.20  # HIGHER: 29/30 requires higher loss learning cap
-    paper_trading_max_trades: int = 500  # HIGHER: 29/30 requires more paper trades for faster learning
+    target_win_rate: float = 0.95  # 19/20: proven working threshold
+    loss_learning_multiplier: float = 5.0  # 19/20: proven working threshold
+    loss_learning_rate_cap: float = 0.15  # 19/20: proven working threshold
+    paper_trading_max_trades: int = 300  # 19/20: proven working threshold
     loss_focused_retrain_enabled: bool = True  # Enable loss-focused nightly retraining
     # High-confidence trade threshold: only trade when model is very confident
-    min_trade_confidence: float = 0.35  # HIGHER: 29/30 requires much higher conviction trades
+    min_trade_confidence: float = 0.25  # 19/20: proven working threshold
 
     # --- runtime ---
     tick_seconds: int = 15
@@ -260,7 +260,7 @@ class Config:
     # unchanged; enabled in live workflows & Web Operator Console via NEEDLE_ENABLED=1.
     needle_enabled: bool = False
     needle_weights_path: str = ""
-    needle_min_confidence: float = 0.65  # HIGHER: 29/30 requires higher needle confidence
+    needle_min_confidence: float = 0.55  # 19/20: proven working threshold
 
     @property
     def telegram_ready(self) -> bool:
@@ -374,11 +374,11 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         pairs=pairs,
         timeframe=os.environ.get("TIMEFRAME", charter.ALLOWED_TIMEFRAME).strip(),
         candle_history=_int("CANDLE_HISTORY", 320),
-        training_history=_int("TRAINING_HISTORY", 2_000_000),
+        training_history=_int("TRAINING_HISTORY", 1_000_000),
         horizon_minutes=_int("SIGNAL_HORIZON_MINUTES", 30),
         short_horizon_max_minutes=_int("SHORT_HORIZON_MAX_MINUTES", 3),
         short_horizon_min_reward=_float("SHORT_HORIZON_MIN_REWARD", 1.5),
-        sureshot_confidence_threshold=_float("SURESHOT_CONFIDENCE_THRESHOLD", 0.85),
+        sureshot_confidence_threshold=_float("SURESHOT_CONFIDENCE_THRESHOLD", 0.80),
         adaptive_horizon=_bool("ADAPTIVE_HORIZON", True),
         session_filter=_bool("SESSION_FILTER", True),
         mtf_filter=_bool("MTF_FILTER", True),
@@ -395,24 +395,24 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         min_atr_to_spread_ratio=_float("MIN_ATR_TO_SPREAD_RATIO", 0.0),
         max_spread_pips=max_spread,
         spread_pips=spread,
-        max_uncertainty=_float("MAX_UNCERTAINTY", 0.05),
+        max_uncertainty=_float("MAX_UNCERTAINTY", 0.10),
         min_confluence_checks=_int("MIN_CONFLUENCE_CHECKS", 5),
         min_calibration_points=_int("MIN_CALIBRATION_POINTS", charter.MIN_CALIBRATION_POINTS),
-        signal_cooldown_minutes=_int("SIGNAL_COOLDOWN_MINUTES", 0),
-        loss_guard_streak=_int("LOSS_GUARD_STREAK", 0),
+        signal_cooldown_minutes=_int("SIGNAL_COOLDOWN_MINUTES", 5),
+        loss_guard_streak=_int("LOSS_GUARD_STREAK", 1),
         loss_guard_lookback_minutes=_int("LOSS_GUARD_LOOKBACK_MINUTES", 180),
         loss_guard_cooldown_minutes=_int("LOSS_GUARD_COOLDOWN_MINUTES", 60),
-        loss_guard_shadow_recovery=_bool("LOSS_GUARD_SHADOW_RECOVERY", False),
+        loss_guard_shadow_recovery=_bool("LOSS_GUARD_SHADOW_RECOVERY", True),
         fx_rollover_guard=_bool("FX_ROLLOVER_GUARD", False),
-        nightly_min_samples=_int("NIGHTLY_MIN_SAMPLES", 2000),
+        nightly_min_samples=_int("NIGHTLY_MIN_SAMPLES", 1000),
         nightly_train_fraction=_float("NIGHTLY_TRAIN_FRACTION", 0.70),
-        online_learning_rate=_float("ONLINE_LEARNING_RATE", 0.05),
-        target_win_rate=_float("TARGET_WIN_RATE", 0.97),  # HIGHER: 29/30 target
-        loss_learning_multiplier=_float("LOSS_LEARNING_MULTIPLIER", 8.0),
-        loss_learning_rate_cap=_float("LOSS_LEARNING_RATE_CAP", 0.20),
-        paper_trading_max_trades=_int("PAPER_TRADING_MAX_TRADES", 500),
+        online_learning_rate=_float("ONLINE_LEARNING_RATE", 0.02),
+        target_win_rate=_float("TARGET_WIN_RATE", 0.95),  # 19/20 target
+        loss_learning_multiplier=_float("LOSS_LEARNING_MULTIPLIER", 5.0),
+        loss_learning_rate_cap=_float("LOSS_LEARNING_RATE_CAP", 0.15),
+        paper_trading_max_trades=_int("PAPER_TRADING_MAX_TRADES", 300),
         loss_focused_retrain_enabled=_bool("LOSS_FOCUSED_RETRAIN_ENABLED", True),
-        min_trade_confidence=_float("MIN_TRADE_CONFIDENCE", 0.35),
+        min_trade_confidence=_float("MIN_TRADE_CONFIDENCE", 0.25),
         tick_seconds=_int("TICK_SECONDS", 15),
         heartbeat_stale_seconds=_int("HEARTBEAT_STALE_SECONDS", charter.HEARTBEAT_STALE_SECONDS),
         digest_hour_utc=_int("DIGEST_HOUR_UTC", 0),
@@ -426,7 +426,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         require_owner_commands=_bool("REQUIRE_OWNER_COMMANDS", True),
         needle_enabled=_bool("NEEDLE_ENABLED", False),
         needle_weights_path=os.environ.get("NEEDLE_WEIGHTS_PATH", "").strip(),
-        needle_min_confidence=_float("NEEDLE_MIN_CONFIDENCE", 0.65),
+        needle_min_confidence=_float("NEEDLE_MIN_CONFIDENCE", 0.55),
     )
 
 

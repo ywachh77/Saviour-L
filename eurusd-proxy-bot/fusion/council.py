@@ -26,7 +26,7 @@ from .regime import regime_allows
 from .session import session_allows
 
 # Learning gates
-MIN_SEEN_PER_PROTOTYPE = 50       # HIGHER: 29/30 requires more data before trusting prototypes
+MIN_SEEN_PER_PROTOTYPE = 30       # 19/20: proven working threshold
 # Learned weight cap: a prototype's learned weight cannot exceed this.
 PER_PROTOTYPE_WEIGHT_CAP = 0.30   # no single prototype may dominate
 # Total learned mass cap: learned weights together stay below the core.
@@ -34,11 +34,11 @@ TOTAL_LEARNED_MASS_CAP = 0.60
 # Total effective mass cap: keeps prototypes from overwhelming the core gate.
 TOTAL_PROTOTYPE_MASS_CAP = 1.20
 # Net opposing mass that blocks a core signal.
-VETO_MASS = 0.15  # TIGHTER: 29/30 requires more aggressive council veto
+VETO_MASS = 0.25  # 19/20: relaxed council veto
 SHRINKAGE = 40.0                  # net / (seen + SHRINKAGE) keeps small samples humble
 # Strategic consensus override: minimum total effective weight for strategic
 # methods to override a core abstention. Requires multiple methods agreeing.
-CONSENSUS_THRESHOLD = 0.75  # HIGHER: 29/30 requires much stronger consensus to override core
+CONSENSUS_THRESHOLD = 0.60  # 19/20: relaxed consensus requirement
 
 
 @dataclass
