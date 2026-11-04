@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from . import version as version_mod
 from .timeutil import add_minutes, floor_minute, format_datetime, parse_datetime
 
 

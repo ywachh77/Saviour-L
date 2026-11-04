@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any, Sequence
 
 from . import backtest, charter, cognitive, instruments, digest, heartbeat, learning, needle_agent, protections, settle, stats
+from .meta_controller import MetaController, RLTrainer, EnsembleArbiter, SelfImprovingLoop
 from .config import Config
 from .council import CouncilWeights, Vote
 from .domain import Candle, Signal, closed_before
@@ -117,6 +118,12 @@ class FusionBot:
     calibration_points: list[tuple[float, int]] = field(default_factory=list)
     mistakes: MistakeMemory = field(default_factory=MistakeMemory)
     family_fusion: FamilyFusionEngine = field(default_factory=FamilyFusionEngine)
+    meta_controller: MetaController = field(default_factory=MetaController)
+    rl_trainer: RLTrainer = field(default_factory=lambda: RLTrainer(MetaController()))
+    ensemble_arbiter: EnsembleArbiter = field(default_factory=EnsembleArbiter)
+    self_improving: SelfImprovingLoop = field(default_factory=lambda: SelfImprovingLoop(
+        MetaController(), RLTrainer(MetaController()), None, EnsembleArbiter()
+    ))
     learning_journal: list[dict[str, Any]] = field(default_factory=list)
     auto_backtest_history: list[dict[str, Any]] = field(default_factory=list)
     cognitive_state: dict[str, Any] = field(default_factory=dict)
@@ -141,6 +148,19 @@ class FusionBot:
             apply_to_signals_cmd=bool(getattr(self.config, "telegram_apply_to_signals_cmd", False)),
         )
         self.engine = FusionEngine(self.config)
+        # Initialize Meta-Controller as the root AI brain
+        self.meta_controller = MetaController()
+        self.rl_trainer = RLTrainer(self.meta_controller)
+        self.ensemble_arbiter = EnsembleArbiter()
+        # Self-improving loop uses the actual instances
+        from .meta_controller import GeneticStrategyEvolver
+        self.evolver = GeneticStrategyEvolver()
+        self.self_improving = SelfImprovingLoop(
+            self.meta_controller,
+            self.rl_trainer,
+            self.evolver,
+            self.ensemble_arbiter,
+        )
         for symbol in self.config.active_pairs[1:]:
             self.peer_bots[symbol] = FusionBot(
                 config=self.config.for_pair(symbol),
@@ -193,7 +213,7 @@ class FusionBot:
             and hasattr(self.provider, "pool")
             and getattr(self.provider.pool, "configured", False)
         ):
-            self.store.save_key_pool(self.provider.pool.to_dict())
+            self.store.save_key_pool(self.provider.pool.to_dict(), version=self.config.full_version)
 
     def _load_state(self) -> None:
         row = self.store.load_model_state(pair=self.config.pair) or {}
@@ -385,6 +405,7 @@ class FusionBot:
                 runner=self.config.runner,
                 phase="tick",
                 extra={"paused": self.paused, "cycles": self.cycles},
+                version=self.config.full_version,
             )
         )
         self.poll_commands()
@@ -713,6 +734,7 @@ class FusionBot:
             last_cycle=self.last_cycle.to_dict() if self.last_cycle else None,
             store_errors=self.store.errors[-5:],
             system=self._latest_system_report(),
+            version=self.config.full_version,
         )
 
     # ---------------------------------------------------------- minute cycle
@@ -853,7 +875,7 @@ class FusionBot:
         job_bucket = bucket if self.config.pair == "EUR/USD" else f"{self.config.pair}|{bucket}"
         self.cycles += 1
 
-        if not self.store.claim_job("minute", job_bucket, runner=self.config.runner):
+        if not self.store.claim_job("minute", job_bucket, runner=self.config.runner, version=self.config.full_version):
             # Another runner already owns this minute. Nothing to do, no harm done.
             return CycleReport(bucket, "SKIPPED", "Another runner already claimed this minute.")
 
@@ -911,6 +933,7 @@ class FusionBot:
                 runner=self.config.runner,
                 phase="minute",
                 extra=hb_extra,
+                version=self.config.full_version,
             )
         )
         if not _as_peer:
@@ -927,7 +950,7 @@ class FusionBot:
         """Execute a peer instrument's already-ingested minute evaluation with real post-ingest clock."""
         job_bucket = f"{self.config.pair}|{bucket}"
         self.cycles += 1
-        if not self.store.claim_job("minute", job_bucket, runner=self.config.runner):
+        if not self.store.claim_job("minute", job_bucket, runner=self.config.runner, version=self.config.full_version):
             return CycleReport(bucket, "SKIPPED", "Another runner already claimed this minute.")
         report = self.evaluate_minute(bucket=bucket, at=eval_stamp, causal_cutoff=causal_cutoff)
         self.last_cycle = report
@@ -940,6 +963,7 @@ class FusionBot:
                 runner=self.config.runner,
                 phase="minute",
                 extra=hb_extra,
+                version=self.config.full_version,
             )
         )
         return report
@@ -994,7 +1018,7 @@ class FusionBot:
         if rows:
             cap = max(MAX_STORED_CANDLES, int(getattr(self.config, "candle_history", 0) or 0))
             self.candles = sorted(known.values(), key=lambda item: item.timestamp)[-cap:]
-            self.store.save_candles(rows)
+            self.store.save_candles(rows, version=self.config.full_version)
         return added
 
     def _check_runtime_protections(self, at: datetime) -> protections.ProtectionVerdict:
@@ -1193,7 +1217,7 @@ class FusionBot:
             return CycleReport(bucket, charter.SEAL_ABSTAIN, result.reason, regime=result.regime)
 
         signal = result.signal
-        self.store.save_signal(dict(signal.to_dict(), seal_state=charter.SEAL_SIGNAL, settled=False, bucket=bucket))
+        self.store.save_signal(dict(signal.to_dict(), seal_state=charter.SEAL_SIGNAL, settled=False, bucket=bucket, system_version=self.config.version))
 
         if self.paused:
             self.store.update_signal(signal.signal_id, {"delivery_state": charter.DELIVERY_SUPPRESSED})
@@ -1223,7 +1247,8 @@ class FusionBot:
                 "text": format_signal(signal, self.telegram_format),
                 "kind": "signal",
                 "state": charter.DELIVERY_PENDING,
-            }
+            },
+            version=self.config.full_version,
         )
         outgoing = (
             format_brief_signal(signal, self.telegram_format)
@@ -1268,7 +1293,8 @@ class FusionBot:
         if self.telegram is None or not self.telegram.configured:
             return
         self.store.outbox_append(
-            {"message_key": key, "text": text, "kind": "result", "state": charter.DELIVERY_PENDING}
+            {"message_key": key, "text": text, "kind": "result", "state": charter.DELIVERY_PENDING},
+            version=self.config.full_version,
         )
         result = self.telegram.send(text)
         if result.confirmed:
@@ -1409,7 +1435,7 @@ class FusionBot:
 
     def _settle_one(self, signal: Signal) -> None:
         settlement = settle.settle(signal, self.candles)
-        self.store.save_settlement(settlement.to_dict())
+        self.store.save_settlement(dict(settlement.to_dict(), system_version=self.config.version))
         label = settle.learning_label(signal, settlement)
         winning = settle.winning_side(settlement)
 
@@ -1469,11 +1495,13 @@ class FusionBot:
         # confirmed real outcome updates online weights from trade #1.
         self._ensure_baseline_veto_model(before=signal.entry_time)
 
-        # Loss-focused learning rate: mistakes carry 1.35x gradient focus (capped
-        # at 0.05) so repeating losing setups are down-weighted promptly.
+        # Loss-focused learning rate: mistakes carry higher gradient focus (capped
+        # at loss_learning_rate_cap) so repeating losing setups are down-weighted promptly.
         effective_lr = float(self.config.online_learning_rate)
         if settlement.outcome == charter.LOSS:
-            effective_lr = min(0.05, effective_lr * 1.35)
+            multiplier = float(getattr(self.config, "loss_learning_multiplier", 2.0))
+            cap = float(getattr(self.config, "loss_learning_rate_cap", 0.08))
+            effective_lr = min(cap, effective_lr * multiplier)
 
         # Model learning: test before learn, once per confirmed non-tied outcome.
         step = learning.online_step(
@@ -1511,6 +1539,32 @@ class FusionBot:
             self._refit_calibration()
 
         if settlement.outcome in (charter.WIN, charter.LOSS):
+            # Meta-Controller self-improving loop: feed trade result to RL + ensemble
+            try:
+                import torch
+                feature_vec = {k: float(v) for k, v in (signal.features or {}).items()}
+                model_preds = []
+                if self.model and self.model.trained and signal.features:
+                    model_preds.append(self.model.predict_up(signal.features))
+                if self.ensemble and self.ensemble.ready and signal.features:
+                    mean_p, _ = self.ensemble.predict(signal.features)
+                    model_preds.append(float(mean_p))
+                action_map = {"BUY": "BUY", "SELL": "SELL"}
+                meta_action = action_map.get(signal.side, "NO_TRADE")
+                reward = float(settlement.net_pips or 0.0)
+                self.self_improving.on_trade_result(
+                    feature_vec,
+                    model_preds,
+                    meta_action,
+                    settlement.outcome,
+                    reward,
+                )
+            except Exception as meta_err:
+                self.store.log_event({
+                    "kind": "meta_controller_error",
+                    "reason": str(meta_err)[:200],
+                })
+
             episode = cognitive.build_trade_reflection(
                 pair=self.config.pair,
                 signal_id=signal.signal_id,
@@ -1648,10 +1702,42 @@ class FusionBot:
         stamp = at or now()
         bucket = stamp.strftime("%Y-%m-%d")
         job_bucket = bucket if self.config.pair == "EUR/USD" else f"{self.config.pair}:{bucket}"
-        if not self.store.claim_job("nightly", job_bucket, runner=self.config.runner):
+        if not self.store.claim_job("nightly", job_bucket, runner=self.config.runner, version=self.config.full_version):
             return {"skipped": True, "reason": "Nightly already ran for this date."}
 
         settlements = self.store.load_settlements(limit=4000)
+
+        # STEP 1: Paper trading loop — learn from every loss before nightly training
+        paper_feedback = None
+        if not getattr(self.provider, "synthetic", False) and self.model is not None and self.model.trained:
+            try:
+                from . import paper_trading_loop
+                self.model, paper_feedback = paper_trading_loop.paper_trading_loop(
+                    self._training_candles(),
+                    settlements,
+                    self.config,
+                    self.model,
+                )
+                if paper_feedback.losses > 0:
+                    self.store.log_event(
+                        {
+                            "kind": "paper_trading_loop",
+                            "total_trades": paper_feedback.total_trades,
+                            "wins": paper_feedback.wins,
+                            "losses": paper_feedback.losses,
+                            "win_rate": round(paper_feedback.win_rate, 4),
+                            "learned_from_losses": paper_feedback.learned_from_losses,
+                        }
+                    )
+            except Exception as error:
+                self.store.log_event(
+                    {
+                        "kind": "paper_trading_loop_error",
+                        "reason": str(error)[:300],
+                    }
+                )
+
+        # STEP 2: Nightly walk-forward with loss-focused learning integrated
         model, ensemble, report = learning.run_nightly(
             self._training_candles(),
             settlements,
@@ -1674,13 +1760,65 @@ class FusionBot:
             ):
                 self.family_fusion = FamilyFusionEngine.from_dict(report.system.family_state)
         self.nightly_report = report.to_dict()
+        # Add version info to the report
+        from .version import get_version_info
+        self.nightly_report["version"] = get_version_info()
+        if paper_feedback is not None:
+            self.nightly_report["paper_trading"] = paper_feedback.to_dict()
         self.store.save_model_version(
             {
                 "version_id": job_bucket,
                 "report": report.to_dict(),
                 "created_at": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "system_version": self.config.version,
+                "feature_version": self.config.feature_version,
+                "model_version": self.config.model_version,
             }
         )
+        # STEP 3: Meta-Controller RL update — train the root AI brain
+        try:
+            import torch
+            # Build training samples from recent settlements for RL
+            rl_samples = []
+            recent_settlements = [s for s in settlements if not charter.is_synthetic(s.get("source", ""))]
+            for s in recent_settlements[-200:]:  # Last 200 settlements
+                if s.get("outcome") in (charter.WIN, charter.LOSS) and s.get("features"):
+                    features = s["features"]
+                    if isinstance(features, dict):
+                        feature_vec = torch.tensor([list(features.values())], dtype=torch.float32)
+                        action_str = s.get("side", "NO_TRADE")
+                        action_map = {"BUY": 1, "SELL": 2, "NO_TRADE": 0}
+                        action_idx = action_map.get(action_str, 0)
+                        reward = float(s.get("net_pips", 0.0))
+                        rl_samples.append((feature_vec, action_idx, reward))
+
+            # Update RL trainer with recent trades
+            for feature_vec, action_idx, reward in rl_samples:
+                self.rl_trainer.remember(
+                    feature_vec,
+                    None,  # model_predictions
+                    None,  # strategy_votes
+                    action_idx,
+                    reward,
+                    True,
+                )
+
+            # Run RL update
+            rl_report = self.rl_trainer.update()
+            if rl_report.get("loss", 0) > 0:
+                self.nightly_report["meta_controller_rl"] = rl_report
+                self.store.log_event({
+                    "kind": "meta_controller_rl_update",
+                    "policy_loss": rl_report.get("policy_loss", 0),
+                    "value_loss": rl_report.get("value_loss", 0),
+                    "entropy": rl_report.get("entropy", 0),
+                })
+        except Exception as rl_err:
+            self.store.log_event({
+                "kind": "meta_controller_rl_error",
+                "reason": str(rl_err)[:300],
+            })
+
         self._save_state(force=True)
         if report.rolled_back:
             self._alert_once(digest.ALERT_ROLLBACK, report.reason, key=f"rollback|{job_bucket}")
@@ -1691,7 +1829,7 @@ class FusionBot:
     def digest_job(self, at: datetime | None = None) -> str:
         stamp = at or now()
         bucket = stamp.strftime("%Y-%m-%d")
-        if not self.store.claim_job("digest", bucket, runner=self.config.runner):
+        if not self.store.claim_job("digest", bucket, runner=self.config.runner, version=self.config.full_version):
             return ""
 
         today = stamp.strftime("%Y-%m-%d")
@@ -1723,6 +1861,8 @@ class FusionBot:
             runner=self.config.runner,
             alerts=self.store.recent_alerts(limit=50),
             nightly=self.nightly_report,
+            version=self.config.version,
+            full_version=self.config.full_version,
         )
         if self.telegram is not None and self.telegram.configured:
             self.telegram.send(text)
@@ -1755,7 +1895,7 @@ class FusionBot:
             self.alerted_today.add(key)
             return
         self.alerted_today.add(key)
-        self.store.alert(kind, detail, dedupe_key=key)
+        self.store.alert(kind, detail, dedupe_key=key, version=self.config.full_version)
         if notify and self.telegram is not None and self.telegram.configured:
             self.telegram.send(digest.alert_message(kind, detail))
 
@@ -1959,7 +2099,9 @@ class FusionBot:
                     self._ensure_baseline_veto_model(before=sig.entry_time)
                     eff_lr = float(self.config.online_learning_rate)
                     if stl.outcome == charter.LOSS:
-                        eff_lr = min(0.05, eff_lr * 1.35)
+                        multiplier = float(getattr(self.config, "loss_learning_multiplier", 2.0))
+                    cap = float(getattr(self.config, "loss_learning_rate_cap", 0.08))
+                    eff_lr = min(cap, eff_lr * multiplier)
                     step = learning.online_step(
                         self.model,
                         sig.features,
@@ -2043,12 +2185,15 @@ class FusionBot:
             "runtime": runtime_blob,
             "calibration_points": [[point[0], point[1]] for point in self.calibration_points[-2000:]],
             "mistakes": self.mistakes.to_dict(),
+            "version": self.config.version,
+            "feature_version": self.config.feature_version,
+            "model_version": self.config.model_version,
         }
         self.store.save_model_state(payload, pair=self.config.pair)
-        self.store.save_council_weights(self.weights.to_dict(), pair=self.config.pair)
+        self.store.save_council_weights(self.weights.to_dict(), pair=self.config.pair, version=self.config.full_version)
         self.settled_since_save = 0
         if self.provider is not None and hasattr(self.provider, "pool"):
-            self.store.save_key_pool(self.provider.pool.to_dict())
+            self.store.save_key_pool(self.provider.pool.to_dict(), version=self.config.full_version)
 
     def snapshot(self) -> dict:
         calibrator = self.model.calibrator if self.model else None

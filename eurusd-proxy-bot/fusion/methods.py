@@ -35,6 +35,7 @@ from __future__ import annotations
 from typing import Callable
 
 from . import charter
+from . import version as version_mod
 from .domain import Candle, Decision
 
 FAMILY_SMC_ICT = "SMC_ICT"
@@ -5474,3 +5475,8 @@ METHOD_REGISTRY: dict[str, Callable[..., Decision]] = {
 }
 
 assert set(METHOD_REGISTRY) == set(METHOD_MEMBERS) == set(METHOD_PROTOTYPES)
+
+
+def methods_version() -> str:
+    """Return the current system version for methods module."""
+    return version_mod.get_version()

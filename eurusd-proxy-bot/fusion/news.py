@@ -31,10 +31,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from . import version as version_mod
 from .timeutil import format_display_hm, parse_datetime
 
-PRE_RELEASE_MINUTES = 5
-POST_RELEASE_MINUTES = 15
+PRE_RELEASE_MINUTES = 10  # Wider: block 10 min before high-impact releases
+POST_RELEASE_MINUTES = 30  # Wider: block 30 min after high-impact releases
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +43,7 @@ class BlackoutCheck:
     blocked: bool
     event: str = ""
     reason: str = ""
+    version: str = ""
 
 
 def _us_eastern_offset_hours(utc_stamp: datetime) -> int:
@@ -150,6 +152,7 @@ def check_blackout(
                 label,
                 f"News blackout: inside configured {label} window "
                 f"({format_display_hm(start)}–{format_display_hm(end)}).",
+                version_mod.get_version(),
             )
 
     if "USD" in clean_pair and is_nfp_window(
@@ -159,6 +162,7 @@ def check_blackout(
             True,
             "US NFP",
             "News blackout: US Non-Farm Payrolls release window (first Friday 08:30 ET).",
+            version_mod.get_version(),
         )
 
-    return BlackoutCheck(False)
+    return BlackoutCheck(False, version=version_mod.get_version())

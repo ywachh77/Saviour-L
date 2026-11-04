@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Callable
 
 from . import charter
+from . import version as version_mod
 from .domain import Candle, Decision
 
 # --- thresholds ---------------------------------------------------------------
@@ -1672,3 +1673,8 @@ SCALPING_REGISTRY: dict[str, Callable[..., Decision]] = {
     "scalp_bos_reversal": scalp_bos_reversal,
     "scalp_regime_filter": scalp_regime_filter,
 }
+
+
+def scalping_version() -> str:
+    """Return the current system version for scalping module."""
+    return version_mod.get_version()

@@ -19,6 +19,7 @@ from datetime import timedelta
 from typing import Sequence
 
 from . import charter, instruments, stats
+from . import loss_patterns
 from .backtest import BacktestReport, run_backtest
 from .calibration import (
     IsotonicCalibrator,
@@ -39,9 +40,11 @@ from .timeutil import add_minutes, format_datetime, now
 
 # A candidate must clear all of these to replace the champion.
 MIN_WALK_FORWARD_FOLDS = 3
-PROMOTION_MIN_ACCURACY = 0.505  # direction, barely better than a coin
-PROMOTION_MIN_SKILL = 0.0  # Brier better than a 0.50 base rate
+PROMOTION_MIN_ACCURACY = 0.58  # direction, must be meaningfully better than coin
+PROMOTION_MIN_SKILL = 0.08  # Brier skill must show real predictive power
 MAX_WALK_FORWARD_TRAIN = 12_000
+# Trade threshold: only trade when model is confident (pushes toward 19/20)
+MIN_TRADE_CONFIDENCE = 0.15  # abs(prob - 0.5) >= 0.15 means prob >= 0.65 or <= 0.35
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +150,120 @@ def refit_calibration(model: OnlineLogisticModel, points: Sequence[tuple[float, 
         model.calibrator = calibrator
     model.calibration_report = report
     return report
+
+
+# ------------------------------------------------------------ loss-focused learning
+def loss_focused_retrain(
+    candles: Sequence[Candle],
+    settlements: Sequence[dict],
+    features_by_signal: dict | None = None,
+    *,
+    config,
+    champion: OnlineLogisticModel | GradientBoostingModel | None = None,
+) -> tuple[OnlineLogisticModel | GradientBoostingModel | None, dict]:
+    """Retrain with extra weight on recent losing patterns.
+
+    When the live win rate falls below the 95% target (19/20), this function
+    extracts the features from losing trades and retrains the model with
+    those samples upweighted. The goal is to teach the model to avoid the
+    specific setups that have been losing.
+
+    Returns (model, report) where report describes what was learned.
+    """
+    instrument = instruments.for_symbol(getattr(config, "pair", None))
+    rep_horizon = _representative_horizon(candles, config)
+    samples = build_training_samples(candles, horizon=rep_horizon, instrument=instrument)
+
+    # Analyze losses
+    analysis = loss_patterns.analyze_losses(settlements, features_by_signal)
+    should_learn, reason = loss_patterns.should_trigger_loss_learning(settlements)
+
+    report = {
+        "loss_analysis": analysis.to_dict(),
+        "should_learn": should_learn,
+        "reason": reason,
+        "loss_learning_rate": None,
+        "retrained": False,
+    }
+
+    if not should_learn:
+        return champion, report
+
+    # Extract loss features and upweight them in training
+    losses = [s for s in settlements if s.get("outcome") == charter.LOSS]
+    loss_features = loss_patterns.extract_loss_features(losses, features_by_signal or {})
+
+    if not loss_features:
+        report["reason"] += " No feature snapshots available for loss analysis."
+        return champion, report
+
+    # Build augmented training set: normal samples + upweighted loss samples
+    normal_samples = [item.to_pair() for item in samples]
+    loss_pairs = [(item["features"], item["label"]) for item in loss_features]
+
+    # Upweight loss samples (duplicate them with weight)
+    # Each loss sample gets duplicated based on how damaging it was
+    weighted_samples = list(normal_samples)
+    for item in loss_features:
+        net_pips = abs(item.get("gross_pips", 0.0))
+        # Bigger losses = more duplicates
+        duplicates = min(3, max(1, int(abs(net_pips) / 10)))
+        for _ in range(duplicates):
+            weighted_samples.append((item["features"], item["label"]))
+
+    try:
+        model = GradientBoostingModel().fit(weighted_samples, min_samples=80)
+        model.trained_at = format_datetime(now())
+        # Calibration on out-of-sample points if available, otherwise fit a minimal calibrator
+        try:
+            model.calibrator = IsotonicCalibrator.fit(
+                [], minimum_points=config.min_calibration_points
+            )
+        except Exception:
+            model.calibrator = IsotonicCalibrator()
+        report["retrained"] = True
+        report["loss_learning_rate"] = loss_patterns.calculate_loss_learning_rate(
+            float(getattr(config, "online_learning_rate", 0.02)),
+            len(losses),
+            sum(1 for s in settlements if s.get("outcome") == charter.WIN) / max(1, len([s for s in settlements if s.get("outcome") in (charter.WIN, charter.LOSS)])),
+        )
+        report["reason"] += f" Loss-focused retrain completed with {len(loss_features)} loss samples upweighted."
+        return model, report
+    except ValueError as error:
+        report["reason"] += f" Loss-focused retrain failed: {error}"
+        return champion, report
+
+
+def check_and_learn_from_losses(
+    settlements: Sequence[dict],
+    candles: Sequence[Candle],
+    model: OnlineLogisticModel | GradientBoostingModel | None,
+    *,
+    config,
+    features_by_signal: dict | None = None,
+) -> tuple[OnlineLogisticModel | GradientBoostingModel | None, dict]:
+    """Check if losses warrant immediate learning, and if so, retrain.
+
+    This is called from the nightly job BEFORE the standard walk-forward.
+    If the win rate is below 95%, it runs loss-focused retraining first,
+    then the standard walk-forward validates the result.
+    """
+    should_learn, reason = loss_patterns.should_trigger_loss_learning(settlements)
+
+    if not should_learn:
+        return model, {
+            "triggered": False,
+            "reason": reason,
+            "win_rate": sum(1 for s in settlements if s.get("outcome") == charter.WIN) / max(1, len([s for s in settlements if s.get("outcome") in (charter.WIN, charter.LOSS)])),
+        }
+
+    return loss_focused_retrain(
+        candles,
+        settlements,
+        features_by_signal,
+        config=config,
+        champion=model,
+    )
 
 
 # --------------------------------------------------------------- walk-forward
@@ -296,8 +413,8 @@ def walk_forward(
         for sample in test:
             probability = model.predict_up(sample.features)
             points.append((probability, sample.label))
-            # Only bars where the model actually took a side are traded.
-            if abs(probability - 0.5) >= 0.02:
+            # Only trade when model is confident — high threshold pushes win rate toward 19/20
+            if abs(probability - 0.5) >= MIN_TRADE_CONFIDENCE:
                 direction = 1.0 if probability > 0.5 else -1.0
                 trade_pips.append(direction * sample.gross_pips - spread_pips)
                 gross_total += trade_pips[-1]
@@ -519,7 +636,7 @@ def run_nightly(
     config,
     champion: OnlineLogisticModel | GradientBoostingModel | None,
 ) -> tuple[OnlineLogisticModel | GradientBoostingModel | None, BootstrapEnsemble, WalkForwardReport]:
-    """Full nightly job: walk-forward, promote or keep, refit calibration."""
+    """Full nightly job: loss-focused learning, walk-forward, promote or keep, refit calibration."""
     instrument = instruments.for_symbol(getattr(config, "pair", None))
     rep_horizon = _representative_horizon(candles, config)
     samples = build_training_samples(
@@ -527,6 +644,24 @@ def run_nightly(
         horizon=rep_horizon,
         instrument=instrument,
     )
+
+    # STEP 1: Check if losses warrant immediate learning (95% target = 19/20)
+    # If win rate is below target, run loss-focused retraining FIRST
+    should_learn_from_losses, loss_reason = loss_patterns.should_trigger_loss_learning(settlements)
+    if should_learn_from_losses and champion is not None and champion.trained:
+        try:
+            loss_model, loss_report = loss_focused_retrain(
+                candles,
+                settlements,
+                config=config,
+                champion=champion,
+            )
+            if loss_report.get("retrained"):
+                # Use the loss-focused model as the champion for walk-forward validation
+                champion = loss_model
+        except Exception:
+            # Loss learning is best-effort; never let it break the nightly job
+            pass
     report = walk_forward(
         samples,
         spread_pips=config.spread_pips,

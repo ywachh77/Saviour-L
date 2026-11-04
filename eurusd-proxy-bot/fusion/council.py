@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Sequence
 
 from . import charter, strategies
+from . import version as version_mod
 from .domain import Candle, Decision
 from .family_fusion import FamilyFusionEngine, FamilyFusionVerdict
 from .mistakes import MistakeMemory
@@ -33,11 +34,11 @@ TOTAL_LEARNED_MASS_CAP = 0.60
 # Total effective mass cap: keeps prototypes from overwhelming the core gate.
 TOTAL_PROTOTYPE_MASS_CAP = 1.20
 # Net opposing mass that blocks a core signal.
-VETO_MASS = 0.40
+VETO_MASS = 0.25  # Lower: more aggressive council veto for 19/20
 SHRINKAGE = 40.0                  # net / (seen + SHRINKAGE) keeps small samples humble
 # Strategic consensus override: minimum total effective weight for strategic
 # methods to override a core abstention. Requires multiple methods agreeing.
-CONSENSUS_THRESHOLD = 0.50
+CONSENSUS_THRESHOLD = 0.60  # Higher: require stronger consensus to override core
 
 
 @dataclass
@@ -54,6 +55,7 @@ class CouncilWeights:
     seen: dict[str, int] = field(default_factory=dict)
     learned_weights: dict[str, float] = field(default_factory=dict)
     version: int = 1
+    last_system_version: str = ""
 
     def __post_init__(self) -> None:
         for name in strategies.PROTOTYPES:
@@ -79,6 +81,8 @@ class CouncilWeights:
             self.seen[name] = int(self.seen.get(name, 0)) + 1
             self.net[name] = float(self.net.get(name, 0.0)) + (1.0 if side == winning_side else -1.0)
         self.recompute()
+        self.version += 1
+        self.last_system_version = version_mod.get_version()
 
     def recompute(self) -> None:
         """Recompute learned weights. Exploration weight is never touched."""

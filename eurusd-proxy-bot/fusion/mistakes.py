@@ -30,13 +30,14 @@ from dataclasses import dataclass, field
 from typing import Iterable
 
 from . import charter
+from .version import get_version
 
 # Below this the interval is too wide to say anything, however bad the record
-# looks. Twelve losses in a row still passes: that is the point.
-MIN_SAMPLES = 15
+# looks. Ten losses in a row still passes: that is the point.
+MIN_SAMPLES = 10
 # A cap and a decay, so a regime change can clear a stale ban. When a cell
 # fills, both counts are halved rather than frozen at the limit.
-MAX_SAMPLES = 200
+MAX_SAMPLES = 150
 
 # Refuse when even the optimistic end of the interval is below even money.
 BREAK_EVEN = 0.5
@@ -76,6 +77,7 @@ class MistakeMemory:
     streaks: dict[str, int] = field(default_factory=dict)
     reconciled_ids: list[str] = field(default_factory=list)
     version: int = 1
+    last_system_version: str = ""
 
     def observe(self, key: str, won: bool) -> None:
         """Record one settled outcome. ``won`` is gross direction, before cost."""
@@ -98,6 +100,7 @@ class MistakeMemory:
         self.wins[key] = wins
         self.losses[key] = losses
         self.version += 1
+        self.last_system_version = get_version()
 
     def loss_streak(self, key: str) -> int:
         """Consecutive decided losses on this exact regime|session|side cell."""

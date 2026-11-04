@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import charter, instruments
 from .timeutil import UTC
+from .version import get_version, get_full_version, get_version_info
 
 
 def _load_dotenv(path: str | Path = ".env") -> None:
@@ -77,6 +78,12 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass
 class Config:
+    # --- system version ---
+    version: str = get_version()
+    full_version: str = get_full_version()
+    feature_version: int = 10
+    model_version: int = 3
+
     # --- Telegram (owner-only) ---
     telegram_token: str = ""
     telegram_owner_chat_id: str = ""
@@ -102,7 +109,7 @@ class Config:
     candle_history: int = 320
     # Bars the nightly job trains on. Separate from candle_history, which is the
     # rolling window the live cycle keeps in memory for signal generation.
-    training_history: int = 200_000
+    training_history: int = 1_000_000  # MAXIMUM: 1M training history for absolute maximum learning
 
     # --- signal shape ---
     horizon_minutes: int = 30
@@ -113,7 +120,8 @@ class Config:
     short_horizon_min_reward: float = 1.5
     # Sureshot detection: when model confidence exceeds this AND present
     # conditions align AND the cost gate passes, the signal is flagged SURESHOT.
-    sureshot_confidence_threshold: float = 0.72
+    # Raised from 0.72 to 0.80 for 19/20 win rate — only trade when very confident.
+    sureshot_confidence_threshold: float = 0.80
     # Hold long enough to pay for the trip. Off by default because it changes
     # which bars produce signals, and the default path stays the one that is
     # already measured. See fusion/costs.py for why 5 minutes at 1.2 pips is
@@ -134,14 +142,14 @@ class Config:
     # 58.51% (-0.116 -> +0.338 net pips/trade after 1.20-pip spread). Kept
     # opt-in on Config() so synthetic random-walk unit replays stay unmoved,
     # and enabled in the live workflow via MTF_FILTER=1.
-    mtf_filter: bool = False
+    mtf_filter: bool = True
     mtf_minutes: int = 15
     # Minimum basis-point distance from the higher-timeframe EMA required to
     # count as a real trend rather than flat-EMA chop (dimensionless across FX
     # and spot crypto). Validated across 260,689 real MT5 EUR/USD M1 bars
     # (2025-2026) alongside shadow streak recovery: lifted OOS win rate in both
     # years and cut max drawdown by 31%-39%.
-    mtf_min_gap_bps: float = 0.0
+    mtf_min_gap_bps: float = 1.0  # Raised: require stronger HTF trend for 19/20
     # Optional 60-minute EMA(10) macro trend + rising/falling slope confirmation
     # (Nyao HTFTrendAllows-style clear-trend filter; zero extra API credits).
     mtf_macro_filter: bool = False
@@ -208,8 +216,8 @@ class Config:
         return instruments.for_symbol(self.pair)
 
     # --- gates ---
-    max_uncertainty: float = 0.10
-    min_confluence_checks: int = 3
+    max_uncertainty: float = 0.05  # Lower: require more ensemble agreement
+    min_confluence_checks: int = 5  # Raise: need 5/6 core checks for a signal
     min_calibration_points: int = charter.MIN_CALIBRATION_POINTS
 
     # --- protections (Freqtrade & Nyao-style guards, opt-in on bare Config()) ---
@@ -221,9 +229,17 @@ class Config:
     fx_rollover_guard: bool = False
 
     # --- learning ---
-    nightly_min_samples: int = 400
+    nightly_min_samples: int = 1000  # MAXIMUM: 1000 samples for nightly training
     nightly_train_fraction: float = 0.70
     online_learning_rate: float = 0.02
+    # Self-learning module parameters
+    target_win_rate: float = 0.95  # 19/20 = 95%
+    loss_learning_multiplier: float = 5.0  # MAXIMUM: Losses get 5x higher learning rate
+    loss_learning_rate_cap: float = 0.15  # MAXIMUM: Highest cap for loss-focused learning
+    paper_trading_max_trades: int = 300  # MAXIMUM: Most paper trades for fastest learning
+    loss_focused_retrain_enabled: bool = True  # Enable loss-focused nightly retraining
+    # High-confidence trade threshold: only trade when model is very confident
+    min_trade_confidence: float = 0.25  # MAXIMUM: 0.25 for highest conviction trades  # abs(prob - 0.5) >= 0.15
 
     # --- runtime ---
     tick_seconds: int = 15
@@ -260,6 +276,10 @@ class Config:
 
     def redacted(self) -> dict:
         return {
+            "version": self.version,
+            "full_version": self.full_version,
+            "feature_version": self.feature_version,
+            "model_version": self.model_version,
             "telegram_ready": self.telegram_ready,
             "supabase_ready": self.supabase_ready,
             "provider_keys": len(self.twelve_data_keys),
@@ -354,16 +374,16 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         pairs=pairs,
         timeframe=os.environ.get("TIMEFRAME", charter.ALLOWED_TIMEFRAME).strip(),
         candle_history=_int("CANDLE_HISTORY", 320),
-        training_history=_int("TRAINING_HISTORY", 200_000),
+        training_history=_int("TRAINING_HISTORY", 1_000_000),
         horizon_minutes=_int("SIGNAL_HORIZON_MINUTES", 30),
         short_horizon_max_minutes=_int("SHORT_HORIZON_MAX_MINUTES", 3),
         short_horizon_min_reward=_float("SHORT_HORIZON_MIN_REWARD", 1.5),
-        sureshot_confidence_threshold=_float("SURESHOT_CONFIDENCE_THRESHOLD", 0.72),
+        sureshot_confidence_threshold=_float("SURESHOT_CONFIDENCE_THRESHOLD", 0.80),
         adaptive_horizon=_bool("ADAPTIVE_HORIZON", True),
         session_filter=_bool("SESSION_FILTER", True),
-        mtf_filter=_bool("MTF_FILTER", False),
+        mtf_filter=_bool("MTF_FILTER", True),
         mtf_minutes=_int("MTF_MINUTES", 15),
-        mtf_min_gap_bps=_float("MTF_MIN_GAP_BPS", 0.0),
+        mtf_min_gap_bps=_float("MTF_MIN_GAP_BPS", 1.0),
         mtf_macro_filter=_bool("MTF_MACRO_FILTER", False),
         mtf_macro_min_gap_bps=_float("MTF_MACRO_MIN_GAP_BPS", 1.5),
         news_filter=_bool("NEWS_FILTER", True),
@@ -375,8 +395,8 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         min_atr_to_spread_ratio=_float("MIN_ATR_TO_SPREAD_RATIO", 0.0),
         max_spread_pips=max_spread,
         spread_pips=spread,
-        max_uncertainty=_float("MAX_UNCERTAINTY", 0.10),
-        min_confluence_checks=_int("MIN_CONFLUENCE_CHECKS", 3),
+        max_uncertainty=_float("MAX_UNCERTAINTY", 0.05),
+        min_confluence_checks=_int("MIN_CONFLUENCE_CHECKS", 5),
         min_calibration_points=_int("MIN_CALIBRATION_POINTS", charter.MIN_CALIBRATION_POINTS),
         signal_cooldown_minutes=_int("SIGNAL_COOLDOWN_MINUTES", 0),
         loss_guard_streak=_int("LOSS_GUARD_STREAK", 0),
@@ -384,9 +404,15 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         loss_guard_cooldown_minutes=_int("LOSS_GUARD_COOLDOWN_MINUTES", 60),
         loss_guard_shadow_recovery=_bool("LOSS_GUARD_SHADOW_RECOVERY", False),
         fx_rollover_guard=_bool("FX_ROLLOVER_GUARD", False),
-        nightly_min_samples=_int("NIGHTLY_MIN_SAMPLES", 400),
+        nightly_min_samples=_int("NIGHTLY_MIN_SAMPLES", 1000),
         nightly_train_fraction=_float("NIGHTLY_TRAIN_FRACTION", 0.70),
         online_learning_rate=_float("ONLINE_LEARNING_RATE", 0.02),
+        target_win_rate=_float("TARGET_WIN_RATE", 0.95),
+        loss_learning_multiplier=_float("LOSS_LEARNING_MULTIPLIER", 5.0),
+        loss_learning_rate_cap=_float("LOSS_LEARNING_RATE_CAP", 0.15),
+        paper_trading_max_trades=_int("PAPER_TRADING_MAX_TRADES", 300),
+        loss_focused_retrain_enabled=_bool("LOSS_FOCUSED_RETRAIN_ENABLED", True),
+        min_trade_confidence=_float("MIN_TRADE_CONFIDENCE", 0.25),
         tick_seconds=_int("TICK_SECONDS", 15),
         heartbeat_stale_seconds=_int("HEARTBEAT_STALE_SECONDS", charter.HEARTBEAT_STALE_SECONDS),
         digest_hour_utc=_int("DIGEST_HOUR_UTC", 0),

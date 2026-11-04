@@ -45,6 +45,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from . import version as version_mod
+
 ASIA = "ASIA"
 LONDON = "LONDON"
 OVERLAP = "OVERLAP"
@@ -89,15 +91,9 @@ ALLOWED: dict[str, frozenset[str]] = {
     ASIA: frozenset(
         {
             "orbix_confluence",
-            "ml_consensus",
-            "orbix_cadence",
             "range_reversal",
             "scalp_reversion",
             "scalp_pivot_fade",
-            "scalp_vwap_reversion",
-            "scalp_stoch_cross",
-            "smc_liquidity_sweep",
-            "smc_order_block",
             "connors_rsi2_reversion",
             "vwap_sigma_reversion",
         }
@@ -175,8 +171,6 @@ ALLOWED: dict[str, frozenset[str]] = {
     OFF_HOURS: frozenset(
         {
             "orbix_confluence",
-            "ml_consensus",
-            "orbix_cadence",
             "range_reversal",
             "scalp_reversion",
             "scalp_pivot_fade",
@@ -249,3 +243,8 @@ def window_of(session: str) -> tuple[int, int]:
         if name == session:
             return start, end
     return 0, 24  # ROUND_THE_CLOCK spans all 24 hours
+
+
+def session_version() -> str:
+    """Return the current system version for session module."""
+    return version_mod.get_version()

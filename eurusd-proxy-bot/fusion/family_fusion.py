@@ -38,6 +38,7 @@ from itertools import combinations
 from typing import Any, Mapping, Sequence
 
 from . import strategies
+from . import version as version_mod
 from .domain import ModelRead
 from .regime import regime_allows
 from .session import session_allows
@@ -156,6 +157,7 @@ class FamilyFusionVerdict:
     probability_delta: float
     vetoed: bool
     reason: str
+    version: str = ""
 
     @property
     def net_score(self) -> float:
@@ -176,6 +178,7 @@ class FamilyFusionVerdict:
             "probability_delta": round(self.probability_delta, 4),
             "vetoed": self.vetoed,
             "reason": self.reason,
+            "version": self.version,
         }
 
 

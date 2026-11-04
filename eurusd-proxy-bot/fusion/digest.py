@@ -50,8 +50,10 @@ def build_digest(
     runner: str,
     alerts: Sequence[dict],
     nightly: dict | None = None,
+    version: str = "unknown",
+    full_version: str = "unknown",
 ) -> str:
-    lines = [f"FUSION BOT daily digest — {day} ({DISPLAY_TZ_LABEL})", f"Runner: {runner}", ""]
+    lines = [f"FUSION BOT daily digest — {day} ({DISPLAY_TZ_LABEL})", f"Runner: {runner}", f"Version: {full_version}", ""]
 
     sent = sum(1 for row in signals if row.get("delivery_state") == charter.DELIVERY_SENT)
     suppressed = sum(1 for row in signals if row.get("delivery_state") == charter.DELIVERY_SUPPRESSED)
@@ -122,6 +124,7 @@ def build_status(
     last_cycle: dict | None,
     store_errors: Sequence[str],
     system: dict | None = None,
+    version: str = "unknown",
 ) -> str:
     age = heartbeat.heartbeat_age_seconds(heartbeat_row)
     active_pairs = tuple(getattr(config, "active_pairs", None) or (config.pair,))
@@ -132,6 +135,7 @@ def build_status(
     )
     lines = [
         "FUSION BOT status",
+        f"  version: {version}",
         f"  clock: {format_display_datetime(utcnow())}",
         f"  {pair_label} · horizon {config.horizon_minutes}m · runner {runner}",
         f"  signals: {'PAUSED' if paused else 'LIVE'}",

@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 from typing import Sequence
 
+from . import version as version_mod
 from .domain import Candle
 
 
@@ -1132,3 +1133,8 @@ def compute_custom_indicators(candles: Sequence[Candle]) -> list[dict[str, float
         else:
             results[i] = None
     return results
+
+
+def custom_indicators_version() -> str:
+    """Return the current system version for custom_indicators module."""
+    return version_mod.get_version()

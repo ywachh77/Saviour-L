@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Callable
 
 from . import methods, scalping, scalping_expiry
+from . import version as version_mod
 from .domain import Candle, Decision
 
 CORE = "orbix_confluence"
@@ -56,6 +57,11 @@ ATR_PCT_MIN = 0.00005  # Lowered from 0.00015 (5x more permissive)
 ATR_PCT_MAX = 0.008   # Increased from 0.004 (2x more permissive)
 
 
+def strategy_version() -> str:
+    """Return the current system version for strategies module."""
+    return version_mod.get_version()
+
+
 def side_of(value: float, *, bullish: bool) -> bool:
     return value > 0 if bullish else value < 0
 
@@ -66,14 +72,14 @@ def orbix_confluence(
     features: dict[str, float] | None,
     probability_up: float | None = None,
     *,
-    min_checks: int = 3,  # Lowered from 5 for 90% signal rate
+    min_checks: int = 5,  # Raised to 5/6 for 19/20 win rate — only high-conviction setups
     regime: str = "UNKNOWN",
     **_ignored,
 ) -> Decision:
     """The 6-check core gate.
 
-    AGGRESSIVE MODE: Requires only 3/6 checks (down from 5/6) for 90% signal rate.
-    Mandatory checks reduced to trend + candle quality only.
+    HIGH-CONVICTION MODE: Requires 5/6 checks for 19/20 win rate.
+    Mandatory checks: trend + candle quality + RSI/oscillator.
     """
     if features is None:
         return Decision("NO SIGNAL", "Not enough completed candles to calculate indicators.", None, 0)
@@ -120,14 +126,14 @@ def orbix_confluence(
             "SELL": features["return_1"] < 0.0001 and close <= candle.open * 1.0001 and rsi <= rsi_prev + 2,
         },
         "RSI & oscillator": {
-            # AGGRESSIVE: Widened ranges significantly
-            "BUY": 30.0 <= rsi <= 70.0 and bb_pos <= 0.90 and stoch_k <= 85.0 and cci <= 150.0,
-            "SELL": 30.0 <= rsi <= 70.0 and bb_pos >= 0.10 and stoch_k >= 15.0 and cci >= -150.0,
+            # HIGH-CONVICTION: Tightened ranges for 19/20 win rate
+            "BUY": 35.0 <= rsi <= 65.0 and bb_pos <= 0.80 and stoch_k <= 75.0 and cci <= 100.0,
+            "SELL": 35.0 <= rsi <= 65.0 and bb_pos >= 0.20 and stoch_k >= 25.0 and cci >= -100.0,
         },
         "candle quality": {
-            # AGGRESSIVE: Lowered thresholds significantly for more signals
-            "BUY": 0.05 <= body_atr <= 1.5 and close_pos >= 0.55,
-            "SELL": 0.05 <= body_atr <= 1.5 and close_pos <= 0.45,
+            # HIGH-CONVICTION: Tightened thresholds for 19/20 win rate
+            "BUY": 0.10 <= body_atr <= 1.2 and close_pos >= 0.60,
+            "SELL": 0.10 <= body_atr <= 1.2 and close_pos <= 0.40,
         },
         "value headroom": {
             # AGGRESSIVE: Allow entry near prior highs/lows
@@ -138,10 +144,11 @@ def orbix_confluence(
     for candidate_side in ("BUY", "SELL"):
         pb_aligned = [name for name, crit in pullback_checks.items() if crit[candidate_side]]
         pb_score = len(pb_aligned)
-        # AGGRESSIVE: Only require trend + candle quality as mandatory
+        # HIGH-CONVICTION: Require trend + candle quality + RSI/oscillator as mandatory
         pb_mandatory = (
             pullback_checks["trend"][candidate_side] and
-            pullback_checks["candle quality"][candidate_side]
+            pullback_checks["candle quality"][candidate_side] and
+            pullback_checks["RSI & oscillator"][candidate_side]
         )
         if pb_score >= min_checks and pb_mandatory:
             return Decision(

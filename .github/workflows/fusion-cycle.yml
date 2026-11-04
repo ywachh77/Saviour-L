@@ -119,6 +119,7 @@ jobs:
           ADAPTIVE_HORIZON: "1"
           MAX_HORIZON_MINUTES: "120"
           MIN_ATR_TO_SPREAD_RATIO: "0.8"
+          SURESHOT_CONFIDENCE_THRESHOLD: "0.80"
           CANDLE_HISTORY: "750"
           # EUR/USD trades with a spread-to-ATR ratio that requires proper
           # horizon gating so weekends and FX off-hours don't produce signals
@@ -129,7 +130,7 @@ jobs:
           # M1 bars: 5m/15m/60m cascade + anti-climax pullback/reversal gating.
           MTF_FILTER: "1"
           MTF_MINUTES: "15"
-          MTF_MIN_GAP_BPS: "0.5"
+          MTF_MIN_GAP_BPS: "1.0"
           MTF_MACRO_FILTER: "1"
           MTF_MACRO_MIN_GAP_BPS: "0.3"
           NEWS_FILTER: "1"
@@ -137,9 +138,21 @@ jobs:
           LOSS_GUARD_STREAK: "3"
           LOSS_GUARD_SHADOW_RECOVERY: "1"
           FX_ROLLOVER_GUARD: "1"
+          MAX_UNCERTAINTY: "0.05"
+          MIN_CONFLUENCE_CHECKS: "5"
           NEEDLE_ENABLED: "1"
           NEEDLE_TELEMETRY: "0"
           DO_NOT_TRACK: "1"
+          # Self-learning module parameters
+          TARGET_WIN_RATE: "0.95"
+          LOSS_LEARNING_MULTIPLIER: "2.0"
+          LOSS_LEARNING_RATE_CAP: "0.08"
+          PAPER_TRADING_MAX_TRADES: "80"
+          LOSS_FOCUSED_RETRAIN_ENABLED: "1"
+          MIN_TRADE_CONFIDENCE: "0.15"
+          # System version
+          BUILD_TIMESTAMP: ${{ github.event.head_commit.timestamp }}
+          GIT_COMMIT: ${{ github.sha }}
           # Hold the Telegram connection open after the cycle so commands are
           # answered while the container still exists. Twelve minutes of a
           # fifteen-minute interval leaves a gap of about two minutes, which is

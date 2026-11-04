@@ -50,7 +50,7 @@ CCI_PERIOD = 20
 # swing the swing strategies use, because a scalp targets a few pips, not a leg.
 MICRO_PIVOT_BARS = 5
 
-FEATURE_VERSION = 9
+FEATURE_VERSION = 10
 
 # Higher-timeframe context. The feed is one-minute only, so these are resampled
 # from the bars we already hold rather than fetched: five one-minute bars are a
@@ -151,6 +151,27 @@ FEATURE_NAMES = (
     "tick_volume_imbalance",
     "session_velocity_shift",
     "kyle_lambda_proxy",
+    # --- trend persistence (v10) ----------------------------------------
+    # Measures how persistent trends are — a trend that keeps going is more
+    # likely to continue than one that reverses every few bars.
+    "trend_persistence_10",
+    "trend_persistence_20",
+    "trend_reversal_count",
+    # --- momentum acceleration (v10) -----------------------------------
+    # Rate of change of momentum — accelerating momentum is more likely to
+    # continue than decelerating momentum.
+    "momentum_acceleration",
+    "rsi_divergence",
+    # --- volume profile (v10) -------------------------------------------
+    # Volume profile indicators — where volume is concentrated tells us where
+    # the real interest is.
+    "volume_profile_skew",
+    "volume_concentration",
+    # --- higher-timeframe alignment (v10) -------------------------------
+    # Explicit HTF alignment measures — these were previously excluded but
+    # with tighter thresholds they can help filter out counter-trend setups.
+    "htf_alignment_score",
+    "htf_trend_strength",
     # Higher-timeframe context is deliberately NOT here. The tilt is computed
     # and carried as strategy-facing values below (mtf_fast / mtf_slow, plus
     # mtf_bias_* and mtf_gap_*), but it does not enter the model vector:
@@ -233,6 +254,15 @@ FEATURE_LABELS = {
     "tick_volume_imbalance": "Tick volume imbalance proxy",
     "session_velocity_shift": "Session velocity shift",
     "kyle_lambda_proxy": "Kyle's Lambda price impact proxy",
+    "trend_persistence_10": "Trend persistence (10 bars)",
+    "trend_persistence_20": "Trend persistence (20 bars)",
+    "trend_reversal_count": "Trend reversal count (normalized)",
+    "momentum_acceleration": "Momentum acceleration",
+    "rsi_divergence": "RSI divergence signal",
+    "volume_profile_skew": "Volume profile skew",
+    "volume_concentration": "Volume concentration",
+    "htf_alignment_score": "HTF alignment score",
+    "htf_trend_strength": "HTF trend strength",
 }
 
 # How many bars are needed before a feature row is complete.
@@ -581,6 +611,204 @@ def _mtf_gap(item: "mtf.Bias", price: float) -> float:
     if not item.reference:
         return 0.0
     return _safe_ratio(item.close - item.reference, price) * 10000.0
+
+
+def _trend_persistence(closes: list[float], index: int, window: int) -> float:
+    """Measure how persistent a trend is over a window.
+
+    Returns a value between -1 and 1:
+    - 1.0 = perfect uptrend (every bar higher than previous)
+    - -1.0 = perfect downtrend (every bar lower than previous)
+    - 0.0 = no trend (alternating or flat)
+    """
+    if index < window:
+        return 0.0
+    direction_changes = 0
+    total_bars = 0
+    for i in range(index - window + 1, index):
+        if closes[i] > closes[i - 1]:
+            dir_i = 1
+        elif closes[i] < closes[i - 1]:
+            dir_i = -1
+        else:
+            dir_i = 0
+        if i > index - window + 1 and dir_i != 0:
+            if dir_i != prev_dir:
+                direction_changes += 1
+            prev_dir = dir_i
+        total_bars += 1
+    if total_bars == 0:
+        return 0.0
+    persistence = 1.0 - (direction_changes / total_bars)
+    # Sign based on overall direction
+    if closes[index] > closes[index - window]:
+        return persistence
+    elif closes[index] < closes[index - window]:
+        return -persistence
+    return 0.0
+
+
+def _trend_reversal_count(closes: list[float], index: int, window: int) -> float:
+    """Count trend reversals in a window (normalized to [-1, 1])."""
+    if index < window:
+        return 0.0
+    if window < 2:
+        return 0.0
+    reversals = 0
+    direction = 0
+    for i in range(index - window + 1, index + 1):
+        if i == index - window + 1:
+            if closes[i] > closes[i - 1]:
+                direction = 1
+            elif closes[i] < closes[i - 1]:
+                direction = -1
+            continue
+        if direction == 0:
+            if closes[i] > closes[i - 1]:
+                direction = 1
+            elif closes[i] < closes[i - 1]:
+                direction = -1
+            continue
+        new_dir = 0
+        if closes[i] > closes[i - 1]:
+            new_dir = 1
+        elif closes[i] < closes[i - 1]:
+            new_dir = -1
+        if new_dir != 0 and new_dir != direction:
+            reversals += 1
+            direction = new_dir
+    # Normalize: 0 reversals = 1.0 (perfect trend), max reversals = -1.0
+    max_reversals = window // 2
+    if max_reversals == 0:
+        return 1.0
+    normalized = 1.0 - (2.0 * reversals / max_reversals)
+    return max(-1.0, min(1.0, normalized))
+
+
+def _momentum_acceleration(returns: list[float], index: int) -> float:
+    """Rate of change of momentum.
+
+    Positive = accelerating upward, negative = accelerating downward.
+    """
+    if index < 3:
+        return 0.0
+    current_mom = returns[index]
+    prev_mom = returns[index - 1]
+    prev_prev_mom = returns[index - 2]
+    acceleration = (current_mom - prev_mom) - (prev_mom - prev_prev_mom)
+    return max(-1.0, min(1.0, acceleration * 1000.0))
+
+
+def _rsi_divergence(rsi_values: list[float | None], closes: list[float], index: int, window: int) -> float:
+    """RSI divergence: price makes new high but RSI doesn't (bearish), or vice versa.
+
+    Returns a value between -1 and 1:
+    - Positive = bullish divergence (price lower, RSI higher)
+    - Negative = bearish divergence (price higher, RSI lower)
+    """
+    if index < window:
+        return 0.0
+    price_high = max(closes[index - window:index + 1])
+    price_low = min(closes[index - window:index + 1])
+    rsi_high = 0.0
+    rsi_low = 100.0
+    for i in range(index - window, index + 1):
+        if rsi_values[i] is not None:
+            rsi_high = max(rsi_high, rsi_values[i])
+            rsi_low = min(rsi_low, rsi_values[i])
+    if price_high == price_low or rsi_high == rsi_low:
+        return 0.0
+    # Bearish divergence: price at high but RSI not at high
+    if closes[index] >= price_high * 0.99 and rsi_values[index] is not None and rsi_values[index] < rsi_high * 0.95:
+        return -1.0
+    # Bullish divergence: price at low but RSI not at low
+    if closes[index] <= price_low * 1.01 and rsi_values[index] is not None and rsi_values[index] > rsi_low * 1.05:
+        return 1.0
+    return 0.0
+
+
+def _volume_profile_skew(candles: Sequence, index: int, window: int) -> float:
+    """Volume profile skewness over a window.
+
+    Positive = volume concentrated at higher prices (bullish)
+    Negative = volume concentrated at lower prices (bearish)
+    """
+    if index < window:
+        return 0.0
+    weighted_price = 0.0
+    total_volume = 0.0
+    for i in range(index - window + 1, index + 1):
+        volume = float(getattr(candles[i], "volume", 0.0) or 0.0)
+        if volume <= 0:
+            continue
+        price = float(candles[i].close)
+        weighted_price += price * volume
+        total_volume += volume
+    if total_volume == 0:
+        return 0.0
+    vwap = weighted_price / total_volume
+    close = float(candles[index].close)
+    return max(-1.0, min(1.0, (close - vwap) / (close * 0.01)))
+
+
+def _volume_concentration(candles: Sequence, index: int, window: int) -> float:
+    """Volume concentration: how much volume is in the current bar vs the window.
+
+    High concentration = strong interest in current price level.
+    """
+    if index < window:
+        return 0.0
+    current_vol = float(getattr(candles[index], "volume", 0.0) or 0.0)
+    window_vol = 0.0
+    for i in range(index - window + 1, index + 1):
+        window_vol += float(getattr(candles[i], "volume", 0.0) or 0.0)
+    if window_vol == 0:
+        return 0.0
+    return max(0.0, min(1.0, current_vol / window_vol))
+
+
+def _htf_alignment_score(mtf_fast, mtf_slow, mtf_macro, index: int, close: float) -> float:
+    """HTF alignment score: how well all timeframes agree on direction.
+
+    Returns a value between -1 and 1:
+    - 1.0 = all timeframes bullish and aligned
+    - -1.0 = all timeframes bearish and aligned
+    - 0.0 = mixed signals or no data
+    """
+    if index >= len(mtf_fast) or index >= len(mtf_slow) or index >= len(mtf_macro):
+        return 0.0
+    directions = []
+    for mtf_series in (mtf_fast, mtf_slow, mtf_macro):
+        if index < len(mtf_series):
+            mtf_val = mtf_series[index]
+            if mtf_val is not None and hasattr(mtf_val, "direction"):
+                if mtf_val.direction > 0:
+                    directions.append(1)
+                elif mtf_val.direction < 0:
+                    directions.append(-1)
+    if not directions:
+        return 0.0
+    # Score = (bullish - bearish) / total
+    score = (sum(directions) / len(directions))
+    # Reduce score if timeframes disagree
+    if len(set(directions)) > 1:
+        score *= 0.5
+    return score
+
+
+def _htf_trend_strength(mtf_slow, index: int) -> float:
+    """HTF trend strength: absolute value of the HTF gap (normalized).
+
+    Higher = stronger trend, lower = weaker trend.
+    """
+    if index >= len(mtf_slow):
+        return 0.0
+    mtf_val = mtf_slow[index]
+    if mtf_val is None or not hasattr(mtf_val, "gap_bps"):
+        return 0.0
+    gap = abs(float(mtf_val.gap_bps) or 0.0)
+    # Normalize: 10 bps = 1.0, 0 bps = 0.0
+    return max(0.0, min(1.0, gap / 10.0))
 
 
 def compute_features(
@@ -934,6 +1162,19 @@ def compute_features(
             "tick_volume_imbalance": float(custom_row["tick_volume_imbalance"]) if custom_row else 0.0,
             "session_velocity_shift": float(custom_row["session_velocity_shift"]) if custom_row else 0.0,
             "kyle_lambda_proxy": float(custom_row["kyle_lambda_proxy"]) if custom_row else 0.0,
+            # --- trend persistence (v10) ----------------------------------------
+            "trend_persistence_10": _trend_persistence(closes, index, 10),
+            "trend_persistence_20": _trend_persistence(closes, index, 20),
+            "trend_reversal_count": _trend_reversal_count(closes, index, 10),
+            # --- momentum acceleration (v10) -----------------------------------
+            "momentum_acceleration": _momentum_acceleration(returns, index),
+            "rsi_divergence": _rsi_divergence(rsi_values, closes, index, 10),
+            # --- volume profile (v10) -------------------------------------------
+            "volume_profile_skew": _volume_profile_skew(candles, index, 20),
+            "volume_concentration": _volume_concentration(candles, index, 20),
+            # --- higher-timeframe alignment (v10) -------------------------------
+            "htf_alignment_score": _htf_alignment_score(mtf_fast, mtf_slow, mtf_macro, index, candle.close),
+            "htf_trend_strength": _htf_trend_strength(mtf_slow, index),
             # higher-timeframe context
             "mtf_bias_5": float(mtf_fast[index].direction),
             "mtf_gap_5": _mtf_gap(mtf_fast[index], candle.close),

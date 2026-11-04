@@ -346,8 +346,11 @@ class Store:
         return rows
 
     # --------------------------------------------------------------- candles
-    def save_candles(self, candles: Iterable[dict]) -> None:
-        self._write("candles_m1", list(candles), on_conflict="timestamp,pair")
+    def save_candles(self, candles: Iterable[dict], *, version: str = "unknown") -> None:
+        rows = list(candles)
+        for row in rows:
+            row.setdefault("system_version", version)
+        self._write("candles_m1", rows, on_conflict="timestamp,pair")
 
     def oldest_candle(self, pair: str) -> str | None:
         """The earliest bar we hold, or None on an empty table.
@@ -457,9 +460,10 @@ class Store:
         return self._read("model_versions", limit=limit)
 
     # --------------------------------------------------------- council weights
-    def save_council_weights(self, payload: dict, *, pair: str | None = None) -> None:
+    def save_council_weights(self, payload: dict, *, pair: str | None = None, version: str = "unknown") -> None:
         row = dict(payload)
         row["id"] = row.get("id") or self.council_weights_id(pair)
+        row.setdefault("version", version)
         if self.supabase is not None:
             self.supabase.upsert("council_weights", [row], on_conflict="id")
             return
@@ -494,8 +498,9 @@ class Store:
         }
     )
 
-    def log_event(self, event: dict) -> None:
+    def log_event(self, event: dict, *, version: str = "unknown") -> None:
         raw_row = dict(event)
+        raw_row.setdefault("version", version)
         extras = {k: v for k, v in raw_row.items() if k not in self._LEARNING_EVENT_COLUMNS}
         row = {k: v for k, v in raw_row.items() if k in self._LEARNING_EVENT_COLUMNS}
         if extras:
@@ -509,13 +514,13 @@ class Store:
         return self._read("learning_events", limit=limit, order="created_at.desc")
 
     # ------------------------------------------------------------- job slots
-    def claim_job(self, job: str, bucket: str, *, runner: str = "github-actions") -> bool:
+    def claim_job(self, job: str, bucket: str, *, runner: str = "github-actions", version: str = "unknown") -> bool:
         """Idempotency slot. True only for the first caller for (job, bucket)."""
         key = f"{job}|{bucket}"
         if key in self.local._claimed:
             return False
         self.local._remember_claim(key)
-        row = {"job": job, "bucket": bucket, "runner": runner, "created_at": format_datetime(_utcnow())}
+        row = {"job": job, "bucket": bucket, "runner": runner, "version": version, "created_at": format_datetime(_utcnow())}
         if self.supabase is not None:
             # A unique index on (job, bucket) makes the second writer fail.
             before = len(self.supabase.errors)
@@ -540,9 +545,10 @@ class Store:
         return rows[-1] if rows else None
 
     # ------------------------------------------------------------------- keys
-    def save_key_pool(self, payload: dict) -> None:
+    def save_key_pool(self, payload: dict, *, version: str = "unknown") -> None:
         row = dict(payload)
         row["id"] = row.get("id", "keypool")
+        row.setdefault("version", version)
         if self.supabase is not None:
             self.supabase.upsert("api_keys", [row], on_conflict="id")
         else:
@@ -556,8 +562,9 @@ class Store:
         self._write("key_usage", list(rows))
 
     # ----------------------------------------------------------------- outbox
-    def outbox_append(self, row: dict) -> None:
+    def outbox_append(self, row: dict, *, version: str = "unknown") -> None:
         payload = dict(row)
+        payload.setdefault("version", version)
         payload.setdefault("created_at", format_datetime(_utcnow()))
         payload.setdefault("state", "PENDING")
         self._write("outbox", [payload], on_conflict="message_key")
@@ -585,10 +592,10 @@ class Store:
         return self._read("outbox", limit=limit, state="in.(PENDING,UNRESOLVED)")
 
     # ----------------------------------------------------------------- alerts
-    def alert(self, kind: str, message: str, *, dedupe_key: str | None = None) -> None:
+    def alert(self, kind: str, message: str, *, dedupe_key: str | None = None, version: str = "unknown") -> None:
         self._write(
             "alerts",
-            [{"kind": kind, "message": message, "dedupe_key": dedupe_key, "created_at": format_datetime(_utcnow())}],
+            [{"kind": kind, "message": message, "dedupe_key": dedupe_key, "version": version, "created_at": format_datetime(_utcnow())}],
         )
 
     def alert_seen(self, dedupe_key: str) -> bool:
