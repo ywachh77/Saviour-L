@@ -145,9 +145,12 @@ def orbix_confluence(
     # Previously this looped ("BUY", "SELL") and returned on first match,
     # which meant BUY always won when conditions overlapped — causing
     # systematic BUY bias and losses in falling markets.
-    best_side = None
-    best_score = 0
-    best_aligned = []
+    # FIX: Use strict inequality so ties don't favor BUY. When scores are equal,
+    # the side with stronger trend confirmation wins.
+    buy_score = 0
+    sell_score = 0
+    buy_aligned = []
+    sell_aligned = []
     for candidate_side in ("BUY", "SELL"):
         pb_aligned = [name for name, crit in pullback_checks.items() if crit[candidate_side]]
         pb_score = len(pb_aligned)
@@ -158,17 +161,29 @@ def orbix_confluence(
             pullback_checks["RSI & oscillator"][candidate_side]
         )
         if pb_score >= min_checks and pb_mandatory:
-            if pb_score > best_score:
-                best_score = pb_score
-                best_side = candidate_side
-                best_aligned = pb_aligned
-    if best_side is not None:
+            if candidate_side == "BUY":
+                buy_score = pb_score
+                buy_aligned = pb_aligned
+            else:
+                sell_score = pb_score
+                sell_aligned = pb_aligned
+    
+    # Pick the side with higher score. If tied, abstain (no signal).
+    if buy_score > sell_score:
         return Decision(
-            best_side,
-            f"Core {best_score}/6 (aggressive): {', '.join(best_aligned)}. "
+            "BUY",
+            f"Core {buy_score}/6 (aggressive): {', '.join(buy_aligned)}. "
             "Rule score is a count, not a probability.",
             probability_up,
-            best_score,
+            buy_score,
+        )
+    elif sell_score > buy_score:
+        return Decision(
+            "SELL",
+            f"Core {sell_score}/6 (aggressive): {', '.join(sell_aligned)}. "
+            "Rule score is a count, not a probability.",
+            probability_up,
+            sell_score,
         )
 
     # AGGRESSIVE: Add momentum check for more signals
@@ -199,9 +214,11 @@ def orbix_confluence(
         },
     }
     # Same fix as pullback: evaluate both sides, pick the stronger one.
-    best_mom_side = None
-    best_mom_score = 0
-    best_mom_aligned = []
+    # Use separate variables to avoid tie favoring BUY (checked first).
+    mom_buy_score = 0
+    mom_sell_score = 0
+    mom_buy_aligned = []
+    mom_sell_aligned = []
     for candidate_side in ("BUY", "SELL"):
         mom_aligned = [name for name, crit in momentum_checks.items() if crit[candidate_side]]
         mom_score = len(mom_aligned)
@@ -210,17 +227,28 @@ def orbix_confluence(
             momentum_checks["candle direction"][candidate_side]
         )
         if mom_score >= 2 and mom_mandatory:
-            if mom_score > best_mom_score:
-                best_mom_score = mom_score
-                best_mom_side = candidate_side
-                best_mom_aligned = mom_aligned
-    if best_mom_side is not None:
+            if candidate_side == "BUY":
+                mom_buy_score = mom_score
+                mom_buy_aligned = mom_aligned
+            else:
+                mom_sell_score = mom_score
+                mom_sell_aligned = mom_aligned
+    # Pick the side with higher score. If tied, abstain (no signal).
+    if mom_buy_score > mom_sell_score:
         return Decision(
-            best_mom_side,
-            f"Core momentum {best_mom_score}/6 (aggressive): {', '.join(best_mom_aligned)}. "
+            "BUY",
+            f"Core momentum {mom_buy_score}/6 (aggressive): {', '.join(mom_buy_aligned)}. "
             "Rule score is a count, not a probability.",
             probability_up,
-            best_mom_score,
+            mom_buy_score,
+        )
+    elif mom_sell_score > mom_buy_score:
+        return Decision(
+            "SELL",
+            f"Core momentum {mom_sell_score}/6 (aggressive): {', '.join(mom_sell_aligned)}. "
+            "Rule score is a count, not a probability.",
+            probability_up,
+            mom_sell_score,
         )
 
     # 2. Bounded-Macro Stretch Exhaustion Reversal: captures either (a) a
