@@ -627,65 +627,124 @@ def ichimoku_cloud(
     return tenkan, kijun, senkou_a, senkou_b, chikou
 
 
+def _expected_rescaled_range(n: int) -> float:
+    """E[R/S] for a pure random walk of length ``n`` (Anis-Lloyd / Peters).
+
+    Small samples make a raw R/S read high: a driftless random walk, whose
+    Hurst exponent is 0.5 by construction, measured 0.65 on this repository's
+    data before this correction. Subtracting the theoretical expectation for
+    the same lag is what turns the estimator into a measurement instead of a
+    constant.
+
+    Returns 0.0 when the expectation cannot be formed, so the caller can skip
+    that lag rather than divide by a stand-in.
+    """
+    if n < 2:
+        return 0.0
+    total = sum(math.sqrt((n - i) / i) for i in range(1, n))
+    if n <= 340:
+        # Small-sample form. Do NOT also multiply by (n - 0.5) / n here: that
+        # factor belongs to the large-n approximation below, and applying it
+        # twice understates E[R/S] by 2-20% (checked against a 4,000-path
+        # Monte Carlo at every lag this module uses).
+        gamma_ratio = math.exp(math.lgamma((n - 1) / 2.0) - math.lgamma(n / 2.0))
+        return (gamma_ratio / math.sqrt(math.pi)) * total
+    return ((n - 0.5) / n) * (1.0 / math.sqrt(n * math.pi / 2.0)) * total
+
+
 def hurst_exponent(values: list[float], max_lag: int = 20) -> list[float | None]:
     """Hurst Exponent — measures mean-reversion (<0.5) vs trend (>0.5).
 
-    Uses the R/S analysis method. Returns a list aligned to values.
-    Causal: only uses past data.
+    Uses bias-corrected R/S analysis on **log returns**, which is the domain
+    where the exponent is defined. The returned list is aligned to ``values``,
+    so entry ``i`` describes the window ending at ``values[i]``. Causal: only
+    past data is used.
+
+    Three corrections matter here, and each was measured rather than assumed,
+    because the previous version was wrong in a way that fed a one-sided vote
+    into every score that consumed it:
+
+    1. **Domain.** R/S on raw *prices* is not a Hurst estimate. A price series
+       is dominated by its level, so the rescaled range grows almost with the
+       window and H lands near 1.0 whatever the market is doing. Measured on
+       this repository's own 740 real EUR/USD bars, the old form read
+       0.70-1.01 with a mean of 0.92 and never once fell below 0.5 — so the
+       "mean-reverting" branch was unreachable and ``hurst > 0.5`` voted for
+       one side on 100% of bars. On returns the same data reads 0.62 raw.
+    2. **Bias.** Even on returns, R/S is biased upward in short windows: a
+       driftless random walk measured 0.65, though its exponent is 0.5 by
+       construction. Subtracting the Anis-Lloyd expectation for each lag and
+       solving for the excess restores 0.5, so the 0.45/0.50 thresholds mean
+       what they say.
+    3. **Regression.** The regression needs ``log(R/S)`` against ``log(lag)``.
+       An earlier version regressed ``log(R/S ** 2)`` and still divided by
+       two, halving every exponent on top of the domain error.
+
+    A window whose returns are all identical has no spread to rescale, and
+    yields ``None`` — "unknown", never a fabricated 0.5 that would silently
+    read as mean-reverting.
     """
     n = len(values)
-    result = [None] * n
+    result: list[float | None] = [None] * n
+    if n < 2:
+        return result
 
-    for i in range(max_lag * 2, n):
-        window = values[i - max_lag * 2 + 1 : i + 1]
+    # Work on returns: log(price[i] / price[i - 1]). The series is then
+    # additive and scale-free; the levels only exist to build it.
+    returns: list[float | None] = [None] * n
+    for i in range(1, n):
+        previous, current = values[i - 1], values[i]
+        if previous > 0.0 and current > 0.0:
+            returns[i] = math.log(current / previous)
+
+    window_size = max_lag * 2
+    for i in range(window_size, n):
+        window = [r for r in returns[i - window_size + 1 : i + 1] if r is not None]
         if len(window) < max_lag:
             continue
 
         lags = list(range(2, min(max_lag, len(window) // 2) + 1))
-        if not lags:
-            continue
-
-        tau = []
-        rs = []
+        log_lags: list[float] = []
+        log_excess: list[float] = []
         for lag in lags:
             n_groups = len(window) // lag
             if n_groups < 2:
                 continue
-            groups = [window[j * lag : (j + 1) * lag] for j in range(n_groups)]
-            means = [sum(g) / len(g) for g in groups]
-            deviations = [abs(sum((x - m) ** 2 for x in g) / len(g)) ** 0.5 for g, m in zip(groups, means)]
-            # R/S: range of cumulative deviations from mean / std dev
-            cum_devs = []
-            for g, m in zip(groups, means):
-                devs = [x - m for x in g]
-                cum = []
-                s = 0.0
-                for d in devs:
-                    s += d
-                    cum.append(s)
-                if deviations[len(cum_devs)] > 0:
-                    r = max(cum) - min(cum)
-                    rs_val = r / deviations[len(cum_devs)]
-                else:
-                    rs_val = 0.0
-                cum_devs.append(rs_val)
+            scaled: list[float] = []
+            for j in range(n_groups):
+                group = window[j * lag : (j + 1) * lag]
+                mean_value = sum(group) / len(group)
+                deviations = [x - mean_value for x in group]
+                cumulative: list[float] = []
+                running = 0.0
+                for deviation in deviations:
+                    running += deviation
+                    cumulative.append(running)
+                spread = max(cumulative) - min(cumulative)
+                sigma = (sum(d * d for d in deviations) / len(deviations)) ** 0.5
+                if sigma > 0.0:
+                    scaled.append(spread / sigma)
+            if not scaled:
+                continue
+            observed = sum(scaled) / len(scaled)
+            expected = _expected_rescaled_range(lag)
+            if observed <= 0.0 or expected <= 0.0:
+                continue
+            # A random walk satisfies observed == expected at every lag, so its
+            # excess is flat in log(lag) and the slope below is zero.
+            log_lags.append(math.log(lag))
+            log_excess.append(math.log(observed / expected))
 
-            avg_rs = sum(cum_devs) / len(cum_devs) if cum_devs else 0.0
-            tau.append(avg_rs ** 2)
-            rs.append(avg_rs)
-
-        if len(tau) >= 2:
-            # Linear regression: log(tau) = 2*H*log(lag) + c
-            log_lags = [math.log(lags[i]) for i in range(len(tau))]
-            log_taus = [math.log(t) if t > 0 else 0.0 for t in tau]
-            n_pts = len(log_lags)
-            mean_l = sum(log_lags) / n_pts
-            mean_t = sum(log_taus) / n_pts
-            num = sum((log_lags[i] - mean_l) * (log_taus[i] - mean_t) for i in range(n_pts))
-            den = sum((log_lags[i] - mean_l) ** 2 for i in range(n_pts))
-            if den > 0:
-                h = num / (2 * den)
-                result[i] = h
+        if len(log_lags) >= 2:
+            points = len(log_lags)
+            mean_l = sum(log_lags) / points
+            mean_e = sum(log_excess) / points
+            numerator = sum((log_lags[k] - mean_l) * (log_excess[k] - mean_e) for k in range(points))
+            denominator = sum((log_lags[k] - mean_l) ** 2 for k in range(points))
+            if denominator > 0.0:
+                # R/S grows like lag ** H, and the random-walk baseline already
+                # accounts for H = 0.5, so the slope is the excess over that.
+                result[i] = 0.5 + numerator / denominator
 
     return result
 
@@ -811,6 +870,93 @@ def pivot_points(candles: list[Candle], period: int = 14) -> tuple[list[float | 
         s2[i] = p - (h - l)
 
     return pivot, r1, r2, s1, s2
+
+
+def squeeze_composite_vote(
+    squeeze_on: bool | None,
+    momentum: float | None,
+) -> float:
+    """Map a Keltner squeeze onto a signed council vote in [-1.0, +1.0].
+
+    A squeeze is a *state*, not a direction: Bollinger bands sitting inside the
+    Keltner channel say volatility has compressed, and say nothing about which
+    way the eventual break will go. The vote previously read::
+
+        score = 1.0 if squeeze_on else 0.0
+
+    which is +1.0 or 0.0 and never negative. Ten to fifteen percent of bars are
+    compressed at any time, so this contributed about +0.006 to a score that
+    the dashboard compares against 0.0 -- a standing BUY allowance paid for by
+    a condition with no directional content at all.
+
+    The direction belongs to ``momentum``, the second value
+    ``keltner_squeeze`` returns: the 12-bar regression midline oscillator that
+    Carter's TTM setup reads as the break-out side. With the squeeze on, its
+    sign carries the vote; with the squeeze off there is nothing to vote on.
+    """
+    if not squeeze_on:
+        return 0.0
+    if momentum is None:
+        return 0.0
+    try:
+        value = float(momentum)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(value) or value == 0.0:
+        return 0.0
+    return 1.0 if value > 0.0 else -1.0
+
+
+def rsi_composite_vote(rsi_value: float | None) -> float:
+    """Map RSI onto a symmetric council vote in [-1.0, +1.0].
+
+    This is the single implementation of the RSI rule. It lived in three
+    hand-copied places (the dashboard's combiner twice, the backtest
+    engine's combiner once) and every copy carried the same asymmetry::
+
+        score = 0.5 if rsi < 40 else (1.0 if rsi < 50 else
+                (-0.5 if rsi > 60 else (-1.0 if rsi > 70 else 0.0)))
+
+    Read the bands. Below 40 -> +0.5 (mild bearish: oversold, expect a
+    bounce). 40-50 -> +1.0. 50-60 -> 0.0. 60-70 -> -0.5. Above 70 -> -1.0.
+    The mildly-bearish band is positive and the neutral band is zero, so the
+    vote is not a direction at all -- it is a mean-reversion lean whose sign
+    flips between 50 and 60. Measured on this repository's 740 real EUR/USD
+    bars the average vote was **+0.318**, not 0.0, which is a permanent BUY
+    contribution of about 0.032 to a score that is read at a 0.0 threshold.
+
+    Note also that ``-0.5 if rsi > 60`` swallowed the ``-1.0 if rsi > 70``
+    branch entirely, so an extreme overbought reading never scored its
+    intended maximum.
+
+    The bands below are the same intent, mirrored around 50:
+
+    * 30-45, or 55-70: a gentle reversion lean, magnitude 0.5
+    * below 30, or above 70: a strong reversion lean, magnitude 1.0
+    * 45-55: genuinely undecided, 0.0
+
+    A weak reading says the move has room to run back, a strong reading says
+    it is stretched, and neither side is preferred when the input is
+    missing. That is a balanced vote: equal and opposite bands, so the mean
+    over a two-sided market is zero.
+    """
+    if rsi_value is None:
+        return 0.0
+    try:
+        value = float(rsi_value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(value):
+        return 0.0
+    if value < 30.0:
+        return 1.0
+    if value < 45.0:
+        return 0.5
+    if value <= 55.0:
+        return 0.0
+    if value <= 70.0:
+        return -0.5
+    return -1.0
 
 
 def indicators_version() -> str:

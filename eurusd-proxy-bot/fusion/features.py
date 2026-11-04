@@ -576,19 +576,27 @@ def _sar_flipped(candles: Sequence, index: int) -> bool:
 
 
 def _chaikin_oscillator(candles: Sequence, index: int) -> float:
-    """Chaikin Oscillator — volume-weighted momentum.
+    """Chaikin Oscillator — volume-weighted momentum, signed around zero.
 
-    Accumulation/Distribution Line rate of change.
-    Positive = buying pressure, negative = selling pressure.
+    Bullish (positive) = buying pressure, bearish (negative) = selling
+    pressure, measured by where each close sits inside its own range
+    (the close-location value, centred at 0.5) and weighted by volume.
+
+    The centring at 0.5 is the whole point. Without it the close-location
+    value is a number in [0, 1] and the running sum is always positive, so
+    this indicator could never be negative and any rule that asks "did it
+    cross above/below zero" was answered by the sign of the volume, not by
+    the direction of the market. ``quant_chaikin_oscillator`` used to emit
+    BUY on 100% of its signals because of exactly that: its bearish branch
+    required a negative reading that the arithmetic forbade.
     """
     if index < 3:
         return 0.0
-    # Simplified: use volume * price change
     recent = candles[max(0, index - 3) : index + 1]
     accum = 0.0
     for c in recent:
-        cpi = (c.close - c.low) / (c.high - c.low) if c.high != c.low else 0.5
-        accum += cpi * c.volume
+        location = (c.close - c.low) / (c.high - c.low) if c.high != c.low else 0.5
+        accum += (location - 0.5) * c.volume
     return accum
 
 
@@ -1194,7 +1202,17 @@ def compute_features(
             "ema_slow": ema_slow[index],
             "ema_fast_previous": ema_fast[index - 1] if ema_fast[index - 1] is not None else ema_fast[index],
             "ema_slow_previous": ema_slow[index - 1] if ema_slow[index - 1] is not None else ema_slow[index],
+            # Two council members read *_prev while this row published *_previous.
+            # ``features.get("ema_fast_prev", 0.0)`` silently returned 0.0, which
+            # made "fast EMA rising" false and "fast EMA falling" true on every
+            # bar -- quant_ema_slope, quant_ema_separation, smc_trend_follow and
+            # viral_ema_slope_momentum therefore voted SELL far more often than
+            # BUY, or never at all. One canonical name is not enough while the
+            # readers use two, so publish both and let learning judge them.
+            "ema_fast_prev": ema_fast[index - 1] if ema_fast[index - 1] is not None else ema_fast[index],
+            "ema_slow_prev": ema_slow[index - 1] if ema_slow[index - 1] is not None else ema_slow[index],
             "rsi": rsi_values[index],
+            "rsi_14": rsi_values[index],
             "rsi_previous": rsi_previous,
             "rsi_prev": rsi_previous,
             "rsi_velocity": (rsi_values[index] - rsi_previous) if index >= 1 else 0.0,
@@ -1297,6 +1315,34 @@ def compute_features(
             "williams_r_prev": _williams_r(candles, index - 1),
             "sar_below": 1.0 if _sar_below(candles, index) else 0.0,
             "sar_flipped": 1.0 if _sar_flipped(candles, index) else 0.0,
+            # --- completeness for the rule readers -----------------------
+            # Every key below is read by a council member. Notice that none of
+            # them was published before, so ``features.get(key, 0.0)`` handed
+            # those members a constant zero on every bar. A rule comparing a
+            # constant is not a rule: scalp_liquidity_sweep could only ever fire
+            # its wick proxy, scalp_bos_reversal waited on a swing level that
+            # was always 0.0, scalp_order_block's "previous candle was bearish"
+            # was always true, and viral_rsi_divergence compared RSI against a
+            # 0.0 price change. Those members then earned or lost weight from
+            # outcomes their logic never actually examined.
+            "price_change_pct": _safe_ratio(candle.close - candle.open, candle.open) if candle.open else 0.0,
+            "prev_candle_bullish": (
+                1.0
+                if index >= 1 and candles[index - 1].close > candles[index - 1].open
+                else (0.0 if index >= 1 else 0.5)
+            ),
+            "prev_candle_body": (
+                abs(candles[index - 1].close - candles[index - 1].open) if index >= 1 else 0.0
+            ),
+            "swing_high": micro_prior_high,
+            "swing_low": micro_prior_low,
+            "sweep_high": float(prior_high) if candle.high >= prior_high * 1.001 else 0.0,
+            "sweep_low": float(prior_low) if candle.low <= prior_low * 0.999 else 0.0,
+            # The two active FVG flags below are already boolean per bar. The
+            # score form reads them directionally so the bullish and bearish
+            # branches are each reachable, rather than both keyed off one flag.
+            "bullish_fvg_score": float(fvg_bull_vals[index]),
+            "bearish_fvg_score": float(fvg_bear_vals[index]),
             "chaikin_osc": _chaikin_oscillator(candles, index),
             "chaikin_osc_prev": _chaikin_oscillator(candles, index - 1),
             "macd_histogram_prev": _macd_histogram(candles, index - 1),

@@ -49,7 +49,6 @@ SMC_PROTOTYPES = (
     "smc_liquidity_grab",
     "smc_ascending_triangle",
     "smc_bear_flag",
-    "smc_bull_flag",
     "smc_demand_zone",
     "smc_breaker_block",
     "smc_ascending_wedge",
@@ -183,7 +182,6 @@ METHOD_MEMBERS: dict[str, str] = {
     "quant_atr_channel": "ATR channel breakout — break of ATR-based volatility channel",
     "quant_vwap_trend": "VWAP trend — price above VWAP in uptrend, below in downtrend",
     "quant_kelly_sizing": "Kelly criterion — enter when edge exceeds cost threshold",
-    "smc_bull_flag": "SMC bull flag: strong rally, tight consolidation, breakout continuation",
     "viral_macd_histogram": "VIRAL MACD histogram momentum cross: zero-line or rising histogram",
     "quant_parabolic_sar": "QUANT parabolic SAR flip: trend reversal on SAR dot switch",
     "viral_williams_r": "VIRAL Williams %R extreme cross: -80/-20 threshold breakthrough",
@@ -771,6 +769,10 @@ def smc_ascending_triangle(
                 f"Ascending triangle breakout: flat high at {flat_high:.5f} broken with rising lows.",
                 probability_up, 3,
             )
+    # No SELL branch: an ascending triangle is a bullish continuation shape by
+    # definition, and the bearish mirror is smc_descending_triangle. Left as a
+    # one-sided member it could only ever add BUY mass, so it is registered
+    # beside its mirror and neither can speak without the other existing.
     return Decision("NO SIGNAL", "No ascending triangle breakout pattern.", probability_up, 0)
 
 
@@ -1532,6 +1534,9 @@ def smc_bull_flag(
             f"Bull flag breakout: {flag_direction:.1f} strength, tight consolidation broken.",
             probability_up, 3,
         )
+    # No SELL branch here on purpose. This member is the bullish half of a pair
+    # and smc_bear_flag owns the bearish half; before this note, bull_flag was
+    # also registered on its own, where its only reachable outcome was BUY.
     return Decision("NO SIGNAL", "Flag not aligned with candle direction.", probability_up, 0)
 
 
@@ -5407,7 +5412,6 @@ METHOD_REGISTRY: dict[str, Callable[..., Decision]] = {
     "viral_stochastic_trend": viral_stochastic_trend,
     "quant_vwap_trend": quant_vwap_trend,
     "quant_kelly_sizing": quant_kelly_sizing,
-    "smc_bull_flag": smc_bull_flag,
     "viral_macd_histogram": viral_macd_histogram,
     "quant_parabolic_sar": quant_parabolic_sar,
     "viral_williams_r": viral_williams_r,

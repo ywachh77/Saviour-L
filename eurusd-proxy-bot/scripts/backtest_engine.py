@@ -35,7 +35,7 @@ from fusion.gbdt import GradientBoostingModel
 from fusion.indicators import (
     adx, atr, rsi, stochastic, vwap, supertrend_window,
     ichimoku_cloud, aroon, choppiness_index, keltner_squeeze,
-    hurst_exponent,
+    hurst_exponent, rsi_composite_vote, squeeze_composite_vote,
 )
 
 CANDLE_DIR = PROJECT_ROOT / "var" / "real_candles"
@@ -141,20 +141,21 @@ def compute_indicator_votes(candles, index):
     aroon_d = aroon_down[last] if aroon_down else 50.0
     chop_vals = choppiness_index(window, 14)
     chop_val = chop_vals[last] if chop_vals else 50.0
-    squeeze_bools, _ = keltner_squeeze(window, bb_period=20, bb_mult=2.0, kc_period=20, kc_mult=1.5)
+    squeeze_bools, squeeze_mom = keltner_squeeze(window, bb_period=20, bb_mult=2.0, kc_period=20, kc_mult=1.5)
     squeeze_on = bool(squeeze_bools[last]) if squeeze_bools else False
+    squeeze_momentum = squeeze_mom[last] if squeeze_mom else None
     hurst_vals = hurst_exponent(closes, 20)
     hurst_val = hurst_vals[last] if hurst_vals else 0.5
 
     votes = {
         "supertrend": 1.0 if st_direction > 0 else -1.0,
-        "rsi": (0.5 if rsi_val < 40 else (1.0 if rsi_val < 50 else (-0.5 if rsi_val > 60 else (-1.0 if rsi_val > 70 else 0.0)))),
+        "rsi": rsi_composite_vote(rsi_val),
         "stochastic": 1.0 if stoch_val < 20 else (-1.0 if stoch_val > 80 else 0.0),
         "vwap": 1.0 if closes[last] > vwap_val else -1.0,
         "ichimoku": 1.0 if closes[last] > ichimoku_val else -1.0,
         "aroon": 1.0 if aroon_u > 70 else (-1.0 if aroon_d > 70 else 0.0),
         "choppiness": -1.0 if chop_val > 70 else (1.0 if chop_val < 40 else 0.0),
-        "squeeze": 1.0 if squeeze_on else 0.0,
+        "squeeze": squeeze_composite_vote(squeeze_on, squeeze_momentum),
         "hurst": 1.0 if hurst_val > 0.5 else (-1.0 if hurst_val < 0.45 else 0.0),
     }
 
