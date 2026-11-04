@@ -103,8 +103,10 @@ class TestOperatorDashboardAPI(unittest.TestCase):
     def test_strategies_and_runtime_config_toggle(self):
         code, strat = self._get("/api/strategies")
         self.assertEqual(code, 200)
-        self.assertEqual(len(strat["members"]), 133)
-        self.assertEqual(strat["prototype_total"], 132)
+        # 132/131: smc_bull_flag was removed as a one-sided duplicate of
+        # smc_bear_flag's bullish branch. See tests/test_directional_balance.py.
+        self.assertEqual(len(strat["members"]), 132)
+        self.assertEqual(strat["prototype_total"], 131)
 
         code, updated = self._post(
             "/api/config",
