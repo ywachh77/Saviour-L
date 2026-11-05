@@ -553,3 +553,78 @@ So the answer to "I need 19 wins under 20" is:
 
 The block is a property of having looked at 982 windows, not a property of the
 strategy.
+
+---
+
+## 12. `reference/eurusd_m1.py` — a correct implementation of a losing strategy
+
+The uploaded engine is **the honest version of the 19/20 experiment**, and it is
+noticeably better built than most. Verified by `scripts/verify_eurusd_m1.py`:
+
+| check | result |
+|---|---|
+| Causality (truncation test) | **PASS** — 0 mismatches |
+| `net_pips == gross − spread` | **PASS** — 0 wrong of 229 |
+| Break-even formula | **PASS** — +0.050 / 117.20 → 99.9574% |
+| Intrabar ambiguity | 0 of 229 touched both barriers; resolved **stop-first** (conservative) |
+
+**What it does right**, and it is a genuine list:
+
+* Charges the spread on every trade and reports **net** pips, not gross.
+* Chronological train / held-out split, with boundary trades excluded.
+* **Wilson interval** on the win rate and a **bootstrap CI** on expectancy.
+* Reports worst trade, max drawdown, longest losing run.
+* Explicit `safety` block: no martingale, no averaging down, no adding to a
+  loser, no same-candle re-entry, no live execution.
+* **States its own limitations** — including the one that matters: OHLC cannot
+  reveal intrabar order, so it assumes the stop came first.
+* Warns if `tp <= spread`.
+
+That is the discipline this repository has been asking for. The problem is not
+the code. The problem is the geometry it was asked to test.
+
+### The result, and why every number in it is negative
+
+| mode | split | n | win rate | **needed** | margin | net/trade |
+|---|---|---|---|---|---|---|
+| coinflip | train | 1,031 | 99.81% | 99.96% | −0.15pp | −0.177 |
+| coinflip | held out | 902 | 99.67% | 99.96% | −0.29pp | −0.340 |
+| ema | train | 516 | 99.03% | 99.96% | −0.93pp | −1.086 |
+| ema | held out | 740 | 99.59% | 99.96% | −0.36pp | −0.425 |
+| momentum | train | 731 | 99.59% | 99.96% | −0.37pp | −0.431 |
+| momentum | held out | 1,115 | 99.82% | 99.96% | −0.14pp | −0.160 |
+
+The "margin" column is the whole story. The win rate is 99%+ and **it is never
+enough**, because a 1.25 pip target against a 1.20 pip spread leaves **0.05 pips
+of profit per win** — 4% of the spread. A single 116 pip stop-out erases **2,344
+winning trades**. Break-even requires 99.9574%.
+
+### The control that makes the finding airtight
+
+The same engine, three direction rules. One of them is a **coin flip** — a
+deliberate admission that the signal cannot matter at this geometry.
+
+| mode | trades (train) | avg bars held |
+|---|---|---|
+| coinflip | 1,031 | 8.7 |
+| ema | 516 | 18.0 |
+| momentum | 731 | 11.5 |
+
+The EMA rule is stopped out **twice as often** and holds twice as long, yet
+earns nearly the same negative expectancy. **Direction selection changes how
+often you get stopped, not whether you make money.** That is the cleanest
+demonstration in this repository that at this payoff the win rate is a property
+of the barriers, and the barriers do not touch the spread.
+
+### What would make this engine profitable
+
+Not a better signal. Either:
+
+* **`--tp` well above the spread.** At 1.25 pips against 1.20, profit per win is
+  0.05; at 4 pips it is 2.80, and the break-even win rate falls to 50.6% (the
+  expectation is *unchanged*, but the variance and the tail collapse).
+* **`--spread 0.3`.** Profit per win becomes 0.95 pips, break-even 99.2%, and
+  the same trades turn positive.
+
+Run either and re-read the table; the code does not need to change, which is a
+compliment to the code.
