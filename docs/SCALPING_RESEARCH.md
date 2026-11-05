@@ -628,3 +628,42 @@ Not a better signal. Either:
 
 Run either and re-read the table; the code does not need to change, which is a
 compliment to the code.
+
+---
+
+## 13. "At least 18 of 20, with no consecutive loss" — measured
+
+Relaxing 19 to 18 changes the *shape* requirement, not the arithmetic.
+
+**Geometry.** On a driftless walk the win rate is ≈ `sl/(tp+sl)`, so 90%
+requires the stop to be **9× the target**. At `--tp 2.5 --sl 22.5 --spread 1.2`
+(coin-flip direction, 20,000 bars):
+
+| split | trades | win rate | blocks ≥18/20 | ≥18 **and** no back-to-back loss | longest losing run | net/trade |
+|---|---|---|---|---|---|---|
+| train | 1,340 | 93.88% | 1,165 | 1,150 | **3** | −0.230p |
+| held out | 1,354 | 93.72% | 1,184 | 1,155 | **3** | −0.269p |
+
+So ≥18/20 blocks are everywhere — and the run still had a **3-loss streak in
+both halves** and 5–7 back-to-back loss pairs. Average win +1.30p, average loss
+−23.70p, break-even win rate **94.80%** against 93.9% achieved: relaxing the
+target moved the shortfall, it did not close it.
+
+**"No consecutive loss" cannot be a property of a strategy that keeps
+trading.** At a 10% per-trade loss probability, the chance of *never* seeing
+two losses in a row is 83.9% over 20 trades, 40.2% over 100, and **0.01% over
+1,000**. At the measured 6.2% loss rate it is still only 2.6% over 1,000
+trades, with the first back-to-back loss expected around trade ~260. It is a
+statement about a short sample, not a designable guarantee.
+
+The only mechanisms that can *enforce* it are: stop trading permanently after
+the first loss (one loss ever, no strategy), or increase size / hold after a
+loss until it recovers — martingale and averaging down, both forbidden by the
+project charter, and both convert a losing streak into a single catastrophic
+loss rather than removing it.
+
+**What is honestly available:** a 90%-shaped payoff (1:9 barriers) whose
+18-of-20 blocks are common, reported *alongside* −0.23 to −0.27 pips/trade,
+a 94.8% break-even rate, and a longest losing run of 3. The number 18 is a
+dial setting, exactly as 19 was; turning it down buys a lower break-even bar
+(99.96% → 94.80%) but not a positive one.
