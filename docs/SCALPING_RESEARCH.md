@@ -829,3 +829,14 @@ shape as every previous 19/20 measurement (§11, §12). When a real NVIDIA
 key is stored on the deployment host, the identical command re-runs with
 the Qwen supervisor voting, and the two rows (baseline vs approved) become
 the comparison that decides whether the AI adds anything.
+
+**Secret wiring (same day):** the gateway originally read only its
+credential file, so an `NVIDIA_API_KEY` added in Secrets would have been
+invisible. The service now checks the environment secret **every cycle**
+and connects it through the gateway's validate-and-store path; the key
+value is never printed or logged. Verified with a throwaway fake key: the
+connection attempt is detected and fails gracefully in this sandbox
+(NVIDIA hosts unreachable here), the fake key is stored nowhere, and the
+service continues in baseline mode. On a host with NVIDIA reachability,
+adding the secret named exactly **`NVIDIA_API_KEY`** is the only step
+needed — the already-running 24/7 service connects on its next cycle.

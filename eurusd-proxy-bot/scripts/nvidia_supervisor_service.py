@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import signal
 import sys
 import time
@@ -110,14 +111,47 @@ def summarise(name: str, nets: list[float], tp: float, sl: float, spread: float)
 # --------------------------------------------------------------------------
 
 def get_gateway():
-    """Auto-load stored credentials via the existing gateway. Never raises."""
+    """Load the gateway: stored credentials first, then the env secret.
+
+    Two credential sources, in order:
+      1. the gateway credential store (a key connected through the app);
+      2. the ``NVIDIA_API_KEY`` environment secret (e.g. added in the
+         host's Secrets / env settings). It is connected through the
+         gateway's normal validate-and-store path. The key value is never
+         printed or logged -- only whether the connection succeeded.
+
+    Never raises: the gateway is optional infrastructure and the service
+    must keep cycling (in baseline mode) without it.
+    """
+    gateway = None
     try:
         from fusion.ai_gateway import initialize_ai_gateway
 
-        return initialize_ai_gateway(auto_connect=True)
+        gateway = initialize_ai_gateway(auto_connect=True)
     except Exception as exc:  # gateway is optional infrastructure
         print(f"[nvidia-service] gateway unavailable: {exc}")
-        return None
+
+    env_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+    if env_key:
+        try:
+            from fusion.ai_gateway import AIGateway, CredentialStore, ModelRegistry
+
+            if gateway is None:
+                gateway = AIGateway(registry=ModelRegistry(),
+                                    credential_store=CredentialStore())
+            if not gateway.credentials.has_credential("nvidia_nim"):
+                result = gateway.connect("nvidia_nim", env_key)
+                if result.get("ok"):
+                    print("[nvidia-service] NVIDIA connected from "
+                          "NVIDIA_API_KEY secret "
+                          f"({result.get('models_discovered', 0)} models)")
+                else:
+                    print("[nvidia-service] NVIDIA_API_KEY present but "
+                          "connection failed: "
+                          f"{result.get('error', 'unknown error')}")
+        except Exception as exc:
+            print(f"[nvidia-service] env-secret connect failed: {exc}")
+    return gateway
 
 
 def pick_model(gateway) -> str | None:
