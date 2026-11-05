@@ -460,11 +460,13 @@ def _descending_flat_low(candles: Sequence, index: int) -> float:
     if index < 20:
         return 0.0
     recent = candles[max(0, index - 20) : index + 1]
-    lows = [c.low for c in recent]
-    low_val = min(lows)
-    # Count touches near the low (within 10% of range)
-    tol = 0.0001
-    touches = sum(1 for c in recent if abs(c.low - low_val) <= tol)
+    low_val = min(c.low for c in recent)
+    # The minimum of a window is always touched by at least one candle, so
+    # ``touches >= 2`` was satisfied by a single touch plus the bar that made
+    # the low -- which is why this returned a level on 60.8% of bars. A real
+    # support level is touched by DIFFERENT candles at roughly the same price.
+    tolerance = max(low_val * 1e-5, 1e-6)
+    touches = sum(1 for c in recent if c.low - low_val <= tolerance)
     if touches >= 2:
         return low_val
     return 0.0
@@ -480,6 +482,87 @@ def _descending_lower_high(candles: Sequence, index: int) -> float:
         return 0.0
     recent = candles[max(0, index - 10) : index + 1]
     return max(c.high for c in recent)
+
+
+def _reference_level(candles: Sequence, index: int, window: int = 20) -> float:
+    """Higher-timeframe range top, and its lower mirror -- a trusted S/R level.
+
+    The triangle members need a level the market has actually met more than
+    once, which is what makes a triangle a triangle. The 20-bar extreme is not
+    that: it is a level price crosses on the way through.
+    """
+    if index < window:
+        return 0.0
+    prior = candles[index - window : index]
+    if not prior:
+        return 0.0
+    return (max(item.high for item in prior) + min(item.low for item in prior)) / 2.0
+
+
+def _wedge_converging(candles: Sequence, index: int, window: int = 20) -> bool:
+    """True when the window's highs and lows are both compressing.
+
+    Measured as the range of the recent third against the range of the earlier
+    two thirds: a wedge narrows. A range that is merely broken is not a wedge,
+    and treating it as one is how four separate members ended up casting the
+    same vote.
+    """
+    if index < window:
+        return False
+    prior = candles[index - window : index]
+    third = max(2, len(prior) // 3)
+    early = prior[: len(prior) - third]
+    late = prior[len(prior) - third :]
+    if not early or not late:
+        return False
+    early_range = max(item.high for item in early) - min(item.low for item in early)
+    late_range = max(item.high for item in late) - min(item.low for item in late)
+    if early_range <= 0:
+        return False
+    return late_range < early_range * 0.75
+
+
+def _ascending_flat_high(candles: Sequence, index: int, window: int = 20) -> float:
+    """Resistance that price has tested and failed to clear, at least twice.
+
+    Returns 0.0 when the highs are still rising, because rising highs are not
+    resistance -- they are an uptrend. That distinction is the whole difference
+    between an ascension-triangle rule and a blind "new high" rule.
+    """
+    if index < window:
+        return 0.0
+    prior = candles[index - window : index]
+    peak = max(item.high for item in prior)
+    tolerance = max(peak * 1e-5, 1e-6)
+    touches = sum(1 for item in prior if peak - item.high <= tolerance)
+    if touches < 2:
+        return 0.0
+    # The highs must be flat: the older half must not be materially lower than
+    # the newer half, which would mean the level is being ascended rather than
+    # tested.
+    first = [item.high for item in prior[: window // 2]]
+    if max(first) < peak - tolerance:
+        return 0.0
+    return float(peak)
+
+
+def _ascending_rising_low(candles: Sequence, index: int, window: int = 20) -> float:
+    """A genuinely rising low sequence in the last three swings.
+
+    Older definitions returned the minimum low over ten bars, which rises
+    whenever price merely drifts up -- true on 98.5% of bars. This requires an
+    actual higher-low structure, or returns 0.0.
+    """
+    if index < window:
+        return 0.0
+    prior = candles[index - window : index]
+    third = max(1, len(prior) // 3)
+    first_low = min(item.low for item in prior[:third])
+    mid_low = min(item.low for item in prior[third : 2 * third])
+    last_low = min(item.low for item in prior[2 * third :])
+    if first_low < mid_low < last_low:
+        return float(last_low)
+    return 0.0
 
 
 def _win_probability(rsi_vals: list, closes: list, index: int) -> float:
@@ -1278,9 +1361,20 @@ def compute_features(
             "breakout_low": float(prior_low) if candle.close < prior_low else 0.0,
             "liquidity_swept_low": float(prior_low) if candle.low <= prior_low * 0.999 else 0.0,
             "liquidity_swept_high": float(prior_high) if candle.high >= prior_high * 1.001 else 0.0,
-            "triangle_flat_high": float(prior_high),
-            "triangle_rising_low": float(min(item.low for item in candles[index - 10:index])) if len(candles) >= 20 else 0.0,
-            "triangle_breakout": 1.0 if candle.close > prior_high else 0.0,
+            # Triangle structure. These used to be ``prior_high`` (always
+            # true, it is simply the 20-bar high) and a 10-bar minimum low
+            # (true on 98.5% of bars), so ``smc_ascending_triangle`` fired on
+            # any close above the recent high and, having only a BUY branch,
+            # produced 259 BUYs and zero SELLs. Both conditions are now real:
+            # a level tested at least twice, and a higher-low sequence.
+            "triangle_flat_high": _ascending_flat_high(candles, index),
+            "triangle_rising_low": _ascending_rising_low(candles, index),
+            "triangle_breakout": (
+                1.0
+                if _ascending_flat_high(candles, index) > 0
+                and candle.close > _ascending_flat_high(candles, index)
+                else 0.0
+            ),
             "rsi_divergence": _rsi_divergence_score(rsi_values, closes, index),
             "bb_position": _safe_ratio(candle.close - band_mid, band_width, 0.5) if band_width > 0 else 0.5,
             "bb_width": _safe_ratio(band_width, candle.close),
@@ -1305,8 +1399,25 @@ def compute_features(
             "volume_poc": 1.0 if candle.volume > avg_volume * 1.5 else 0.0,
             "poc_price": _poc_price(candles, index),
             "wick_rejection": _wick_rejection(candle),
-            "wedge_breakdown": 1.0 if candle.close < prior_low else 0.0,
-            "wedge_breakup": 1.0 if candle.close > prior_high else 0.0,
+            # A wedge is a CONVERGING pattern: rising support and rising
+            # resistance closing on each other. These two keys used to be
+            # ``close > prior_high`` and ``close < prior_low`` -- identical to
+            # ``breakout_high`` and ``breakout_low`` -- so smc_ascending_wedge
+            # was bit-for-bit the same signal as ``breakout``,
+            # ``quant_donchian_breakout`` and ``scalp_breakout_retest``, in
+            # every direction, on every bar. Four members, one rule, four
+            # votes. They now require the two boundary lines to actually be
+            # converging, so a plain range breakout no longer counts.
+            "wedge_breakdown": (
+                1.0
+                if _wedge_converging(candles, index) and candle.close < prior_low
+                else 0.0
+            ),
+            "wedge_breakup": (
+                1.0
+                if _wedge_converging(candles, index) and candle.close > prior_high
+                else 0.0
+            ),
             # Features for descending triangle / Kelly sizing
             "descending_flat_low": _descending_flat_low(candles, index),
             "descending_lower_high": _descending_lower_high(candles, index),

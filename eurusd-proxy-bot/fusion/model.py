@@ -75,7 +75,17 @@ class OnlineLogisticModel:
 
     @property
     def compatible(self) -> bool:
-        return self.feature_version == FEATURE_VERSION and tuple(self.feature_names) == FEATURE_NAMES
+        """True when this model's inputs are the ones in front of it.
+
+        A model trained on FEATURE_NAMES is compatible with the standard feature
+        vector; a model that declares its own (superset) input set is compatible
+        with anything that contains those names. Both cases are legitimate; the
+        one that is not is a version mismatch.
+        """
+        if self.feature_version != FEATURE_VERSION:
+            return False
+        names = tuple(self.feature_names)
+        return names == FEATURE_NAMES or set(FEATURE_NAMES).issubset(set(names))
 
     # ------------------------------------------------------------------ fitting
     def fit(
@@ -96,7 +106,7 @@ class OnlineLogisticModel:
         if len(rows) < min_samples:
             raise ValueError(f"At least {min_samples} labelled bars are needed to train (got {len(rows)})")
 
-        vectors = [model_vector(features) for features, _ in rows]
+        vectors = [[float(features[name]) for name in self.feature_names] for features, _ in rows]
         labels = [float(label) for _, label in rows]
 
         # Scalers come from the training portion only, so the validation tail
@@ -195,7 +205,13 @@ class OnlineLogisticModel:
         return result
 
     def _vector(self, features: dict[str, float]) -> list[float]:
-        return self._standardise(model_vector(features))
+        # The declared feature_names, not the global FEATURE_NAMES: a model may
+        # legitimately be fitted on a superset or a subset (the single engine in
+        # fusion/oracle.py trains on features + the council panel). Reading the
+        # global tuple here made any such model crash at inference with an
+        # index error, which is exactly the kind of coupling that keeps a system
+        # stuck at "one model shape".
+        return self._standardise([float(features[name]) for name in self.feature_names])
 
     def predict_up(self, features: dict[str, float]) -> float:
         if not self.trained:

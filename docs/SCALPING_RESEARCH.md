@@ -267,3 +267,110 @@ Not "19 of every 20 win". Instead, on a rolling block of twenty trades:
 
 Those three are answerable, falsifiable, and they are what the ledger, the
 Wilson interval and the walk-forward replay already compute.
+
+---
+
+## 8. One engine instead of 132, and the blind-long defect
+
+### The defect, measured
+
+`scripts/direction_audit.py` evaluates every member on identical bars and counts
+which way it points. Two findings, both defects:
+
+**One member was structurally blind.** `smc_ascending_triangle` produced **259
+BUYs and 0 SELLs** — 87% of them aligned with the current trend. Its two "pattern"
+conditions were:
+
+| condition | what it actually read | true on |
+|---|---|---|
+| flat resistance | `triangle_flat_high` = the 20-bar **high** | **98.5%** of bars |
+| rising lows | `triangle_rising_low` = the 10-bar **minimum low** | **98.5%** of bars |
+
+So "ascending triangle breakout" meant "close above the recent high" — a trend
+confirmation with no opposite. The bearish mirror had the same class of bug:
+`descending_flat_low` accepted a single touch, and the minimum of a window is
+always touched once, so it returned a level on **60.8%** of bars and a breakdown
+on **0%**. It has never fired, in either direction, on any data.
+
+Fixed: a flat high now requires a level tested at least twice with flat highs and
+a genuine higher-low sequence (7.0% and 21.4% of bars); support requires a second
+touch from a different candle (8.7%).
+
+**Four members were one rule.** `breakout`, `quant_donchian_breakout`,
+`scalp_breakout_retest` and `smc_ascending_wedge` emitted *identical* signals bar
+for bar, in both directions. The wedge's `wedge_breakup`/`wedge_breakdown` were
+just `close > prior_high` / `close < prior_low`, the same as a plain breakout.
+Four votes, one opinion. The wedge now requires the boundary lines to actually
+converge; the remaining three are declared as a duplicate group and cast one vote.
+
+### Was it "blindly following the trend"? Largely, yes
+
+For every member: `trend%` is how often its signal agrees with the *current*
+trend, `next%` how often it agrees with the *next* bar. The gap is the amount by
+which it is describing the past rather than forecasting the future.
+
+| member | trend% | next% | gap |
+|---|---|---|---|
+| `smc_ascending_triangle` | 86.9% | 55.2% | +31.7 |
+| `ema_ribbon_pullback` | 98.5% | 43.9% | **+54.6** |
+| `quant_adx_threshold` | 90.2% | 51.2% | +39.0 |
+| `viral_rsi_trend` | 90.1% | 49.8% | +40.3 |
+| **median member** | **77%** | **50.5%** | **+26** |
+
+The council's median member is trend-aligned 77% of the time and right about the
+*next* move 50.5% of the time. A majority vote of that is a trend echo — which is
+both why it loses to the spread and why it looked BUY-heavy in an uptrend.
+
+### The single engine
+
+`fusion/oracle.py` keeps all 132 members as **evidence, not voters**:
+
+```
+94 features (incl. microstructure)  +  12 panel inputs (per-family stances,
+                                        net, agreement, participation,
+                                        dispersion, trend gap)
+                    -> one logistic model -> one probability -> one decision
+```
+
+Members are collapsed three ways so an opinion cannot be counted twice: identical
+rules fold into one (`DUPLICATE_GROUPS`), members aggregate to their family, and
+an abstention is not a neutral vote. Wired into `FusionEngine.decide(..., oracle=)`,
+the engine's read becomes the verdict — the council is consulted, never obeyed.
+
+Measured on 11,382 bars, held out on paths the model never trained on:
+
+| candidate | accuracy | 95% interval | net/trade | BUY share |
+|---|---|---|---|---|
+| always long | 51.1% | 49.8–52.4 | −0.88 pips | 100% |
+| **council majority vote** | 48.7% | 47.4–50.0 | −1.38 | 50% |
+| **one engine, raw call** | **52.7%** | 51.4–54.0 | −0.61 | 49% |
+| one engine, at cost floor | 53.6% | 52.0–55.2 | −0.46 | 48% |
+
+Three things to read carefully:
+
+1. The engine beats the council by **4 points of accuracy and 0.8 pips a trade**.
+   That is a real improvement in ranking, and it is the honest justification for
+   replacing the vote.
+2. It still loses to the spread, because 53.6% is short of the **59.9%** a 7.35 pip
+   payoff at 1.2 pips demands. One engine is a better engine; it is not a licence
+   to claim a profit. §7 explains why no filter closes that gap and what would.
+3. A **label-shuffle control** is part of the test suite: scramble the training
+   labels and the engine's accuracy must fall to ~50%. It does (50.8%). Without
+   that control, the 52.7% figure above would not mean anything.
+
+Two bugs in the engine itself were caught by tests while writing this, both of
+the same kind — an asymmetry that manufactures a directional bias:
+
+* direction was first taken from the *calibrated* probability. Isotonic
+  calibration fitted on a tail whose base rate is 46–52% tops out below 0.5, so
+  "calibrated ≥ 0.5" could never fire: on a sample rising 48.6% of the time the
+  engine called BUY on 8.4% of bars.
+* taking it from the *raw* score was no better: the logistic intercept settles
+  wherever the data says, and drifted to bias −0.374, putting the entire score
+  distribution below 0.5.
+
+Direction is now anchored to the **median raw score**, which is two-sided by
+construction — the engine expresses a *relative* view, which is all an
+uncalibrated score can honestly express, and the cost floor decides whether that
+view is worth money. Tested by flipping the market's own drift: 15% BUY on a
+falling sample, 61% BUY on a rising one.

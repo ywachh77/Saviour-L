@@ -750,8 +750,17 @@ def smc_ascending_triangle(
 ) -> Decision:
     """Ascending Triangle Breakout — flat resistance, rising lows, then breakout.
 
-    Classic bullish continuation pattern. Requires: flat highs (resistance),
-    rising lows (higher lows), and a breakout above the resistance line.
+    Classic bullish continuation pattern: a resistance level tested at least
+    twice, a higher-low sequence beneath it, and a close through the level.
+
+    Those three conditions are genuinely rare (7.0% of bars test a flat high,
+    21.4% show a higher-low sequence, 0.35% break out), which is what makes
+    this a pattern rather than a trend confirmation. An earlier version read
+    ``triangle_flat_high`` straight off the 20-bar high -- always true -- and
+    ``triangle_rising_low`` off the 10-bar minimum low -- true on 98.5% of
+    bars -- so this member fired on every close above the recent high and,
+    having only a BUY branch, produced 259 BUYs and zero SELLs. See
+    ``scripts/direction_audit.py``.
     """
     blocked = _cost_gate(features, spread_pips)
     if blocked:
@@ -770,9 +779,11 @@ def smc_ascending_triangle(
                 probability_up, 3,
             )
     # No SELL branch: an ascending triangle is a bullish continuation shape by
-    # definition, and the bearish mirror is smc_descending_triangle. Left as a
-    # one-sided member it could only ever add BUY mass, so it is registered
-    # beside its mirror and neither can speak without the other existing.
+    # definition, and the bearish mirror is smc_descending_triangle, which is
+    # registered beside it. Being one-sided is only safe because the mirror
+    # exists and because the pattern is now selective; a one-sided member whose
+    # trigger is always true is a permanent BUY vote, which is exactly what
+    # this one used to be.
     return Decision("NO SIGNAL", "No ascending triangle breakout pattern.", probability_up, 0)
 
 
@@ -1316,8 +1327,13 @@ def smc_descending_triangle(
 ) -> Decision:
     """Descending Triangle — flat support + lower highs, bearish breakout.
 
-    Classic bearish continuation pattern. Flat support (demand zone) with
-    decreasing rallies (lower highs). Break below support = SELL.
+    Classic bearish continuation pattern: support tested at least twice, a
+    lower-high sequence above it, and a close through the support.
+
+    The support test matters. ``_descending_flat_low`` used to accept one touch
+    (the window minimum is always touched once), so it handed back a level on
+    60.8% of bars; it now requires a genuine second touch and returns a level
+    on 8.7%. Same for the ascending member -- see ``scripts/direction_audit.py``.
     """
     blocked = _cost_gate(features, spread_pips)
     if blocked:
