@@ -476,3 +476,80 @@ config — nothing read it — and is now documented as such.
 Pinned by `tests/test_loss_streaks.py` (15 tests), including the streak
 probabilities above, so that nobody "fixes" consecutive losses by suppressing the
 counter instead of raising the hit rate.
+
+---
+
+## 11. The uploaded strategy, measured
+
+`reference/eurusd_strategy.py` (the project owner's file, kept **unmodified**),
+analysed by `scripts/the_file_edge_study.py`. Seven samples: the 740 real bars
+plus 6 zero-drift random walks of 4,000 bars each.
+
+The file has **no ADX and no cost model**. ADX appears below only as a
+*conditioning* variable — when its signals work, not how they are formed.
+
+### It loses on both kinds of data
+
+| threshold | expiry | trades | gross win% | net win% | net pips |
+|---|---|---|---|---|---|
+| 65 | 1m | 330 | 50.0% | 30.6% | −437 |
+| 65 | 5m | 330 | 47.9% | 38.2% | −481 |
+| 65 | 15m | 330 | 41.5% | 34.5% | −855 |
+| **80** | any | **1** | — | — | −4 |
+
+Pooled over all seven samples: **2,205 trades, 40.6% net win rate, −1.29 pips
+per trade.** The gross rate is 41–50%; the spread removes the rest. The default
+threshold of 80 produces **one trade in 20,000 bars**, which is the score-cliff
+problem from §10 of the file review.
+
+On the real bars alone, expiry 15m is the one positive cell (+67 pips over 116
+trades) — one cell out of seven, on one day. It is not a finding.
+
+### Where its signals win and lose: nothing survives
+
+| condition | best bucket | net win% | vs base | p |
+|---|---|---|---|---|
+| RSI | 30–50 | 41.6% | +1.0% | 0.55 |
+| ADX | 25–35 | 43.5% | +2.9% | 0.18 |
+| ATR | mid | 43.0% | +2.4% | 0.29 |
+| EMA slope | falling | 44.8% | +3.6% | 0.23 |
+| Close in range | low | 44.0% | +2.8% | 0.32 |
+
+**Survives multiple-comparison correction: none.** The base rate is 40.6%, so
+every bucket sits within a few points of it and none is distinguishable from the
+others. Notably, the earlier "ADX < 20 is strongly bullish" result from §10
+**does not appear here** (ADX < 20 is −1.4 points) — further evidence that the §10
+result was one trending session, not a regime effect.
+
+Direction balance is fine: 200 BUY / 130 SELL. It is not blind-long.
+
+### The 19/20 question, answered
+
+Every expiry was searched in-sample across all samples (chronological half for
+tuning, untouched half for testing):
+
+| expiry | trades | blocks of 20 | best block | 19+ blocks | net/trade |
+|---|---|---|---|---|---|
+| 1m | 1,130 | 997 | 13 | 0 | −1.15 |
+| 3m | 1,126 | 993 | 14 | 0 | −1.34 |
+| 5m | 1,123 | 990 | 14 | 0 | −1.41 |
+| 10m | 1,117 | 984 | 16 | 0 | −1.47 |
+| **15m** | 1,115 | 982 | **19** | **1** | −1.51 |
+
+A single 19/20 block appears — at 15-minute expiry, out of **982 overlapping
+windows**, on data where the strategy loses 1.51 pips a trade. On the held-out
+half that same parameter gives: **best 17/20, zero 19+ blocks, −1.97 pips a
+trade.**
+
+So the answer to "I need 19 wins under 20" is:
+
+* a 19/20 block **can be found by searching** — one exists here, in ~6,000 windows
+  of overlapping data, on a strategy that loses money;
+* it **does not survive the search being over.** Held out: 17/20 and losing
+  twice as much per trade;
+* on a fair coin, 19-of-20 occurs with probability **21/2²⁰ ≈ 2.0e-05 per block** —
+  across 982 overlapping windows you would expect it to appear now and then
+  without any edge at all. That is exactly what happened.
+
+The block is a property of having looked at 982 windows, not a property of the
+strategy.
