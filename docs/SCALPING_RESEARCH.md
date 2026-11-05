@@ -760,3 +760,40 @@ fails gate 2 in all six (−0.12 to −0.68 pips/trade). Closing gate 2 requires
 at tp 10 where +1.8pp would suffice but the floor cannot yet be certified.
 That tension — floor reliability versus edge required — is now the stated
 shape of the problem.
+
+---
+
+## 16. Supervisor fine-tune: plan, and why the data comes first
+
+Agreed direction: fine-tune the uploaded LLM as a **supervisor** — it sits
+above the barrier engine and answers APPROVE / VETO on each candidate signal,
+seeing only signal-bar information. `scripts/build_supervisor_dataset.py`
+builds the training data with the correct labels: a candidate is APPROVE iff
+taking it would have won **net of spread** under the engine's own rules
+(next-bar-open entry, stop-first, non-overlapping candidates).
+
+Measured on the repo's real candles (740 bars, spread 1.2):
+
+| geometry | labelled trades | train / held out | approve-all net |
+|---|---|---|---|
+| tp 3 / sl 17 | **33** | 16 / 17 | −11.2p / +10.6p |
+| tp 10 / sl 56.7 | **4** | 2 / 2 | +17.6p / +17.6p |
+
+This settles the sequencing: **33 examples cannot fine-tune anything.** A
+model trained on them would memorise 33 trades and report whatever the
+memorisation implies. The dataset is, however, exactly the right shape to
+*e*valuate a supervisor later (does it beat approve-all on held-out trades?).
+
+Blocking requirements before any fine-tune runs:
+
+1. **The model upload.** Not yet received. Needed: full weights
+   (safetensors), `config.json`, and tokenizer files. A GGUF file cannot be
+   fine-tuned (inference-only format). This sandbox has **no GPU**, so CPU
+   LoRA is realistic only for small models (≤ ~1B parameters); a larger model
+   means either a hosted fine-tuning API or accepting evaluation-only here.
+2. **Real training volume.** Months of EUR/USD M1 (≥ ~50k bars → ~2,000+
+   labelled trades at tp 3), split chronologically, never shuffled.
+3. **The two-gate rule still governs the result** (§15): the supervisor is
+   only a success if its approved set holds ≥85% in held-out data *and* has
+   positive net expectancy against the 91.0% break-even (tp 3) — a veto
+   model that merely skips trades has not added edge until both are shown.
