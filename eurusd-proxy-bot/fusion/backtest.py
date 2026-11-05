@@ -48,7 +48,21 @@ from .stats import EdgeVerdict, MultiPathSummary, edge_verdict, summarise_paths
 
 MIN_TRAIN_PER_FOLD = 800  # 19/20: proven working threshold
 MIN_BARS_FOR_BACKTEST = 2000  # 19/20: proven working threshold
-MIN_SIGNALS_FOR_A_VIEW = 800  # 19/20: proven working threshold
+# How many replayed signals before the replay is allowed to have an opinion.
+#
+# This was 800 and the tight core gate (5 of 6, mandatory trend/quality/RSI) does
+# not produce 800 signals in any history the bot will ever hold: measured at 33
+# signals per 2400 bars with a cooldown, 800 needs ~16,000 bars. The nightly
+# replay is capped at CANDLE_HISTORY=750. So ``enough_for_a_view`` was false on
+# every run that could ever happen, and the two things gated on it -- the demotion
+# path in run_nightly and the final say inside promotion_gate -- could never fire.
+# A model could look fine on its own bar-level metrics while losing money on the
+# bars the gate actually trades, and nothing could say so.
+#
+# 200 is the floor at which a Wilson interval on a hit rate is worth computing,
+# which is what "an opinion" means here; ``stats.MIN_SAMPLES_FOR_EDGE`` is 200 for
+# the same reason. Below it the right answer is still "not enough to judge".
+MIN_SIGNALS_FOR_A_VIEW = 200
 MAX_FOLD_TRAIN_SAMPLES = 12_000
 
 
@@ -147,6 +161,7 @@ def _purged_splits(
     folds: int,
     horizon: int,
     bar_horizons: Sequence[int | None] | None = None,
+    min_train: int = MIN_TRAIN_PER_FOLD,
 ) -> list[tuple[list[int], list[int]]]:
     """Expanding-window folds with a purge before each test window.
 
@@ -170,7 +185,7 @@ def _purged_splits(
             if j + (bar_horizons[j] if (bar_horizons and bar_horizons[j]) else horizon) < first_test_bar
         ]
         test = indices[test_start:test_end]
-        if len(train) >= MIN_TRAIN_PER_FOLD and test:
+        if len(train) >= min_train and test:
             splits.append((train, test))
     return splits
 
@@ -199,8 +214,17 @@ def run_backtest(
     min_bars: int = MIN_BARS_FOR_BACKTEST,
     mistakes: MistakeMemory | None = None,
     family_fusion: FamilyFusionEngine | None = None,
+    fold_train_samples: int = MIN_TRAIN_PER_FOLD,
 ) -> BacktestReport:
-    """Replay the full pipeline over history and settle every signal with costs."""
+    """Replay the full pipeline over history and settle every signal with costs.
+
+    ``fold_train_samples`` is the minimum labelled training samples a fold needs
+    before that fold is replayed. The 800 default is the conservative live
+    figure; a caller replaying a shorter history (a fixture, or a nightly run on
+    a fresh install) can lower it and still get a purged, cost-charged replay --
+    at the cost of a fold model fitted on less data. Raise it, never lower it,
+    when the question is what the bot will do in production.
+    """
     candles = sorted(candles, key=lambda candle: candle.timestamp)
     horizon = int(horizon if horizon is not None else config.horizon_minutes)
     spread = float(spread_pips if spread_pips is not None else config.spread_pips)
@@ -242,7 +266,9 @@ def run_backtest(
         report.note = "Not enough bars with complete indicators to build folds."
         return report
 
-    splits = _purged_splits(usable, folds, horizon, bar_horizons if adaptive else None)
+    splits = _purged_splits(
+        usable, folds, horizon, bar_horizons if adaptive else None, min_train=fold_train_samples
+    )
     if not splits:
         report.note = "Not enough data to build purged walk-forward folds."
         return report

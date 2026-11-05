@@ -70,7 +70,11 @@ def modelled_spread_pips(
         return round(base, 2)
     if 7 <= hour < 12 or 17 <= hour < 21:
         return round(base * 1.35, 2)
-    return round(base * 2.1, 2)
+    # Thinnest book of the day: the gap that used to be 2.1x sat only 0.02 pips
+    # inside a 2.2x cap, so the refusal rested on a rounding coincidence rather
+    # than on a decision. 2.35x clears the cap by 0.18 pips on the default
+    # spread, which is a margin a person could defend.
+    return round(base * 2.35, 2)
 
 
 def count_gaps(candles: Sequence[Candle], expected_seconds: float = 60.0, tolerance: float = 5.0) -> int:

@@ -108,7 +108,12 @@ class TestEngineRefusals(unittest.TestCase):
             signal = result.signal
             self.assertEqual(signal.entry_time, candles[-1].timestamp + timedelta(minutes=1))
             self.assertEqual(signal.expiry_time, signal.entry_time + timedelta(minutes=5))
-            self.assertIsNone(signal.entry_price)  # filled from the candle's open later
+            # Sealed with no price at all: it is filled from the OPEN of
+            # ``entry_time`` when the bar arrives, by settle.py, which is the
+            # only place that knows what the market did next. Sealing a
+            # reference price here (VWAP of the signal bar, say) would settle
+            # every trade against a price nobody could have got.
+            self.assertIsNone(signal.entry_price)
 
     def test_uncertainty_above_the_limit_abstains(self):
         from fusion.learning import build_training_samples
@@ -153,10 +158,11 @@ class TestNoLookAhead(unittest.TestCase):
         #
         # These tests need the data gate to pass so the engine reaches
         # compute_features. The gate models the spread by UTC hour, and outside
-        # the overlap it widens to 2.1x -- 1.2 * 2.1 = 2.52 pips, just over the
-        # 2.5 limit. Anchored to the wall clock, this class passed at 15:55 UTC
-        # and failed at 03:50 UTC with no code change in between, because the
-        # gate refused for a reason that had nothing to do with look-ahead.
+        # the overlap it widens to 2.35x -- 1.2 * 2.35 = 2.82 pips, past the
+        # 1.2 * 2.2 = 2.64 refusal line. Anchored to the wall clock, this class
+        # passed at 15:55 UTC and failed at 03:50 UTC with no code change in
+        # between, because the gate refused for a reason that had nothing to do
+        # with look-ahead.
         self.entry_minute = datetime(2026, 1, 5, 12, 0, tzinfo=timezone.utc)
         self.candles = make_candles(
             220, seed=7, start=self.entry_minute - timedelta(minutes=219)

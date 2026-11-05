@@ -61,7 +61,7 @@ from . import instruments
 # Fraction of ``ATR_1m * sqrt(h)`` that a position can realistically capture.
 # See the module docstring: measured 0.39-0.47, theoretical 0.50, set at 0.38 so
 # the projection never runs above reality at any horizon.
-MOVE_CAPTURE = 0.5
+MOVE_CAPTURE = 0.38
 
 # How many times the round-turn cost the projected move must be. One is break
 # even before any model error, which is not a trade, it is a coin flip with a
@@ -278,6 +278,32 @@ def resolve_horizon(
     return max(base, int(viable))
 
 
+def break_even_win_rate_from_move(mean_abs_move_pips: float, spread_pips: float) -> float:
+    """Break-even hit rate for a *measured* mean absolute move, in pips.
+
+    ``break_even_win_rate`` starts from an ATR and a horizon and projects the
+    move. This one takes the move as given, which is what a measurement
+    produces: a scalp that was actually observed to capture 1.4 pips a trade,
+    against a 1.2 pip round turn, needs 0.5 + 1.2 / (2 x 1.4) = 92.9% to break
+    even. No projection, no assumption about capture ratio -- the two numbers
+    that decide it and nothing else.
+
+    Returns ``inf`` when the move cannot cover the cost, which is the honest
+    answer: no hit rate rescues a trade whose average move is smaller than its
+    toll.
+    """
+    move = abs(float(mean_abs_move_pips))
+    cost = float(spread_pips)
+    if move <= 0.0:
+        return float("inf")
+    if cost <= 0.0:
+        return 0.5
+    required = 0.5 + cost / (2.0 * move)
+    if required > 1.0:
+        return float("inf")
+    return required
+
+
 def break_even_win_rate(
     m1_atr_pips: float,
     horizon_minutes: int,
@@ -289,7 +315,14 @@ def break_even_win_rate(
     same size, so expected gross move is ``(2p - 1) x E|move|``. Setting that
     equal to the round-turn cost and solving for ``p``::
 
-        p = 0.5 + cost / (2 x E|move|)
+        p = 0.5 + (REWARD_TO_COST x cost) / (2 x E|move|)
+
+    ``REWARD_TO_COST`` appears here because a break-even trade is not the bar
+    the gate sets. The gate demands the projected move clear three times the
+    round turn, so the hit rate that actually clears the gate is three times
+    the printed round-turn cost away from a coin flip. This is the number that
+    has to sit next to the risk plan, otherwise a 67% "break-even" requirement
+    reads as an 85% "gate" requirement and nobody can reconcile the two.
 
     Returns ``inf`` when the projected move is zero or smaller than the cost,
     because no hit rate can rescue a trade whose average move cannot cover the
@@ -305,7 +338,7 @@ def break_even_win_rate(
         return float("inf")
     if cost <= 0.0:
         return 0.5
-    required = 0.5 + cost / (2.0 * move)
+    required = 0.5 + (REWARD_TO_COST * cost) / (2.0 * move)
     if required > 1.0:
         return float("inf")
     return required

@@ -230,7 +230,11 @@ class TestFeaturesCarryTheTilt(unittest.TestCase):
             "mtf_ready_60",
         ):
             self.assertNotIn(name, FEATURE_NAMES)
-        self.assertEqual(9, FEATURE_VERSION)
+        # The version was bumped to 10 when the scalping/composite inputs were
+        # added; the property under test is that the mtf tilt is not in the
+        # vector, not that the number is frozen at the value it had when the
+        # tilt was being evaluated.
+        self.assertGreaterEqual(FEATURE_VERSION, 10)
 
     def test_clear_trend_dead_zone_and_slope_filter(self):
         gentle = make_candles(200, seed=11, drift=0.00001, volatility=0.000005)
@@ -245,11 +249,22 @@ class TestFeaturesCarryTheTilt(unittest.TestCase):
         self.assertGreater(clear.slope_bps, 0.0)
 
 
-class TestTheGateIsOffByDefault(unittest.TestCase):
-    """Shipped off because it measured worse, not because it is unfinished."""
+class TestTheGateShipsOn(unittest.TestCase):
+    """It is on in production, and the default has to say so.
 
-    def test_the_filter_is_off_until_real_data_settles_it(self):
-        self.assertFalse(Config().mtf_filter)
+    This used to assert off-by-default. That default no longer describes the bot
+    anyone runs: both shipped workflows set MTF_FILTER=1, .env.example documents
+    it as 1, and it was the veto doing the work in test_runner's delivered-signal
+    test. A config default that disagrees with every deployment is not a
+    conservative default, it is a second, untested bot -- the dashboard and the
+    test suite were the only things building Config() with the gate off.
+    """
+
+    def test_the_filter_is_on_by_default(self):
+        self.assertTrue(Config().mtf_filter)
+
+    def test_it_can_still_be_switched_off(self):
+        self.assertFalse(Config(mtf_filter=False).mtf_filter)
 
     def test_it_can_be_switched_on(self):
         self.assertTrue(Config(mtf_filter=True).mtf_filter)

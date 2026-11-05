@@ -91,6 +91,12 @@ ALLOWED: dict[str, frozenset[str]] = {
     ASIA: frozenset(
         {
             "orbix_confluence",
+            # The model-backed members read the model's own probability, not a
+            # time-of-day effect, so gating them on the hour would be filtering
+            # an input they do not use. Leaving them out of ASIA muted the whole
+            # learned half of the council for seven hours a day.
+            "ml_consensus",
+            "orbix_cadence",
             "range_reversal",
             "scalp_reversion",
             "scalp_pivot_fade",
@@ -171,6 +177,11 @@ ALLOWED: dict[str, frozenset[str]] = {
     OFF_HOURS: frozenset(
         {
             "orbix_confluence",
+            # Same reasoning as ASIA: the model-backed members are not conditional
+            # on the clock, and off-hours is exactly when the thin book needs every
+            # honest voice the council has.
+            "ml_consensus",
+            "orbix_cadence",
             "range_reversal",
             "scalp_reversion",
             "scalp_pivot_fade",

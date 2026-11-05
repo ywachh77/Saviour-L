@@ -34,7 +34,14 @@ from .version import get_version
 
 # Below this the interval is too wide to say anything, however bad the record
 # looks. Ten losses in a row still passes: that is the point.
-MIN_SAMPLES = 10  # 19/20: proven working threshold
+#
+# Raised from 10 to 15 because ten did not actually deliver that property. A
+# 0-of-10 record has a 95% Wilson upper bound of 0.28, comfortably below even
+# money, so ten straight losses was already enough to ban a setup -- the floor
+# was documented as "ten in a row is not a lesson" and enforced the opposite.
+# At 15 the bound is 0.20 and the record is extreme enough to act on; below it,
+# including at 12, the memory stays quiet.
+MIN_SAMPLES = 15
 # A cap and a decay, so a regime change can clear a stale ban. When a cell
 # fills, both counts are halved rather than frozen at the limit.
 MAX_SAMPLES = 150

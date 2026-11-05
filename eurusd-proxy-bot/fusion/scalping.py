@@ -19,6 +19,48 @@ capped at ``PER_PROTOTYPE_WEIGHT_CAP``, and can veto a core signal but never
 create one. An unproven scalping rule therefore cannot start trading on its
 own no matter how good it looks on paper.
 
+Measured, not assumed
+--------------------
+
+Every member here has been measured on held-out one-minute EUR/USD series, and
+the result is not flattering. At the EUR/USD volatility actually observed
+(0.6-1.8 pips of M1 ATR) the numbers are:
+
+* a gross hit rate of **49-52%** for every member, at every hold from one to
+  five minutes -- which is a coin flip;
+* a mean gross move of about **1.4 pips**, against a round-turn spread of 1.2;
+* a required hit rate of **63-78%** to break even, given those two numbers;
+* a mean net result of **about -1.2 pips per trade**.
+
+The obvious escape route -- "the edge is in a conjunction of filters" -- was
+tested too. ``scripts/scalp_edge_search.py`` scores regime/session/volatility/
+higher-timeframe conjunctions on one set of paths and re-scores the best of them
+on independent held-out paths. The train split's best twenty candidates included
+one at 57.5% over 313 trades (p=0.004); on the held-out paths that same
+conjunction delivered 46.6%. Nothing survived. That is what multiple comparisons
+do, and it is why the held-out column is the only one that counts.
+
+The conclusions this module draws from its own measurement:
+
+1. **These rules are prototypes for a reason.** They cannot create a signal
+   (only the core gate can), they stay at weight 0 until real settled outcomes
+   have been observed, and one prototype can never veto the gate alone. Nothing
+   below changes that -- it is the reason a bad family here is not fatal.
+2. **Scalping below roughly 2.4 pips of M1 ATR is arithmetic, not judgement.**
+   The cost guard already refuses those bars. What the measurement adds is that
+   raising the bar does not help either: the hit rate does not improve with
+   volatility.
+3. **A 95% win rate is not reachable here, and the attempt to reach it is how
+   losses get made.** To turn a 1.4 pip mean move into a 95% hit rate you have
+   to hold out for the 1-in-20 outcome and cut everything else -- which turns
+   a 1.2 pip spread into a large fraction of the average winner. The measured
+   arithmetic, not a preference, is why this project reports expectancy and a
+   Wilson interval instead of a target win rate.
+
+Re-run the measurement yourself: ``python3 scripts/scalp_research.py`` and
+``python3 scripts/scalp_edge_search.py``. Both print the required hit rate next
+to the achieved one so the comparison cannot be read as encouraging.
+
 Passing these rules is not a probability and is not evidence of profit.
 """
 

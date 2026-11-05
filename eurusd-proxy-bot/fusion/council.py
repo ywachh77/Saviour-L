@@ -34,7 +34,15 @@ TOTAL_LEARNED_MASS_CAP = 0.60
 # Total effective mass cap: keeps prototypes from overwhelming the core gate.
 TOTAL_PROTOTYPE_MASS_CAP = 1.20
 # Net opposing mass that blocks a core signal.
-VETO_MASS = 0.25  # 19/20: relaxed council veto
+#
+# Deliberately ABOVE ``PER_PROTOTYPE_WEIGHT_CAP``: a veto is a statement that the
+# learned evidence, taken together, overrules the core gate. One prototype at the
+# maximum learned weight is not evidence, it is a single opinion -- and a single
+# opinion is never allowed to silence the gate it was built around. At 0.25
+# against a 0.30 cap a lone prototype could veto on its own, which is exactly the
+# property this file's first paragraph forbids. 0.45 needs two prototypes at
+# full weight (0.60 net) and cannot be reached by one.
+VETO_MASS = 0.45
 SHRINKAGE = 40.0                  # net / (seen + SHRINKAGE) keeps small samples humble
 # Strategic consensus override: minimum total effective weight for strategic
 # methods to override a core abstention. Requires multiple methods agreeing.
@@ -56,20 +64,39 @@ class CouncilWeights:
     learned_weights: dict[str, float] = field(default_factory=dict)
     version: int = 1
     last_system_version: str = ""
+    # The effective-weight dict, rebuilt only when the weights actually change.
+    #
+    # ``weights`` is a property that runs inside run_council's loop over 131
+    # prototypes, so it was called once per prototype per bar and rebuilt a
+    # 131-entry dict every time: 186,022 rebuilds and 7.0 of the 9.3 seconds
+    # run_council spent, measured over one 2400-bar replay. The weights only
+    # change in recompute(), so the dict is built there instead.
+    _weights_cache: dict[str, float] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for name in strategies.PROTOTYPES:
             self.net.setdefault(name, 0.0)
             self.seen.setdefault(name, 0)
             self.learned_weights.setdefault(name, 0.0)
+        self._refresh_weight_cache()
 
-    @property
-    def weights(self) -> dict[str, float]:
-        """Total effective weight: learned weights only."""
-        return {
+    def _refresh_weight_cache(self) -> None:
+        self._weights_cache = {
             name: float(self.learned_weights.get(name, 0.0))
             for name in strategies.PROTOTYPES
         }
+
+    @property
+    def weights(self) -> dict[str, float]:
+        """Total effective weight: learned weights only.
+
+        Cached: rebuilt by recompute() and from_dict(), which are the only
+        places ``learned_weights`` is ever assigned. Mutating that dict by hand
+        would need a recompute() to be seen -- do not do it.
+        """
+        if not self._weights_cache:
+            self._refresh_weight_cache()
+        return self._weights_cache
 
     def observe(self, votes: dict[str, str], winning_side: str | None) -> None:
         """Credit or blame every prototype that spoke on a settled real outcome."""
@@ -101,6 +128,7 @@ class CouncilWeights:
             scale = TOTAL_LEARNED_MASS_CAP / total_learned
             raw = {name: value * scale for name, value in raw.items()}
         self.learned_weights = raw
+        self._refresh_weight_cache()
         self.version += 1
 
     def active(self) -> dict[str, float]:
@@ -132,6 +160,7 @@ class CouncilWeights:
             for k, v in (payload.get("weights") or {}).items():
                 result.learned_weights[str(k)] = max(0.0, float(v))
         result.version = int(payload.get("version", 1))
+        result._refresh_weight_cache()
         return result
 
 

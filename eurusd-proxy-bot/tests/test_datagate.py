@@ -20,7 +20,7 @@ class TestModelledSpread(unittest.TestCase):
         self.assertAlmostEqual(at_three / at_default, 2.5, places=1)
 
     def test_off_hours_is_refused_by_a_real_margin_not_a_coincidence(self):
-        """1.2 x 2.1 = 2.52 against a 2.50 cap cleared by 0.02 pips.
+        """1.2 x 2.35 = 2.82 against a 1.2 x 2.2 = 2.64 cap, by 0.18 pips.
 
         That is not a decision, it is an accident: nudge SPREAD_PIPS and the
         behaviour inverts with nothing saying why. The cap is now a multiple of

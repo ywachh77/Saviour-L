@@ -30,15 +30,17 @@ from fusion.simulate import run_simulation, synthetic_series
 # Read from the live Supabase project (information_schema.columns).
 # Keyed by table; values are the columns that exist in production.
 EXPECTED: dict[str, list[str]] = {
-    "alerts": ["id", "kind", "message", "dedupe_key", "created_at"],
-    "api_keys": ["id", "slots", "cursor", "updated_at"],
-    "candles_m1": ["timestamp", "pair", "open", "high", "low", "close", "volume"],
+    "alerts": ["id", "kind", "message", "dedupe_key", "created_at", "version"],
+    "api_keys": ["id", "slots", "cursor", "updated_at", "version"],
+    "candles_m1": [
+        "timestamp", "pair", "open", "high", "low", "close", "volume", "system_version",
+    ],
     "council_weights": ["id", "net", "seen", "weights", "learned_weights", "version"],
     "heartbeats": [
         "id", "runner", "phase", "paused", "cycles", "seal_state", "reason",
-        "created_at", "bucket", "regime", "signal_id",
+        "created_at", "bucket", "regime", "signal_id", "version",
     ],
-    "job_runs": ["id", "job", "bucket", "runner", "created_at"],
+    "job_runs": ["id", "job", "bucket", "runner", "created_at", "version"],
     "key_usage": [
         "id", "key_index", "label", "day_bucket", "minute_used", "day_used",
         "created_at",
@@ -49,15 +51,20 @@ EXPECTED: dict[str, list[str]] = {
     ],
     "model_state": [
         "id", "model", "ensemble", "runtime", "calibration_points", "mistakes", "updated_at",
+        "version", "feature_version", "model_version",
     ],
-    "model_versions": ["version_id", "report", "created_at"],
+    "model_versions": [
+        "version_id", "report", "created_at",
+        "system_version", "feature_version", "model_version",
+    ],
     "outbox": [
         "message_key", "text", "kind", "attempts", "state", "message_id",
-        "last_error", "created_at",
+        "last_error", "created_at", "version",
     ],
     "settlements": [
         "signal_id", "outcome", "entry_price", "exit_price", "gross_pips",
         "move_pips", "net_pips", "spread_pips", "settled_at", "source",
+        "system_version",
     ],
     "signals": [
         "signal_id", "pair", "side", "entry_time", "expiry_time",
@@ -65,7 +72,7 @@ EXPECTED: dict[str, list[str]] = {
         "probability_up", "probability_raw", "calibration_state",
         "uncertainty", "regime", "council", "features", "spread_pips",
         "seal_state", "delivery_state", "message_id", "settled", "bucket",
-        "entry_price",
+        "entry_price", "system_version",
     ],
 }
 

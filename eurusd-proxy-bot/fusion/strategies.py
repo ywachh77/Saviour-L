@@ -205,8 +205,10 @@ def orbix_confluence(
             "SELL": rsi < 55.0,
         },
         "candle quality": {
-            "BUY": 0.05 <= body_atr <= 1.5 and close_pos >= 0.50,
-            "SELL": 0.05 <= body_atr <= 1.5 and close_pos <= 0.50,
+            # Same 1.2 ceiling as the pullback branch. A body over 1.2x ATR is
+            # a climax, which is where the loss this guards against was bought.
+            "BUY": 0.05 <= body_atr <= 1.2 and close_pos >= 0.50,
+            "SELL": 0.05 <= body_atr <= 1.2 and close_pos <= 0.50,
         },
         "value headroom": {
             "BUY": close < features["prior_high_20"] * 1.001,
@@ -222,9 +224,19 @@ def orbix_confluence(
     for candidate_side in ("BUY", "SELL"):
         mom_aligned = [name for name, crit in momentum_checks.items() if crit[candidate_side]]
         mom_score = len(mom_aligned)
+        # Candle quality is mandatory, not merely one vote out of six.
+        #
+        # This branch is the fallback for the bars the pullback branch refuses,
+        # which are exactly the extended ones -- and it used to let a bar with a
+        # 1.6x-ATR body closing on its absolute high through on 5 of 6, because
+        # quality was worth one point and the other five carried it. That is the
+        # shape of live loss #9549b5e1: BUY the climax top of a vertical bar,
+        # -160 pips. A bar that is all body and no wick is not a setup, it is the
+        # end of a move; counting it as one vote out of six was the bug.
         mom_mandatory = (
             momentum_checks["momentum"][candidate_side] and
-            momentum_checks["candle direction"][candidate_side]
+            momentum_checks["candle direction"][candidate_side] and
+            momentum_checks["candle quality"][candidate_side]
         )
         if mom_score >= 2 and mom_mandatory:
             if candidate_side == "BUY":
@@ -287,6 +299,27 @@ def orbix_confluence(
         and 0.10 <= body_atr <= 1.25
         and close_pos >= 0.58
     )
+    # The higher timeframes must be bounded, not merely the current bar.
+    #
+    # This absorption test is mode (b) of the reversal branch: "an orderly
+    # 2.3-sigma wick-rejection bar when the 60m and 15m higher timeframes are
+    # bounded rather than in a runaway crash". It did not check that, so a bar
+    # that looked like absorption on the one-minute chart bought straight into a
+    # -14 bps, -2.2 bps/bar 60m waterfall -- catching a falling knife with a
+    # wick pattern. The runaway condition the branch is named for now actually
+    # gates the absorption entry, on both sides.
+    htf_bounded = (
+        abs(gap60) <= max_macro_stretch
+        and abs(slope60) <= max_macro_slope
+        and gap15 >= -max_15m_opp
+        and slope15 >= -max_macro_slope
+    )
+    htf_bounded_sell = (
+        abs(gap60) <= max_macro_stretch
+        and abs(slope60) <= max_macro_slope
+        and gap15 <= max_15m_opp
+        and slope15 <= max_macro_slope
+    )
     buy_absorption = (
         str(regime or "UNKNOWN").upper() == "RANGE"
         and bb_pos <= 0.03
@@ -294,6 +327,7 @@ def orbix_confluence(
         and rsi <= 29.5
         and body_atr <= 1.20
         and wick_lo >= 0.22
+        and htf_bounded
     )
     sell_reclaim = (
         (bb_pos >= 0.84 or vwap_dev >= 1.70)
@@ -312,6 +346,7 @@ def orbix_confluence(
         and rsi >= 70.5
         and body_atr <= 1.20
         and wick_hi >= 0.22
+        and htf_bounded_sell
     )
 
     reversal_checks = {
@@ -408,13 +443,46 @@ def orbix_confluence(
             probability_up,
             score,
         )
-    # 5. PERMISSIVE FALLBACK: If all structured paths fail, take the trade
-    #    based on EMA direction + candle body. Works with or without a model.
-    #    This ensures 90%+ signal rate even in ranging markets. The win rate
-    #    depends on trending data, not on this fallback.
+    # 5. PERMISSIVE FALLBACKS. Everything below this point exists so the bot
+    #    keeps emitting something to learn from while the model is cold. They
+    #    are allowed to be lax about *direction*; they are not allowed to be
+    #    unconditional, because that is how a bar no real branch would touch
+    #    still becomes a trade.
+    #
+    #    Two shapes are refused outright, on top of whatever the six-check
+    #    branches already said:
+
+    #    (a) A runaway higher timeframe. The reversal branch requires a bounded
+    #    60m as its "non-runaway HTF" check, but a bar that failed that branch
+    #    used to fall through to here and be taken anyway -- a SELL on a 6/6
+    #    exhaustion-reversal bar whose only sin was a crashing 60m chart. That
+    #    is the same trade as buying a climax, seen from the other side.
+    if abs(slope60) > max_macro_slope or abs(gap60) > max_macro_stretch:
+        return Decision(
+            "NO SIGNAL",
+            f"Core abstains: the 60-minute series is running away "
+            f"({gap60:+.1f} bps, {slope60:+.2f} bps/bar against a "
+            f"{max_macro_stretch:.1f} bps / {max_macro_slope:.2f} bps/bar bound). "
+            "No entry is taken into a waterfall.",
+            probability_up,
+            0,
+        )
+
+    #    (b) A climax bar: body outside the 0.10-1.20 ATR band, or closing on
+    #    its absolute extreme. Live loss #9549b5e1 was a 1.6x-ATR body closing
+    #    at 1.0 close_position, refused by every real branch and then taken here
+    #    with a score of 1 -- BTC/USD BUY, -160.01 pips. A bar that is all body
+    #    and no wick is the end of a move, not the start of one.
+    climax = not (0.10 <= body_atr <= 1.2) or close_pos >= 0.98 or close_pos <= 0.02
+
     if probability_up is not None:
         prob = float(probability_up)
-        if prob > 0.52 and close > candle.open and features["ema_fast"] > features["ema_slow"]:
+        if (
+            not climax
+            and prob > 0.52
+            and close > candle.open
+            and features["ema_fast"] > features["ema_slow"]
+        ):
             return Decision(
                 "BUY",
                 f"Core fallback: model {prob:.2f} leans up, candle body bullish, EMA fast > slow. "
@@ -422,7 +490,12 @@ def orbix_confluence(
                 probability_up,
                 1,
             )
-        if prob < 0.48 and close < candle.open and features["ema_fast"] < features["ema_slow"]:
+        if (
+            not climax
+            and prob < 0.48
+            and close < candle.open
+            and features["ema_fast"] < features["ema_slow"]
+        ):
             return Decision(
                 "SELL",
                 f"Core fallback: model {prob:.2f} leans down, candle body bearish, EMA fast < slow. "
@@ -431,7 +504,7 @@ def orbix_confluence(
                 1,
             )
     # Model-independent fallback: EMA direction + candle body
-    if close > candle.open and features["ema_fast"] > features["ema_slow"]:
+    if not climax and close > candle.open and features["ema_fast"] > features["ema_slow"]:
         return Decision(
             "BUY",
             "Core fallback: EMA fast > slow and bullish candle body. "
@@ -439,7 +512,7 @@ def orbix_confluence(
             probability_up,
             1,
         )
-    if close < candle.open and features["ema_fast"] < features["ema_slow"]:
+    if not climax and close < candle.open and features["ema_fast"] < features["ema_slow"]:
         return Decision(
             "SELL",
             "Core fallback: EMA fast < slow and bearish candle body. "
@@ -447,6 +520,16 @@ def orbix_confluence(
             probability_up,
             1,
         )
+    if climax:
+        return Decision(
+            "NO SIGNAL",
+            "Core abstains: climax bar (body outside the 0.10-1.20 ATR band or "
+            "closing on its absolute extreme). Every real branch refused it; the "
+            "permissive fallbacks will not take a climax either.",
+            probability_up,
+            0,
+        )
+
     # Last resort: candle body only
     if close > candle.open:
         return Decision(

@@ -21,8 +21,19 @@ import json
 import os
 import shutil
 import tempfile
+import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+
+# The neural stack is an optional extra (requirements.txt pins torch/numpy, the
+# core bot does not need them). unittest turns a module-level SkipTest into a
+# skipped module; a missing import here would instead be an error that makes an
+# otherwise-green suite look broken on a machine that never installed the extra.
+for _name in ("numpy", "torch", "pytest"):
+    try:
+        __import__(_name)
+    except ModuleNotFoundError as _missing:  # pragma: no cover - environment
+        raise unittest.SkipTest(f"neural extra not installed: {_missing.name}") from None
 
 import numpy as np
 import pytest

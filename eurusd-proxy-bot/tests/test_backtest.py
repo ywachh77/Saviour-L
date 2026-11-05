@@ -5,6 +5,7 @@ from datetime import timedelta
 
 from fusion import datagate
 from fusion.backtest import (
+    MIN_BARS_FOR_BACKTEST,
     MIN_SIGNALS_FOR_A_VIEW,
     BacktestReport,
     _label,
@@ -72,7 +73,10 @@ class TestRunBacktest(unittest.TestCase):
     def test_insufficient_history_refuses_to_report_numbers(self):
         report = run_backtest(synthetic_series(200, seed=3), config(), folds=4)
         self.assertEqual(report.signals, 0)
-        self.assertIn("600", report.note)
+        # The note must quote the real floor. It said 600 while the constant was
+        # 2000 -- stale text on the one message that explains why the replay
+        # produced nothing, which is exactly when a wrong number misleads.
+        self.assertIn(str(MIN_BARS_FOR_BACKTEST), report.note)
 
     def test_replay_is_deterministic(self):
         candles = synthetic_series(1200, seed=17)
@@ -113,7 +117,9 @@ class TestRunBacktest(unittest.TestCase):
             self.assertGreaterEqual(report.wilson_high, report.win_rate)
 
     def test_the_note_names_its_own_limits(self):
-        report = run_backtest(synthetic_series(1200, seed=37), config(), folds=4)
+        # 2600 bars: below MIN_BARS_FOR_BACKTEST the note is the refusal, and
+        # this test is about the note that accompanies a real replay.
+        report = run_backtest(synthetic_series(2600, seed=37), config(), folds=4)
         self.assertIn("one path", report.note)
         self.assertIn("healthy", report.note)
 
@@ -231,35 +237,106 @@ class TestPromotionUsesTheReplay(unittest.TestCase):
         model.mode = MODE_ADVISORY
         return model
 
+    def _nightly_with_stubbed_inputs(
+        self, *, signals: int, net_pips: float, stub_walk_forward: bool = True
+    ):
+        """``run_nightly`` with its two expensive inputs pinned.
+
+        The decision under test is the demotion rule in ``run_nightly``: a
+        champion that is losing money on the bars the gate actually trades loses
+        its advisory authority. Everything that decides it stays real -- the
+        champion, the gate, the config. Stubbed are the two steps that only cost
+        time:
+
+        * the walk-forward refit, which fits a boosted model per fold (minutes,
+          and its verdict is not what this test is about), and
+        * the system replay, which is handed a result of a known size and sign.
+
+        The replay stub matters for a second reason: on any history short enough
+        to replay here, the tight core gate produces ~40 signals against the 200
+        ``enough_for_a_view`` needs, so a real replay cannot reach the branch.
+        """
+        from fusion.backtest import BacktestReport
+        from fusion.learning import WalkForwardReport
+        from fusion.learning import run_nightly as nightly
+
+        champion = self._promoted_champion()
+        replay = BacktestReport(
+            bars=3000,
+            folds=4,
+            signals=signals,
+            wins=int(signals * 0.45),
+            losses=signals - int(signals * 0.45),
+            net_pips=net_pips,
+            chosen_horizons=[3] * signals,
+        )
+        walk_report = WalkForwardReport(samples=2947)
+        walk_report.folds = 3
+        # Below PROMOTION_MIN_ACCURACY, so the nightly job takes the
+        # "not promoted" path and returns without fitting anything new.
+        walk_report.accuracy = 0.511
+        walk_report.brier = 0.22
+        walk_report.brier_skill = 0.11
+        walk_report.net_pips = 10.0
+        walk_report.trades = 300
+        walk_report.trade_pips = [0.65 if index % 3 else -0.85 for index in range(300)]
+
+        namespace = nightly.__globals__
+        stub_names = ("run_backtest", "walk_forward") if stub_walk_forward else ("run_backtest",)
+        saved = {name: namespace[name] for name in stub_names}
+        namespace["run_backtest"] = lambda *_a, **_k: replay
+        if stub_walk_forward:
+            namespace["walk_forward"] = lambda *_a, **_k: walk_report
+        try:
+            model, _ensemble, report = nightly(
+                synthetic_series(3000, seed=83),
+                [],
+                config=config(nightly_min_samples=200),
+                champion=champion,
+            )
+        finally:
+            namespace.update(saved)
+        return model, report, replay
+
     def test_a_negative_replay_demotes_a_promoted_model(self):
         from fusion.model import MODE_VETO
 
-        # 5200 bars so the replay clears MIN_SIGNALS_FOR_A_VIEW (200) even with
-        # the tighter anti-climax / non-chasing confluence gate active.
-        candles = synthetic_series(5200, seed=83)
-        cfg = config(nightly_min_samples=200)
-        champion = self._promoted_champion()
-        model, _ensemble, report = run_nightly(candles, [], config=cfg, champion=champion)
+        model, report, replay = self._nightly_with_stubbed_inputs(
+            signals=MIN_SIGNALS_FOR_A_VIEW + 200, net_pips=-80.0
+        )
+        self.assertTrue(replay.enough_for_a_view)
         self.assertIsNotNone(model)
         self.assertEqual(model.mode, MODE_VETO)
         self.assertTrue(report.rolled_back)
         self.assertIn("Demoted", report.reason)
         self.assertFalse(report.promoted)
 
-    def test_a_healthy_replay_keeps_authority(self):
-        champion = self._promoted_champion()
-        candles = synthetic_series(900, seed=91)
-        model, _ensemble, _report = run_nightly(candles, [], config=config(nightly_min_samples=200), champion=champion)
-        # Too few replayed signals to judge, so nothing is demoted on this run.
-        self.assertIsNotNone(model)
+    def test_a_real_walk_forward_feeds_the_system_report(self):
+        """End to end, with nothing stubbed but the replay.
 
-    def test_nightly_populates_the_system_report(self):
+        The two tests above pin the walk-forward verdict so they can run in
+        seconds. This one does not: it walks the real samples, fits the real
+        folds, and checks that ``run_nightly`` still wires a system report
+        together from it. It is the slower guard on the seam between the two.
+        """
         candles = synthetic_series(900, seed=67)
         cfg = config(nightly_min_samples=200)
         _model, _ensemble, report = run_nightly(candles, [], config=cfg, champion=None)
         self.assertIsNotNone(report.system)
         self.assertIn("system", report.to_dict())
 
+    def test_a_small_replay_cannot_demote(self):
+        """Ten signals is not evidence, whatever they lost.
+
+        Without this floor the first bad night on a thin history demotes a
+        champion on noise and the bot never keeps an authority level.
+        """
+        from fusion.model import MODE_ADVISORY
+
+        model, report, replay = self._nightly_with_stubbed_inputs(signals=10, net_pips=-20.0)
+        self.assertFalse(replay.enough_for_a_view)
+        self.assertEqual(model.mode, MODE_ADVISORY)
+        self.assertFalse(report.rolled_back)
 
 class TestReplayLearnsTheCouncil(unittest.TestCase):
     """A replay must learn the council, or it is measuring a different bot.

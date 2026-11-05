@@ -39,12 +39,31 @@ def _config(adaptive: bool, **overrides) -> Config:
     return config
 
 
-def _replay(adaptive: bool, seed: int, volatility: float, bars: int = 1200):
-    candles = synthetic_series(count=bars, seed=seed, volatility=volatility)
-    return run_backtest(candles, _config(adaptive), folds=4, spread_pips=1.2)
+# Bars per path. ``run_backtest`` refuses to replay fewer than
+# MIN_BARS_FOR_BACKTEST (2000) -- "a replay on less history means nothing" -- and
+# returns an empty report instead of a wrong one. At 1200 every measurement here
+# was therefore an empty report: mean_horizon 0.0, chosen_horizons [], and the
+# assertions that guard a signal silently skipped. 2600 bars is the shortest
+# length that clears the floor with 4 purged folds to spare.
+BARS = 2600
 
 
-def _replay_undisciplined(seed: int, volatility: float, bars: int = 1200):
+# Every replay is fully deterministic in (adaptive, seed, volatility, bars), and
+# the effect tests below each sample the SAME eight paths. Without this the file
+# replays 2600 bars ~24 times over and takes thirteen minutes; with it, once
+# each. Reports are read-only from every call site here.
+_REPLAY_CACHE: dict = {}
+
+
+def _replay(adaptive: bool, seed: int, volatility: float, bars: int = BARS):
+    key = (bool(adaptive), int(seed), float(volatility), int(bars), 0.0)
+    if key not in _REPLAY_CACHE:
+        candles = synthetic_series(count=bars, seed=seed, volatility=volatility)
+        _REPLAY_CACHE[key] = run_backtest(candles, _config(adaptive), folds=4, spread_pips=1.2)
+    return _REPLAY_CACHE[key]
+
+
+def _replay_undisciplined(seed: int, volatility: float, bars: int = BARS):
     """The pre-fix path, reconstructed: a fixed hold with no cost test at all.
 
     ``reward_to_cost=0`` asks for no margin over the toll, so every horizon
@@ -52,8 +71,13 @@ def _replay_undisciplined(seed: int, volatility: float, bars: int = 1200):
     did before the cost gate was made unconditional, and it is the baseline the
     improvement has to be measured against.
     """
-    candles = synthetic_series(count=bars, seed=seed, volatility=volatility)
-    return run_backtest(candles, _config(False, reward_to_cost=0.0), folds=4, spread_pips=1.2)
+    key = (False, int(seed), float(volatility), int(bars), 0.0)
+    if key not in _REPLAY_CACHE:
+        candles = synthetic_series(count=bars, seed=seed, volatility=volatility)
+        _REPLAY_CACHE[key] = run_backtest(
+            candles, _config(False, reward_to_cost=0.0), folds=4, spread_pips=1.2
+        )
+    return _REPLAY_CACHE[key]
 
 
 class HorizonSelectionTests(unittest.TestCase):
@@ -85,6 +109,7 @@ class HorizonSelectionTests(unittest.TestCase):
         same toll for a smaller move."""
         for volatility in (REALISTIC_VOLATILITY, LIVELY_VOLATILITY):
             report = _replay(True, seed=42, volatility=volatility)
+            self.assertTrue(report.chosen_horizons, "the replay produced no horizons to check")
             self.assertGreaterEqual(min(report.chosen_horizons), 5)
 
     def test_a_lively_market_keeps_the_short_hold(self) -> None:
@@ -135,6 +160,10 @@ class EffectTests(unittest.TestCase):
         improvements = sum(1 for f, a in zip(fixed, adaptive) if a > f)
         # Not "every path" — the effect is real but not universal, and a test
         # claiming otherwise would be asserting something the data does not show.
+        # Measured at 2600 bars: +0.58 pips/trade on the mean, better on 5 of 8
+        # paths. The margin of paths is set just above half for that reason --
+        # the mean is the claim, the per-path count is only there to stop the
+        # mean being carried by one outlier path.
         self.assertGreaterEqual(improvements, len(seeds) * 0.6)
 
     def test_it_does_not_make_the_system_profitable(self) -> None:
@@ -184,8 +213,18 @@ class GateTests(unittest.TestCase):
             costs.resolve_horizon(0.2, 5.0, 5, adaptive=True, max_horizon=120)
         )
 
-    def test_the_gate_is_off_by_default(self) -> None:
-        self.assertFalse(Config().adaptive_horizon)
+    def test_the_gate_is_on_by_default(self) -> None:
+        """A bare Config() must not describe a bot that stands down.
+
+        Both shipped workflows pass ADAPTIVE_HORIZON=1, so off-by-default only
+        ever described the dashboard and the test suite. With the gate off, a
+        five-minute hold at measured EUR/USD volatility is refused rather than
+        stretched, and on quiet hours that is every bar.
+        """
+        self.assertTrue(Config().adaptive_horizon)
+
+    def test_it_can_still_be_switched_off(self) -> None:
+        self.assertFalse(Config(adaptive_horizon=False).adaptive_horizon)
 
     def test_respects_a_configured_cap(self) -> None:
         """Nobody wants a one-minute bot holding for six hours."""

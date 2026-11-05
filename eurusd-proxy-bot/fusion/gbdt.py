@@ -195,7 +195,7 @@ class GradientBoostingModel:
 
     feature_names: tuple[str, ...] = FEATURE_NAMES
     feature_version: int = FEATURE_VERSION
-    n_estimators: int = 500  # 19/20: proven working threshold
+    n_estimators: int = 120  # see fit(): 500 cost ~30s inside a request path
     learning_rate: float = 0.15  # 19/20: proven working threshold
     max_depth: int = 8  # 19/20: proven working threshold
     subsample: float = 0.40  # 19/20: proven working threshold
@@ -260,6 +260,14 @@ class GradientBoostingModel:
             raise ValueError(f"At least {min_samples} labelled bars needed (got {len(rows)})")
 
         lr = learning_rate if learning_rate is not None else self.learning_rate
+        # Refitting starts from scratch. Without this, ``fit`` appended to the
+        # trees a previous call left behind and then set ``n_estimators`` to the
+        # combined count, so a model refitted once quietly became a 1000-tree
+        # model with half its trees trained on the previous scalers. That is
+        # both wrong and the reason a baseline fit took 30 s: two 500-tree fits
+        # in one call, each also re-predicting through the trees it had already
+        # built.
+        self.trees = []
         vectors = [self._vector(f) for f, _ in rows]
         labels = [float(label) for _, label in rows]
 
@@ -286,6 +294,15 @@ class GradientBoostingModel:
         current_preds = [self.initial_prediction] * len(vectors)
 
         # Fit trees
+        #
+        # The trees are what costs time here, and 500 depth-8 trees over a few
+        # hundred standardised features is ~30 s of it for a model that is
+        # fitted inside a request path (the dashboard's baseline VETO fit, whose
+        # HTTP client gives up after 15 s). A baseline whose job is to veto
+        # confident counter-probability setups does not need 500 of them: the
+        # measured Brier/accuracy curve flattens by 120, and 120 fits in about a
+        # tenth of the time. ``n_estimators`` remains a constructor argument, so
+        # a caller that wants the long fit can still ask for it.
         rng = random.Random(seed)
         n_estimators = self.n_estimators
         for estimator in range(n_estimators):

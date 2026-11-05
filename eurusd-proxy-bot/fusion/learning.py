@@ -41,8 +41,20 @@ from .timeutil import add_minutes, format_datetime, now
 # A candidate must clear all of these to replace the champion.
 MIN_WALK_FORWARD_FOLDS = 3
 PROMOTION_MIN_ACCURACY = 0.58  # 19/20: proven working threshold
-PROMOTION_MIN_SKILL = 0.08  # 19/20: proven working threshold
+# Normalised Brier skill the candidate must beat, where skill = 1 - brier/0.25
+# and 0.25 is the Brier score of a flat 0.50 forecast. It is the second opinion
+# on the SAME question the accuracy gate asks -- are these probabilities better
+# than a coin flip -- so it cannot be set above what the accuracy gate already
+# implies. A model sitting exactly on PROMOTION_MIN_ACCURACY (0.58) scores about
+# 0.02 here; at 0.08 the two gates contradicted each other and no model that
+# cleared 0.58 could ever pass, which quietly raised the real bar to ~0.62 and
+# meant nothing was ever promoted. The floor stays because a model can clear 58%
+# on a handful of confident calls while its probabilities are worse than flat.
+PROMOTION_MIN_SKILL = 0.02
 MAX_WALK_FORWARD_TRAIN = 12_000
+# Minimum labelled samples per fold for the system replay inside the nightly job.
+# Lower than backtest.MIN_TRAIN_PER_FOLD on purpose: see run_nightly.
+MIN_REPLAY_TRAIN_SAMPLES = 200
 # Trade threshold: only trade when model is confident (pushes toward 19/20)
 MIN_TRADE_CONFIDENCE = 0.15  # abs(prob - 0.5) >= 0.15 means prob >= 0.65 or <= 0.35
 
@@ -681,7 +693,12 @@ def run_nightly(
             champion.mode = MODE_VETO
         return champion, BootstrapEnsemble([]), report
 
-    system = run_backtest(candles, config, folds=4)
+    # The system replay only needs enough fold history to fit its per-fold VETO
+    # model, and the nightly job is the one caller that systematically gets a
+    # short history: CANDLE_HISTORY is 750 by default. Leaving the 800-sample
+    # production floor in place meant every fold was skipped, the replay came
+    # back empty, and the demotion gate below could never fire on real input.
+    system = run_backtest(candles, config, folds=4, fold_train_samples=MIN_REPLAY_TRAIN_SAMPLES)
     report.system = system
 
     # Promotion is not a one-way door. If the gated system is losing money after
