@@ -244,8 +244,18 @@ class FusionEngine:
         mistakes: MistakeMemory | None = None,
         family_fusion: FamilyFusionEngine | None = None,
         target_entry: datetime | None = None,
+        oracle: "OracleEngine | None" = None,
+        oracle_move_pips: float | None = None,
     ) -> Verdict:
-        """Run regime, council and meta-model. No data gate, no sealing."""
+        """Run regime, council and meta-model. No data gate, no sealing.
+
+        ``oracle`` is the single-engine read (see ``fusion.oracle``). When it is
+        supplied the council's 132 members still run -- their stances become
+        inputs to the engine -- but the engine's answer becomes the verdict,
+        because two engines disagreeing is how one engine becomes a committee
+        again. ``oracle_move_pips`` is the engine's own measured average move at
+        its horizon; without it the engine cannot price a trade and abstains.
+        """
         config = self.config
         if features is None:
             return Verdict("NO SIGNAL", "Not enough completed candles to calculate indicators.")
@@ -287,6 +297,34 @@ class FusionEngine:
             mistakes=mistakes,
             family_fusion=family_fusion,
         )
+        # The single engine, when one is supplied, decides. The council has
+        # already been consulted -- its members are the engine's panel inputs --
+        # but it no longer votes on the outcome.
+        if oracle is not None and oracle.ready:
+            stances = {
+                vote.name: (1.0 if vote.side == "BUY" else -1.0)
+                for vote in council.votes
+                if getattr(vote, "side", None) in ("BUY", "SELL")
+            }
+            if oracle_move_pips:
+                oracle.move_pips = oracle_move_pips
+            engine_read = oracle.read(features, stances, spread_pips=spread_pips)
+            if not engine_read.take:
+                return Verdict(
+                    "NO SIGNAL",
+                    f"Single engine abstained: {engine_read.reason}",
+                    regime.name,
+                    read=read,
+                    council=council,
+                )
+            return Verdict(
+                engine_read.side,
+                f"Single engine: {engine_read.reason}",
+                regime.name,
+                read=read,
+                council=council,
+            )
+
         if family_fusion is not None and council.family_verdict is not None:
             read = family_fusion.refine_model_read(read, council.family_verdict)
         if not council.actionable:
