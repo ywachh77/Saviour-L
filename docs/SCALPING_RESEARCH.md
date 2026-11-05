@@ -715,3 +715,48 @@ the trade, and then the remaining gap is small enough that a real edge —
 if one is ever found — could plausibly close it. No edge of even 1.8pp has
 been measured in this repository yet (§10, §11); that, not the barrier ratio,
 is the open problem.
+
+---
+
+## 15. Target locked: 17 of 20 is the floor
+
+Recorded as a project constraint: **no configuration below 17 wins per 20
+trades (85%) will be considered.** Interpreted precisely, because the loose
+reading is unachievable: the floor applies to the overall win rate over a
+stated sample (with its Wilson lower bound reported), **not** to every rolling
+block of 20 — at an 85–90% win rate some blocks always fall below 17, and a
+per-block guarantee would require the martingale class of mechanisms the
+charter forbids.
+
+All three 1:5.7 geometries measured (20,000 bars, spread 1.2, three direction
+modes, train + held out = six cells each):
+
+| geometry | trades/split | win rates across 6 cells | cells ≥85% | break-even | edge required |
+|---|---|---|---|---|---|
+| tp 3 / sl 17 | ~1,400 | 87.6–90.4% | **6 of 6** | 91.00% | +6.0pp |
+| tp 5 / sl 28.3 | ~490 | 84.2–89.4% | 5 of 6 | 88.59% | +3.6pp |
+| tp 10 / sl 56.7 | ~100 | 84.8–89.7% | 5 of 6 | 86.81% | +1.8pp |
+
+Reading: **the small geometry holds the floor most reliably** (more trades,
+tighter intervals — coin-flip Wilson lower bounds 86.5% / 85.8% at tp 5, and
+tp 3 never came close to 85), **but it is the furthest from break-even**. The
+large geometry needs only +1.8pp of genuine edge, yet with only ~100 trades
+per split its win rate is noise-dominated (84.8% in one cell) and cannot
+certify an 85% floor.
+
+So the locked target creates an explicit two-gate acceptance rule going
+forward:
+
+1. **Floor gate:** win rate ≥ 85.0% in *both* train and held-out, n ≥ 400
+   trades per split, Wilson lower bound reported beside the point estimate.
+2. **Survival gate (unchanged):** net expectancy, break-even win rate, worst
+   trade, and max drawdown reported beside any win rate; a configuration
+   that passes gate 1 while losing net pips is recorded as *floor met,
+   expectancy negative* — never as a success.
+
+On current measurements `tp 3 / sl 17` passes gate 1 in all six cells and
+fails gate 2 in all six (−0.12 to −0.68 pips/trade). Closing gate 2 requires
++6.0pp of directional edge at that size, or accepting fewer, larger trades
+at tp 10 where +1.8pp would suffice but the floor cannot yet be certified.
+That tension — floor reliability versus edge required — is now the stated
+shape of the problem.
