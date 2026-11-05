@@ -667,3 +667,51 @@ loss rather than removing it.
 a 94.8% break-even rate, and a longest losing run of 3. The number 18 is a
 dial setting, exactly as 19 was; turning it down buys a lower break-even bar
 (99.96% → 94.80%) but not a positive one.
+
+---
+
+## 14. "How can we achieve 17 wins in 20 trades?" — measured
+
+17/20 is an 85% win rate. On a driftless walk the win rate is set by the
+barriers alone, `win% ≈ sl/(tp+sl)`, so 85% requires the stop to be
+**5.67× the target**. Nothing about the signal is involved.
+
+Measured with the uploaded engine (`--tp 3.0 --sl 17.0 --spread 1.2`, 20,000
+bars):
+
+| mode | split | trades | win rate | **break-even** | blocks ≥17/20 | net/trade |
+|---|---|---|---|---|---|---|
+| coinflip | train | 1,360 | 88.53% | 91.00% | 1,099 | −0.494p |
+| coinflip | held out | 1,453 | 89.47% | 91.00% | 1,211 | −0.306p |
+| ema | train | 1,341 | 87.62% | 91.00% | 1,020 | −0.676p |
+| ema | held out | 1,412 | 88.88% | 91.00% | 1,134 | −0.424p |
+| momentum | train | 1,363 | 88.55% | 91.00% | 1,091 | −0.489p |
+| momentum | held out | 1,460 | 90.41% | 91.00% | 1,231 | −0.118p |
+
+So 17-of-20 blocks are not merely achievable, they are the *typical* outcome
+(>80% of rolling windows), for a coin flip as readily as for a signal. The
+17/20 headline is satisfied by construction. The cost column is unchanged in
+sign: average win +1.80p, average loss −18.20p, one loss erases 10.1 wins,
+worst trade −18.2p, max drawdown 234–915 pips, longest losing run 3–5.
+
+### The one real lever at a fixed win-rate target
+
+Break-even is `(sl + spread)/(tp + sl)`, so the gap between the driftless win
+rate and break-even is exactly **`spread/(tp+sl)`**. The ratio fixes the win
+rate; the *absolute size* fixes how much genuine edge you need:
+
+| tp | sl | ratio | driftless | break-even | **edge required** |
+|---|---|---|---|---|---|
+| 3 | 17.0 | 1:5.7 | 85.0% | 91.0% | **+6.0pp** |
+| 4 | 22.7 | 1:5.7 | 85.0% | 89.5% | +4.5pp |
+| 5 | 28.3 | 1:5.7 | 85.0% | 88.6% | +3.6pp |
+| 10 | 56.7 | 1:5.7 | 85.0% | 86.8% | **+1.8pp** |
+
+Same 17/20 shape, same 85%, but at `tp 10 / sl 56.7` the strategy needs only
+**1.8 percentage points** of real directional edge above a coin flip to break
+even, instead of 6.0. That is the honest version of "how to achieve it":
+keep the shape, enlarge the barriers until the spread is a small fraction of
+the trade, and then the remaining gap is small enough that a real edge —
+if one is ever found — could plausibly close it. No edge of even 1.8pp has
+been measured in this repository yet (§10, §11); that, not the barrier ratio,
+is the open problem.
