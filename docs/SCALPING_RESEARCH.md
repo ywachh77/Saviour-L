@@ -797,3 +797,35 @@ Blocking requirements before any fine-tune runs:
    only a success if its approved set holds ≥85% in held-out data *and* has
    positive net expectancy against the 91.0% break-even (tp 3) — a veto
    model that merely skips trades has not added edge until both are shown.
+
+---
+
+## 17. NVIDIA supervisor service (24/7) + one-time 19/20 test
+
+Built: `eurusd-proxy-bot/scripts/nvidia_supervisor_service.py`, using the
+repo's existing AI gateway (`fusion/ai_gateway`, NVIDIA NIM provider at
+`integrate.api.nvidia.com/v1`). It does not add a second engine: the
+supervisor only APPROVEs/VETOes candidates from the same barrier engine.
+
+* **24/7 mode** (`--daemon`): every cycle it auto-loads stored credentials
+  (a key connected later takes effect live, no restart), health-checks the
+  gateway, writes `var/nvidia_supervisor_heartbeat.json`, and re-runs the
+  test every N cycles. Verified locally: cycles run, heartbeat written,
+  clean SIGTERM stop. Deploy unit:
+  `eurusd-proxy-bot/deploy/nvidia-supervisor.service`.
+* **One-time 19/20 test** (`--once`, tp 1.25 / sl 116 / spread 1.2), run
+  2026-11-05 in this sandbox. No NVIDIA credential is stored here and
+  NVIDIA hosts are unreachable from the sandbox, so the supervisor ran in
+  the explicitly labelled `NO_NVIDIA_CREDENTIAL` approve-all baseline mode
+  — the number the AI must beat, not an AI result:
+
+| data | held-out n | win rate | break-even | net/trade | worst | max DD | 19+ windows |
+|---|---|---|---|---|---|---|---|
+| synthetic 20k, zero drift | 784 | 99.62% | 99.96% | −0.399p | −117.2p | 319.9p | 761 |
+| real 740 bars | 14 | 100.0% | 99.96% | +0.05p | +0.05p | 0.0p | 0 (n<20, inconclusive) |
+
+Gates on the 20k test: floor-17 **passed**, expectancy **failed** — the same
+shape as every previous 19/20 measurement (§11, §12). When a real NVIDIA
+key is stored on the deployment host, the identical command re-runs with
+the Qwen supervisor voting, and the two rows (baseline vs approved) become
+the comparison that decides whether the AI adds anything.
