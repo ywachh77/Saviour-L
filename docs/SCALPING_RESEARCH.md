@@ -840,3 +840,58 @@ connection attempt is detected and fails gracefully in this sandbox
 service continues in baseline mode. On a host with NVIDIA reachability,
 adding the secret named exactly **`NVIDIA_API_KEY`** is the only step
 needed — the already-running 24/7 service connects on its next cycle.
+
+---
+
+## 18. The genuine 19/20 hunt — final verdict
+
+**Cleanup performed first:** the unfinished multi-interface app scaffold
+(empty directories from an aborted turn) was deleted; generated runtime
+artifacts (heartbeats, test reports, supervisor JSONL) were removed — all
+regenerable by their scripts; the abandoned local llama.cpp build was
+killed. Working tree clean.
+
+**Data (new, genuine):** EUR/USD tick data (bid/ask) from the public
+FX-Data dataset (GitHub, `FX-Data/FX-Data-EURUSD-DS`, branch
+EURUSD-2021), aggregated to **179,843 M1 bars (Jan–Jun 2021)** for the
+hunt and **184,969 bars (Jul–Dec 2021)** held back untouched for
+replication. Real mean spread in the ticks: **0.35 pips**. The hunt
+(`scripts/genuine_19_hunt.py`) charges the harsher 1.2 pips anyway, and
+was also run at 0.4.
+
+**Definition used:** a genuine 19/20 = ≥95% win rate sustained out of
+sample with positive expectancy. At 1:19 barriers that requires beating
+break-even (`95% + spread/(tp+sl)`): +3.0pp of real edge at tp 2/sl 38,
++1.2pp at tp 5/sl 95, +0.6pp at tp 10/sl 190. Five predeclared direction
+rules (EMA trend, momentum, RSI mean-reversion, EMA+momentum, and a
+coin-flip control), causal features, next-bar entry, stop-first,
+non-overlapping trades, chronological held-out half as the only
+evidence. Passing required: win ≥95%, Wilson 95% lower bound **above**
+break-even, net > 0, n ≥ 100.
+
+**Result — no genuine 19/20 exists in this data:**
+
+| sample | best cell | why it fails |
+|---|---|---|
+| H1 held out (~90k bars) | coinflip 5/95: 96.93%, +0.73p | control cell positive = noise scale; Wilson lo 93.8% < 96.2% break-even |
+| H1 held out | ema 10/190: 96.72%, +2.24p | n=61; Wilson lo 88.8% < 95.6% |
+| H2 replication (~92k bars) | meanrev 10/190: 98.15%, +5.10p | n=54; Wilson lo 90.2% < 95.6% — and the same cell was **−5.15p in H1** |
+| both, at real 0.4p spread | — | identical verdict |
+
+Every rule performs like the coin flip; the largest "edges" flip sign
+between independent halves, which is the signature of noise, not signal.
+At the small geometry the test had power (n≈1,250 held out; a real
++3.0pp edge would have cleared the Wilson bar) — it is excluded, not
+merely unproven. At the large geometry, certifying the needed +0.6pp
+would take ≈5,000 trades ≈ 50+ years at ~90 trades/year: a genuine
+19/20 there is not just absent, it is **uncertifiable** on any feasible
+sample.
+
+**What stands as the deliverable instead:** the 17/20 floor
+configuration of §15 (tp 3 / sl 17), which holds ≥85% in all measured
+cells, reported always with its 91.0% break-even and negative
+expectancy; the NVIDIA supervisor service (§17), which will judge any
+future claimed edge — including a fine-tuned Qwen's — by the two-gate
+rule on data it has never seen. If a genuine edge ever appears (new
+data, new rule declared in advance), this hunt is the test it must
+pass, and `genuine_19_hunt.py` runs it in seconds.
