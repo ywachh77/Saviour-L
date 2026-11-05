@@ -165,3 +165,105 @@ Not a better optimiser. One of these:
 Until one of those is demonstrated, the correct behaviour for this family is
 what it already does: speak only as a prototype, never originate a signal, and
 be measured rather than assumed.
+
+---
+
+## 7. "So how do we achieve it?"
+
+Answered by `scripts/scalp_geometry_study.py`, which measures every lever rather
+than arguing about it. The short version: **you do not achieve 95% by forecasting
+better. You achieve it by changing the payoff** — and then the number stops
+being 95%.
+
+### The payoff grows with the square root of the hold
+
+The system settles at a fixed expiry (`fusion.settle`), so a trade's payoff is
+the mean absolute move over its hold. Nothing about the forecast changes that:
+
+| hold | mean abs move | spread as share of move | required hit rate @ 1.2 pip |
+|---|---|---|---|
+| 1 min | 1.92 pips | 62.4% | **81.2%** |
+| 2 min | 2.72 | 44.1% | 72.0% |
+| 5 min | 4.29 | 28.0% | 64.0% |
+| 15 min | 7.28 | 16.5% | 58.2% |
+| 30 min | 10.30 | 11.6% | 55.8% |
+| 60 min | 14.97 | 8.0% | **54.0%** |
+
+Holding from one minute to sixty drops the required hit rate from 92.9% to 54%.
+That is free — it needs no new model — and it is why the adaptive-horizon work is
+the only part of this repository whose effect has been measured as positive. It
+is also, of course, no longer scalping.
+
+### Spread moves it just as hard
+
+Required rate at a 1-minute hold: 81.2% at 1.2 pips, 68.2% at 0.7, 57.8% at
+0.3, 52.6% at 0.1. A better book does more for this family than any filter in
+the search. At 0.1 pips, a coin flip is nearly good enough.
+
+### The trap that produces "95%" and loses money
+
+The tempting route — small target, wide stop — really does manufacture a high
+hit rate, **with no forecast at all**. Measured on the same paths, entries taken
+by coin flip:
+
+| target (ATR) | stop (ATR) | measured hit rate | theory 1/(1+k) | net per trade |
+|---|---|---|---|---|
+| 2.00 | 0.50 | 20.4% | 20.0% | +0.02 pips |
+| 1.50 | 0.50 | 23.5% | 25.0% | −0.07 |
+| 1.00 | 1.00 | 35.3% | 50.0% | −0.70 |
+| 0.50 | 2.00 | 56.3% | 80.0% | −1.42 |
+| 0.25 | 5.00 | 79.1% | 95.2% | **−2.04** |
+
+The hit rate follows 1/(1+k), the reward-to-risk ratio, and nothing else. This
+is the crucial point: **a 95% win rate is a 0.053:1 payoff.** You get it by
+being right nineteen times for a penny and wrong once for a pound. Every one of
+those twenty trades pays the spread, so the geometry that maximises the win rate
+minimises the money. In the table the highest hit rate is the most expensive
+row.
+
+### Why "tune until it's 19 of 20" is not a route
+
+The same script runs that search honestly on a random walk with **no edge**,
+counting only trades actually taken:
+
+```
+13,734 threshold/window configurations tested in-sample
+6 of them produced 19 or 20 wins out of 20     (best in-sample: 20/20)
+
+Those 'discoveries' re-scored on unscored bars:
+0 still produced 19/20
+mean block out of sample: 9.8/20
+```
+
+A search *manufactures* 19/20 blocks on pure noise. They revert to 9.8/20 the
+moment they meet bars they were not tuned on. Any procedure that can be tuned
+until a 20-trade block contains one loss is a procedure that will, and the block
+it finds means nothing. **The 19/20 block is what a search produces; it is not
+what a system is.**
+
+### The three routes that do work
+
+1. **Hold longer** — free, already implemented, measured positive. 54% needed at
+   60 minutes instead of 81% at one.
+2. **Pay less spread** — free, and larger in effect than any filter tested. 57.8%
+   needed at 0.3 pips instead of 81.2%.
+3. **A forecast with demonstrated out-of-sample skill at a hold long enough to
+   clear the table above.** This is the only route that scales, and the
+   walk-forward machinery in `fusion/learning.py` is where it must be proven —
+   on the held-out split, with an interval that excludes zero.
+
+What is *not* a route: tuning thresholds until a 20-trade sample looks good.
+Section 5 above measures exactly that and it is noise.
+
+### What the honest target looks like
+
+Not "19 of every 20 win". Instead, on a rolling block of twenty trades:
+
+- **is net expectancy per trade positive**, after the spread, with an interval
+  that excludes zero?
+- **is the hit rate above the required rate for the payoff actually achieved**
+  (54% at a 60-minute hold, 81% at one minute) — measured, not assumed?
+- **does the block hold out of sample**, on trades the threshold never saw?
+
+Those three are answerable, falsifiable, and they are what the ledger, the
+Wilson interval and the walk-forward replay already compute.
