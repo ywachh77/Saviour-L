@@ -8,7 +8,10 @@ from fusion.config import Config
 from fusion.engine import FusionEngine
 from fusion.features import compute_features
 
-from .helpers import make_candles
+try:
+    from .helpers import make_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles
 
 UTC = timezone.utc
 

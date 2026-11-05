@@ -4,7 +4,10 @@ import unittest
 
 from fusion.features import FEATURE_NAMES, MIN_FEATURE_BARS, compute_features, model_vector
 
-from .helpers import make_candles
+try:
+    from .helpers import make_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles
 
 
 class TestFeatures(unittest.TestCase):

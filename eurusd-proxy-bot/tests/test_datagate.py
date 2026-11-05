@@ -8,7 +8,10 @@ from pathlib import Path
 from fusion import charter, datagate
 from fusion.datagate import DEGRADED, OK, count_gaps, evaluate, modelled_spread_pips
 
-from .helpers import make_candles, preserved_environ
+try:
+    from .helpers import make_candles, preserved_environ
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles, preserved_environ
 
 
 class TestModelledSpread(unittest.TestCase):

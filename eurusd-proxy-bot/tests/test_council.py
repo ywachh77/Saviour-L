@@ -14,7 +14,10 @@ from fusion.council import (
 from fusion.features import compute_features
 from fusion.strategies import PROTOTYPES
 
-from .helpers import make_candles
+try:
+    from .helpers import make_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles
 
 
 def bar(count: int = 200, **kwargs):

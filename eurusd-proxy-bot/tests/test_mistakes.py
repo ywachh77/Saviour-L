@@ -15,7 +15,10 @@ from fusion.mistakes import MAX_SAMPLES, MIN_SAMPLES, MistakeMemory
 from fusion.council import CouncilWeights, run_council
 from fusion.features import compute_features
 
-from .helpers import make_candles
+try:
+    from .helpers import make_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles
 
 KEY = "RANGE|LONDON|BUY"
 

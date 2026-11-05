@@ -40,7 +40,10 @@ from fusion.indicators import (
     squeeze_composite_vote,
 )
 
-from .helpers import make_candles
+try:
+    from .helpers import make_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles
 
 
 def _random_walk(count: int = 2500, *, seed: int = 3, vol: float = 0.0002) -> list[float]:
