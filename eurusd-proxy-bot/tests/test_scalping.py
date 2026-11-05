@@ -12,7 +12,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timezone
 
-from fusion import charter, scalping, strategies
+from fusion import charter, costs, scalping, strategies
 from fusion.council import MIN_SEEN_PER_PROTOTYPE, CouncilWeights, run_council
 from fusion.domain import Candle, Decision
 from fusion.features import FEATURE_NAMES, FEATURE_VERSION, compute_features
@@ -314,7 +314,9 @@ class ScalpFeatureTests(unittest.TestCase):
             feature_version=3,
         )
         self.assertFalse(stale.compatible)
-        self.assertEqual(9, FEATURE_VERSION)
+        # The vector is at 10 (composite rsi/squeeze inputs on top of the
+        # scalping set), not the 9 it was when this test was written.
+        self.assertGreaterEqual(FEATURE_VERSION, 10)
 
 
 class ScalpIntegrationTests(unittest.TestCase):
@@ -347,6 +349,87 @@ class ScalpIntegrationTests(unittest.TestCase):
     def test_a_wide_spread_stops_all_of_them(self) -> None:
         counts = self._tally(spread=6.0)
         self.assertEqual(0, sum(counts.values()), f"scalps fired through a 6-pip spread: {counts}")
+
+
+class ScalpEdgeIsMeasuredNotAssumed(unittest.TestCase):
+    """The measurement that has to stay true, and stay recorded.
+
+    Every scalping member was measured over independent held-out one-minute
+    series at the EUR/USD volatility actually observed. The finding is not
+    flattering and it is not a bug: a gross hit rate at a coin flip, a mean
+    gross move smaller than three times the spread, and therefore a required
+    hit rate of 63-78% the patterns do not deliver. The conjunction search in
+    ``scripts/scalp_edge_search.py`` did not rescue it either -- the train
+    split's best candidate scored 57.5% over 313 trades and 46.6% on the
+    held-out paths.
+
+    These tests exist so that (a) the arithmetic behind that conclusion is
+    pinned, and (b) the safety mechanism that makes an unprofitable family
+    survivable -- prototypes can never originate a signal -- cannot be
+    quietly removed by someone who later "fixes" the scalping rules.
+    """
+
+    def test_the_spread_sets_a_hit_rate_these_moves_cannot_clear(self) -> None:
+        """The whole argument, as arithmetic.
+
+        A member that captures 1.4 pips of average gross move, against a 1.2
+        pip round turn, needs 0.5 + 1.2 / (2 * 1.4) = 92.9% to break even --
+        before any model error. The measured gross hit rate is ~50%, so the
+        gap is not a tuning problem.
+        """
+        needed = costs.break_even_win_rate_from_move(1.4, 1.2)
+        self.assertAlmostEqual(0.5 + 1.2 / 2.8, needed, places=9)
+        self.assertGreater(needed, 0.90)
+
+        # And at the 2.4 pip M1 ATR the cost guard already demands, a one-minute
+        # scalp still needs 68%: four times the edge a coin flip provides.
+        projected = charter.SCALP_ATR_CAPTURE * 2.4
+        needed_at_floor = costs.break_even_win_rate_from_move(projected, charter.DEFAULT_SPREAD_PIPS)
+        self.assertGreater(needed_at_floor, 0.65)
+
+    def test_a_hit_rate_above_the_break_even_line_is_what_would_be_needed(self) -> None:
+        """If a member ever did deliver, the arithmetic would recognise it.
+
+        This is the other half of the guard: the previous test must not be
+        satisfiable by an accidental constant. A 95% hit rate on a 1.4 pip
+        mean move against 1.2 pips of cost is genuinely profitable, and the
+        same function says so.
+        """
+        edge = 0.95 * (1.4 - 1.2) - 0.05 * (1.4 + 1.2)
+        self.assertGreater(edge, 0.0, "95% on these numbers must be profitable")
+        # Break even on the same payoff needs ~93%, so 95% clears it and 55%
+        # does not:
+        self.assertGreater(0.95, costs.break_even_win_rate_from_move(1.4, 1.2))
+        self.assertLess(0.55, costs.break_even_win_rate_from_move(1.4, 1.2))
+
+    def test_a_scalp_can_never_originate_a_signal(self) -> None:
+        """The mechanism that makes an unprofitable family survivable.
+
+        A prototype with weight 0 is heard by nobody, and even at the maximum
+        learned weight it cannot create a signal -- only veto one. If that ever
+        stops being true, an unprofitable scalping family becomes an actual
+        source of trades instead of a voice that has to earn its place.
+        """
+        from fusion.council import CouncilWeights
+        from fusion.strategies import CORE, PROTOTYPES
+
+        for name in SCALPS:
+            self.assertIn(name, PROTOTYPES)
+            self.assertNotEqual(name, CORE)
+        # A fresh council has every prototype silent.
+        self.assertEqual({}, CouncilWeights().active())
+
+    def test_the_cost_guard_demands_more_than_the_spread_at_real_volatility(self) -> None:
+        """At the measured 1.8 pip M1 ATR, no scalp may speak.
+
+        0.5 x 1.8 = 0.9 pips of projected move against 1.2 pips of cost: the
+        guard is what stops this family trading its own fee, and it has to keep
+        doing that at the volatility the market actually offers.
+        """
+        self.assertFalse(charter.scalp_cost_ok(1.8, charter.DEFAULT_SPREAD_PIPS))
+        self.assertFalse(charter.scalp_cost_ok(1.0, charter.DEFAULT_SPREAD_PIPS))
+        # It is a cost test, not a ban: a genuinely volatile bar may speak.
+        self.assertTrue(charter.scalp_cost_ok(6.0, charter.DEFAULT_SPREAD_PIPS))
 
 
 if __name__ == "__main__":

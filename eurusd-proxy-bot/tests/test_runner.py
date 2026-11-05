@@ -19,8 +19,8 @@ from tests.helpers import make_candles
 
 # A fixed minute inside the London/New York overlap (a Monday, so no weekend
 # spread widening either). Tests that assert a signal is actually delivered
-# must anchor the clock here: the spread model charges 1.2 x 2.1 = 2.52 pips
-# outside the overlap, which is just past the 2.50 pip gate, so the same test
+# must anchor the clock here: the spread model charges 1.2 x 2.35 = 2.82 pips
+# outside the overlap, past the 1.2 x 2.2 = 2.64 refusal line, so the same test
 # passes at 15:55 UTC and fails at 03:50 UTC with no code change at all.
 IN_SESSION_MINUTE = datetime(2026, 1, 5, 12, 0, tzinfo=timezone.utc)
 
@@ -496,9 +496,9 @@ class TestOnDemandSignals(unittest.TestCase):
     @staticmethod
     def _fresh_candles(count: int = 200, seed: int = 11, end=None):
         # Anchored to a fixed London/New York overlap minute unless asked
-        # otherwise. The spread model widens off session -- 1.2 x 2.1 = 2.52
-        # pips, a hair over the 2.50 pip gate -- so a test whose candles are
-        # built from datetime.now() passes during the day and fails at night
+        # otherwise. The spread model widens off session -- 1.2 x 2.35 = 2.82
+        # pips, past the 1.2 x 2.2 = 2.64 refusal line -- so a test whose candles
+        # are built from datetime.now() passes during the day and fails at night
         # with the code completely unchanged. Tests that assert a signal is
         # *delivered* must therefore fix the clock, not read it.
         if end is None:
@@ -549,7 +549,14 @@ class TestOnDemandSignals(unittest.TestCase):
         from fusion.domain import Decision
 
         transport = ScriptedTransport()
+        # The higher-timeframe filter reads price structure independently of the
+        # forced core vote, and seed 11's last five-minute buckets are falling.
+        # Forcing the core to BUY against that would be asserting that the
+        # filter is allowed to be ignored -- it is not, it is a separate veto.
+        # Turning it off here is what lets the forced agreement reach the phone,
+        # which is the thing under test.
         bot = self._bot(transport, candles=self._fresh_candles(seed=11))
+        bot.config.mtf_filter = False
         original = dict(strategies.REGISTRY)
         strategies.REGISTRY[strategies.CORE] = lambda *a, **k: Decision("BUY", "forced", None, 6)
         try:

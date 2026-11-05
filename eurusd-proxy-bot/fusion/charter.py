@@ -66,8 +66,11 @@ DEFAULT_SPREAD_PIPS = 1.2
 # move together: an absolute cap silently decoupled from the assumed cost meant
 # that raising SPREAD_PIPS could block every session without explanation.
 #
-# The modelled off-hours spread is 2.1x base and the active-session figure is
-# 1.35x, so 2.2 covers off-hours with margin. Previously 1.9 blocked every
+# The modelled off-hours spread is 2.35x base and the active-session figure is
+# 1.35x. This multiple is the line where an off-hours bar is REFUSED, so it has
+# to sit between the two with margin on each side and it has to sit there on
+# purpose: at 2.2 the off-hours figure landed 0.02 pips from the cap, which is a
+# rounding accident rather than a decision. Previously 1.9 blocked every
 # off-hours bar because 2.1 > 1.9, which was the single largest signal killer
 # (24.5% of all bars blocked on real data).
 MAX_SPREAD_MULTIPLE = 2.2

@@ -192,9 +192,22 @@ class MedianAtrTests(unittest.TestCase):
 
 
 class ConfigDefaultsTests(unittest.TestCase):
-    def test_adaptive_is_off_by_default(self) -> None:
-        """Shipped behaviour must not change underneath an existing install."""
-        self.assertFalse(Config().adaptive_horizon)
+    def test_adaptive_stretching_ships_on(self) -> None:
+        """A config built with no environment in front of it must not trade a
+        hold that cannot pay for itself.
+
+        This used to assert the opposite, and the opposite was the bug: both
+        shipped workflows set ADAPTIVE_HORIZON=1, so the only place adaptive was
+        off was a bare ``Config()`` -- the one the tests and the dashboard build.
+        At the EUR/USD volatility measured from live candles a five-minute hold
+        against a 1.2 pip round turn cannot clear its own cost, and with
+        stretching off that bar is refused outright rather than held longer, so
+        the default quietly described a bot that should stand down.
+        """
+        self.assertTrue(Config().adaptive_horizon)
+
+    def test_it_can_still_be_switched_off(self) -> None:
+        self.assertFalse(Config(adaptive_horizon=False).adaptive_horizon)
 
     def test_the_cost_rule_is_exposed_and_conservative(self) -> None:
         config = Config()
@@ -215,10 +228,31 @@ class BreakEvenWinRateTests(unittest.TestCase):
     reported win rate has to be read against."""
 
     def test_symmetric_payoff_solves_to_the_closed_form(self) -> None:
-        # p = 0.5 + cost / (2 * move);  move = 0.38 * 10 * sqrt(16) = 15.2
+        # p = 0.5 + (R x cost) / (2 * move);  move = 0.38 * 10 * sqrt(16) = 15.2
+        # R, not 1: the required hit rate is the one that clears the three-times
+        # reward-to-cost gate, which is what the risk plan is sizing against.
         move = costs.expected_move_pips(10.0, 16)
-        expected = 0.5 + 2.0 / (2.0 * move)
+        expected = 0.5 + (costs.REWARD_TO_COST * 2.0) / (2.0 * move)
         self.assertAlmostEqual(expected, costs.break_even_win_rate(10.0, 16, 2.0), places=9)
+
+    def test_the_requirement_is_measured_against_the_gate_not_against_zero(self) -> None:
+        """A hold that merely pays its own spread is still refused.
+
+        This is the distinction that made the "sixteen-minute dead zone"
+        look like a bug in the holding rule: a horizon whose expected move
+        exactly equals the round turn has an expected value of zero before
+        model error is counted in, so it is still not a trade.
+        """
+        cost = 1.2
+        atr = 1.5
+        horizon = costs.minimum_viable_horizon(atr, cost)
+        self.assertIsNotNone(horizon)
+        # At the viable horizon the gate is exactly satisfied ...
+        self.assertGreaterEqual(
+            costs.expected_move_pips(atr, horizon), costs.REWARD_TO_COST * cost - 1e-9
+        )
+        # ... and the next-shorter one is not.
+        self.assertLess(costs.expected_move_pips(atr, horizon - 1), costs.REWARD_TO_COST * cost)
 
     def test_a_bigger_move_needs_a_lower_hit_rate(self) -> None:
         short = costs.break_even_win_rate(2.0, 5, 1.2)
@@ -231,16 +265,21 @@ class BreakEvenWinRateTests(unittest.TestCase):
         self.assertGreater(dear, cheap)
 
     def test_the_realistic_eurusd_five_minute_case_is_impossible(self) -> None:
-        """The headline number. At a 1.5 pip M1 ATR a five-minute hold would
-        need a 97% hit rate just to break even."""
+        """The headline number. At a 1.5 pip M1 ATR and a 1.2 pip round turn,
+        a five-minute hold projects 0.38 x 1.5 x sqrt(5) = 1.27 pips against
+        the 3.6 pips the gate demands, so no hit rate below certainty clears
+        it and the function says so with ``inf``."""
         required = costs.break_even_win_rate(1.5, 5, 1.2)
-        self.assertGreater(required, 0.95)
+        self.assertEqual(float("inf"), required)
 
     def test_stretching_the_hold_brings_it_within_reach(self) -> None:
-        """...and a forty-minute hold needs about 67%, which is merely hard."""
-        required = costs.break_even_win_rate(1.5, 40, 1.2)
-        self.assertLess(required, 0.70)
-        self.assertGreater(required, 0.60)
+        """...and a forty-minute hold projects 3.60 pips, which is exactly the
+        gate: it needs a certainty-level hit rate but it is at least askable.
+        A hundred and twenty minutes projects 6.24 pips and asks for 79%."""
+        self.assertGreater(costs.break_even_win_rate(1.5, 40, 1.2), 0.99)
+        required = costs.break_even_win_rate(1.5, 120, 1.2)
+        self.assertLess(required, 0.85)
+        self.assertGreater(required, 0.70)
 
     def test_an_unpayable_move_returns_infinity_not_a_number(self) -> None:
         """Returning a finite-looking value here would imply some accuracy could

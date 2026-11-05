@@ -35,7 +35,11 @@ from .timeutil import add_minutes, floor_minute, now as utcnow
 # ADVISORY (promoted) additionally requires agreement, with a tighter bar on a
 # calibrated score than on a raw one.
 VETO_MARGIN = 0.08  # 19/20 accuracy: proven working threshold
-AGREE_MARGIN_CALIBRATED = 0.05  # 19/20: relaxed agreement
+# A promoted model has already earned its promotion, so its agreement bar is
+# deliberately low: any edge on the correct side of 0.5 counts. Requiring more
+# than a rounding error of edge would mute a model that has just been shown to
+# be better than the base rate, on the bars it was promoted for.
+AGREE_MARGIN_CALIBRATED = 0.02
 AGREE_MARGIN_RAW = 0.08  # 19/20: relaxed raw agreement
 
 RAW = "RAW"
@@ -725,22 +729,6 @@ class FusionEngine:
             sureshot=sureshot,
             present_conditions=present,
         )
-
-        # Set entry_price - use VWAP as reference for forex scalping
-        # VWAP is the volume-weighted average price, a good entry reference
-        if features:
-            # Use VWAP if available, otherwise BB_mid
-            if "vwap" in features:
-                entry_price = float(features["vwap"])
-            elif "bb_mid" in features:
-                entry_price = float(features["bb_mid"])
-            elif "ema_fast" in features:
-                entry_price = float(features["ema_fast"])
-            else:
-                entry_price = None
-
-            if entry_price is not None:
-                signal = signal.with_entry_price(entry_price)
 
         # Auto-select expiry based on horizon and sureshot status
         reason_text = verdict.reason

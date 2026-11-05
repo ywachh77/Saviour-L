@@ -158,7 +158,7 @@ class Config:
     # any explicit UTC windows in NEWS_BLACKOUT_WINDOWS). See fusion/news.py.
     news_filter: bool = True
     news_blackout_windows: str = ""
-    reward_to_cost: float = 2.0
+    reward_to_cost: float = 3.0
     max_horizon_minutes: int = 120
     max_seal_latency_seconds: int = charter.MAX_SEAL_LATENCY_SECONDS
     max_candle_age_seconds: int = 130
@@ -350,9 +350,9 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
     spread = _float("SPREAD_PIPS", instrument.spread_pips)
     # The gate defaults to a multiple of the assumed spread rather than to a
     # fixed number. An absolute cap decoupled from the assumed cost meant the
-    # two drifted apart: the modelled off-hours spread (2.1x) could land 0.02
-    # pips over the cap purely by coincidence, and raising SPREAD_PIPS changed
-    # what the bot charged without changing what it would trade.
+    # two drifted apart: the modelled off-hours spread (2.35x) could land a
+    # rounding error over the cap purely by coincidence, and raising SPREAD_PIPS
+    # changed what the bot charged without changing what it would trade.
     max_spread = _float("MAX_SPREAD_PIPS", 0.0)
     if max_spread <= 0:
         max_spread = spread * charter.MAX_SPREAD_MULTIPLE
@@ -388,7 +388,7 @@ def load_config(dotenv_path: str | Path = ".env") -> Config:
         mtf_macro_min_gap_bps=_float("MTF_MACRO_MIN_GAP_BPS", 1.5),
         news_filter=_bool("NEWS_FILTER", True),
         news_blackout_windows=os.environ.get("NEWS_BLACKOUT_WINDOWS", "").strip(),
-        reward_to_cost=_float("REWARD_TO_COST", 2.0),
+        reward_to_cost=_float("REWARD_TO_COST", 3.0),
         max_horizon_minutes=_int("MAX_HORIZON_MINUTES", 120),
         max_seal_latency_seconds=_int("MAX_SEAL_LATENCY_SECONDS", charter.MAX_SEAL_LATENCY_SECONDS),
         max_candle_age_seconds=_int("MAX_CANDLE_AGE_SECONDS", 130),

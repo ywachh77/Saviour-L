@@ -34,8 +34,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from . import version as version_mod
 from .timeutil import format_display_hm, parse_datetime
 
-PRE_RELEASE_MINUTES = 10  # Wider: block 10 min before high-impact releases
-POST_RELEASE_MINUTES = 30  # Wider: block 30 min after high-impact releases
+PRE_RELEASE_MINUTES = 5  # standard [-5m, +15m] buffer, quoted in the docstring
+POST_RELEASE_MINUTES = 15  # a 30m blackout skipped whole London sessions on NFP day
 
 
 @dataclass(frozen=True, slots=True)

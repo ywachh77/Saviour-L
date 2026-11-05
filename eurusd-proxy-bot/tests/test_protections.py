@@ -169,7 +169,10 @@ class TestProtectionGuards(unittest.TestCase):
         c2 = Candle(t0 + timedelta(hours=48), 1.0890, 1.0895, 1.0885, 1.0892, 100.0)
         self.assertIsNone(_label([c0, c1, c2], 0, 2))
 
-        series = synthetic_series(700, seed=21)
+        # 2600 bars, not 700: run_backtest refuses to build folds below
+        # MIN_BARS_FOR_BACKTEST (2000) and returns an empty report, so at 700
+        # this was asserting folds >= 2 about a replay that never ran.
+        series = synthetic_series(2600, seed=21)
         cfg = Config(
             pair="EUR/USD",
             adaptive_horizon=True,
@@ -178,8 +181,8 @@ class TestProtectionGuards(unittest.TestCase):
             loss_guard_shadow_recovery=True,
         )
         rep = run_backtest(series, cfg, folds=3)
-        self.assertEqual(rep.bars, 700)
-        self.assertGreaterEqual(rep.folds, 2)
+        self.assertEqual(rep.bars, 2600)
+        self.assertGreaterEqual(rep.folds, 2, rep.note)
 
     def test_stoploss_shadow_recovery_holds_past_cooldown_until_shadow_or_real_win(self):
         rows = [
