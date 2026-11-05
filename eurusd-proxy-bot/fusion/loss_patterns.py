@@ -152,10 +152,33 @@ def extract_loss_features(losses: Sequence[dict], features_by_signal: dict) -> l
     return loss_features
 
 
-def should_trigger_loss_learning(settlements: Sequence[dict], min_trades: int = 20, target_win_rate: float = 0.95) -> tuple[bool, str]:
-    """Determine if losses warrant immediate learning intervention.
+def should_trigger_loss_learning(
+    settlements: Sequence[dict],
+    min_trades: int = 20,
+    target_win_rate: float | None = None,
+) -> tuple[bool, str]:
+    """Decide whether losses justify a loss-focused retrain.
 
-    Returns (should_learn, reason)
+    The target used to be a hardcoded **0.95**. A live hit rate is around 0.50,
+    so that condition was true on every single run: the function was not a loss
+    detector, it was "every night". It then upweighted the most recent losing
+    bars and installed the result as the champion, which is recency-fitting --
+    ``scripts/loss_streak_study.py`` measures the effect and finds it
+    indistinguishable from zero (mean +2.8% +/- 1.5% over six paths, four of six
+    within noise). A nightly refit that does not help is a nightly chance to
+    overfit.
+
+    The target is now the rate the spread actually demands, derived from the
+    trades themselves:
+
+        break-even = 0.5 + spread / (2 x mean |gross pips|)
+
+    That is the same arithmetic as ``fusion.costs.break_even_win_rate_from_move``
+    and ``docs/SCALPING_RESEARCH.md`` §1, applied to the realised moves rather
+    than a hoped-for number. And the shortfall must be statistically real: the
+    Wilson UPPER bound on the observed win rate has to sit below the break-even
+    line, so a 9-of-20 run -- which is ordinary noise at a 50% rate -- does not
+    trigger a retrain.
     """
     real = [s for s in settlements if not charter.is_synthetic(s.get("source"))]
     resolved = [s for s in real if s.get("outcome") in (charter.WIN, charter.LOSS)]
@@ -165,16 +188,52 @@ def should_trigger_loss_learning(settlements: Sequence[dict], min_trades: int = 
 
     wins = sum(1 for s in resolved if s.get("outcome") == charter.WIN)
     win_rate = wins / len(resolved)
+    _, upper = charter.wilson_interval(wins, len(resolved))
 
-    if win_rate < target_win_rate:
+    if target_win_rate is not None:
+        required = float(target_win_rate)
+        basis = "the caller's target"
+    else:
+        moves = [
+            abs(float(s.get("gross_pips")))
+            for s in resolved
+            if s.get("gross_pips") is not None and float(s.get("gross_pips")) != 0.0
+        ]
+        spreads = [
+            float(s.get("spread_pips"))
+            for s in resolved
+            if s.get("spread_pips") is not None
+        ]
+        if not moves:
+            return False, (
+                f"Win rate {win_rate:.1%} over {len(resolved)} trades, but no gross "
+                "move data to derive the break-even rate from."
+            )
+        mean_move = sum(moves) / len(moves)
+        cost = (sum(spreads) / len(spreads)) if spreads else charter.DEFAULT_SPREAD_PIPS
+        if mean_move <= cost:
+            return False, (
+                f"Mean gross move {mean_move:.2f}p does not clear the "
+                f"{cost:.2f}p spread; no win rate is profitable here, so a retrain "
+                "is not the remedy."
+            )
+        required = 0.5 + cost / (2.0 * mean_move)
+        basis = (
+            f"the {required:.1%} break-even rate for a {mean_move:.2f}p mean move "
+            f"against a {cost:.2f}p spread"
+        )
+
+    # A point estimate below target is not enough -- at a 50% hit rate a
+    # 9-of-20 run happens constantly. Require the whole interval to be short.
+    if upper < required:
         return True, (
-            f"Win rate {win_rate:.1%} is below target {target_win_rate:.1%} "
-            f"({wins}/{len(resolved)} wins). Loss learning activated."
+            f"Win rate {win_rate:.1%} over {len(resolved)} trades, with the Wilson "
+            f"upper bound at {upper:.1%}, is below {basis}. Loss learning activated."
         )
 
     return False, (
-        f"Win rate {win_rate:.1%} meets target {target_win_rate:.1%}. "
-        f"No loss learning needed."
+        f"Win rate {win_rate:.1%} [upper {upper:.1%}] over {len(resolved)} trades "
+        f"is not conclusively below {basis}. No retrain: this is within noise."
     )
 
 
@@ -183,11 +242,14 @@ def calculate_loss_learning_rate(base_rate: float, loss_count: int, win_rate: fl
 
     More losses = higher learning rate, capped to prevent overreaction.
     """
-    if win_rate >= 0.95:
+    # The reference is the coin-flip rate, not 0.95. A deficit measured against
+    # an unreachable 0.95 made every live run look like a crisis, which is how
+    # this multiplier sat permanently at its cap.
+    if win_rate >= 0.50:
         return base_rate
 
-    # Scale up based on how far below target we are
-    deficit = 0.95 - win_rate
+    # Scale up based on how far below a fair coin we are
+    deficit = 0.50 - win_rate
     multiplier = 1.0 + (deficit * 4.0)  # 4x amplification per unit deficit
 
     # More losses = higher rate

@@ -374,3 +374,105 @@ construction — the engine expresses a *relative* view, which is all an
 uncalibrated score can honestly express, and the cost floor decides whether that
 view is worth money. Tested by flipping the market's own drift: 15% BUY on a
 falling sample, 61% BUY on a rising one.
+
+---
+
+## 9. Why there are consecutive losses
+
+Measured by `scripts/loss_streak_study.py`. Three causes; only one is a defect.
+
+### 1. At a coin-flip hit rate, streaks are arithmetic (not a defect)
+
+The measured gross hit rate is ~50%. At p = 0.50, probability of at least one run
+of k losses in n trades:
+
+| trades | P(2+ run) | P(3+ run) | P(5+ run) | P(8+ run) |
+|---|---|---|---|---|
+| **20** | **98.3%** | **78.7%** | 25.0% | 2.7% |
+| 50 | 100% | 98.3% | 55.2% | 8.4% |
+| 100 | 100% | 100% | 81.0% | 17.0% |
+| 500 | 100% | 100% | 100% | 62.5% |
+
+**In a 20-trade block, two consecutive losses is the normal case (98%), and three
+is the likely case (79%).** Twenty trades with *no* two-loss run is the unusual
+outcome. This is what a 50% hit rate looks like — it is not a bug, and no counter
+or guard removes it. Only a higher hit rate does, and §7 shows why filtering
+cannot produce one.
+
+### 2. The stop-loss guard cannot prevent a streak it observes (structural)
+
+A loss is only visible once **settled**, and settlement happens at entry + hold.
+So the sequence is always:
+
+```
+trade 1 sealed  ->  ...  ->  trade 1 settles LOSS
+                            trade 2, 3, ... already sealed, settle later, also LOSS
+```
+
+The guard then blocks for the cooldown — but the losses it reacts to have already
+been taken. **It limits the next sequence, not this one.** Consecutive losses are
+not a failure of the guard; they are what the guard is downstream of.
+
+Note also `loss_guard_streak = 1` in config: it blocks after *any single* loss,
+then releases after 60 minutes, and with `loss_guard_shadow_recovery` on it holds
+up to a further 720 minutes and releases **on a timeout regardless of whether
+anything improved**. The blocking itself is wired correctly (verified through
+`Runner._check_runtime_protections`); it simply cannot act retroactively.
+
+### 3. The loss-learning loop fired every night and fitted the recent past (a defect, fixed)
+
+`loss_patterns.should_trigger_loss_learning` compared the win rate against a
+**hardcoded 0.95**. A live win rate is ~0.50, so that condition was true on
+every single run. It was not a loss detector — it was "every night". It then:
+
+* duplicated the most recent **losing** samples (1–3×, scaled by loss size),
+* refit, and
+* installed the result as the champion **before** walk-forward.
+
+Fitting harder to the bars that just went against you is recency-fitting. What it
+actually costs, measured on held-out bars over 6 paths:
+
+| clean fit | recency-weighted refit | change |
+|---|---|---|
+| 58.3% | 59.4% | +1.1% |
+| 49.2% | 54.6% | +5.4% |
+| 53.0% | 52.8% | −0.3% |
+| 50.3% | 48.8% | −1.5% |
+| 47.6% | 50.6% | +2.9% |
+| 48.6% | 58.0% | +9.4% |
+
+**Mean +2.84%, standard error ±1.51%.** Indistinguishable from zero, with four of
+six paths inside the noise band. The honest conclusion: upweighting recent losses
+neither fixes the losses nor measurably deepens them — it is **noise dressed as a
+correction, run every single night**, which is a nightly opportunity to overfit
+for no measured benefit.
+
+### Fixed
+
+`should_trigger_loss_learning` now derives its target from the trades themselves:
+
+```
+break-even = 0.5 + spread / (2 × mean |gross pips|)
+```
+
+and requires the shortfall to be **statistically real**: the Wilson *upper* bound
+on the observed win rate must sit below that line. Consequences:
+
+| sample | mean move | required | triggered? |
+|---|---|---|---|
+| 9-of-20 | 12.0 pips | 55% | **no** — 65.8% upper bound, this is noise |
+| 9-of-20 | 3.0 pips | 70% | **yes** — 65.8% upper bound is genuinely short |
+| 60-of-100 | 4.0 pips | 65% | no — healthy |
+| 60-of-100 | 2.6 pips | 73% | **yes** — same win rate, thinner payoff |
+
+The same 9-of-20 is judged differently depending on the payoff, which a fixed
+0.95 could never do. And when the mean gross move does not clear the spread at
+all, the retrain is **refused outright** — no win rate rescues arithmetic.
+
+`calculate_loss_learning_rate` is anchored to a fair coin (0.50) instead of 0.95,
+so it no longer sits permanently at its cap. `config.target_win_rate` was dead
+config — nothing read it — and is now documented as such.
+
+Pinned by `tests/test_loss_streaks.py` (15 tests), including the streak
+probabilities above, so that nobody "fixes" consecutive losses by suppressing the
+counter instead of raising the hit rate.

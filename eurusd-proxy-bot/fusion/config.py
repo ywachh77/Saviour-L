@@ -233,7 +233,14 @@ class Config:
     nightly_train_fraction: float = 0.70
     online_learning_rate: float = 0.02  # 19/20: proven working threshold
     # Self-learning module parameters
-    target_win_rate: float = 0.95  # 19/20: proven working threshold
+    # NOTE: not read by any code path, and deliberately so. It used to be
+    # what ``loss_patterns.should_trigger_loss_learning`` compared against,
+    # which meant the nightly loss-focused retrain fired on every run (a live
+    # win rate never reaches 0.95). The trigger now derives its target from
+    # the realised payoff -- 0.5 + spread/(2 x mean move) -- so this value is
+    # kept only for env compatibility. See docs/SCALPING_RESEARCH.md and
+    # scripts/loss_streak_study.py.
+    target_win_rate: float = 0.95
     loss_learning_multiplier: float = 5.0  # 19/20: proven working threshold
     loss_learning_rate_cap: float = 0.15  # 19/20: proven working threshold
     paper_trading_max_trades: int = 300  # 19/20: proven working threshold
