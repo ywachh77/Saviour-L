@@ -6,7 +6,10 @@ from fusion.domain import Candle
 from fusion.features import compute_features
 from fusion.strategies import CORE, PROTOTYPES, REGISTRY, orbix_confluence
 
-from .helpers import make_candles
+try:
+    from .helpers import make_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles
 
 # ATR band the core gate was written for.
 ATR_MIN, ATR_MAX = 0.0, 0.004

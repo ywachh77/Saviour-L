@@ -1,0 +1,17 @@
+[Unit]
+Description=SAVIOUR NVIDIA Supervisor (24/7)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/Saviour-L/eurusd-proxy-bot
+ExecStart=/usr/bin/python3 scripts/nvidia_supervisor_service.py --daemon --interval 300 --test-every 12
+Restart=always
+RestartSec=10
+# The NVIDIA key is NOT set here. The service auto-loads it from the AI
+# gateway credential store (neural/ai_credentials.json) every cycle, so a
+# key connected through the app takes effect without a restart.
+
+[Install]
+WantedBy=multi-user.target

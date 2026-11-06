@@ -374,3 +374,524 @@ construction — the engine expresses a *relative* view, which is all an
 uncalibrated score can honestly express, and the cost floor decides whether that
 view is worth money. Tested by flipping the market's own drift: 15% BUY on a
 falling sample, 61% BUY on a rising one.
+
+---
+
+## 9. Why there are consecutive losses
+
+Measured by `scripts/loss_streak_study.py`. Three causes; only one is a defect.
+
+### 1. At a coin-flip hit rate, streaks are arithmetic (not a defect)
+
+The measured gross hit rate is ~50%. At p = 0.50, probability of at least one run
+of k losses in n trades:
+
+| trades | P(2+ run) | P(3+ run) | P(5+ run) | P(8+ run) |
+|---|---|---|---|---|
+| **20** | **98.3%** | **78.7%** | 25.0% | 2.7% |
+| 50 | 100% | 98.3% | 55.2% | 8.4% |
+| 100 | 100% | 100% | 81.0% | 17.0% |
+| 500 | 100% | 100% | 100% | 62.5% |
+
+**In a 20-trade block, two consecutive losses is the normal case (98%), and three
+is the likely case (79%).** Twenty trades with *no* two-loss run is the unusual
+outcome. This is what a 50% hit rate looks like — it is not a bug, and no counter
+or guard removes it. Only a higher hit rate does, and §7 shows why filtering
+cannot produce one.
+
+### 2. The stop-loss guard cannot prevent a streak it observes (structural)
+
+A loss is only visible once **settled**, and settlement happens at entry + hold.
+So the sequence is always:
+
+```
+trade 1 sealed  ->  ...  ->  trade 1 settles LOSS
+                            trade 2, 3, ... already sealed, settle later, also LOSS
+```
+
+The guard then blocks for the cooldown — but the losses it reacts to have already
+been taken. **It limits the next sequence, not this one.** Consecutive losses are
+not a failure of the guard; they are what the guard is downstream of.
+
+Note also `loss_guard_streak = 1` in config: it blocks after *any single* loss,
+then releases after 60 minutes, and with `loss_guard_shadow_recovery` on it holds
+up to a further 720 minutes and releases **on a timeout regardless of whether
+anything improved**. The blocking itself is wired correctly (verified through
+`Runner._check_runtime_protections`); it simply cannot act retroactively.
+
+### 3. The loss-learning loop fired every night and fitted the recent past (a defect, fixed)
+
+`loss_patterns.should_trigger_loss_learning` compared the win rate against a
+**hardcoded 0.95**. A live win rate is ~0.50, so that condition was true on
+every single run. It was not a loss detector — it was "every night". It then:
+
+* duplicated the most recent **losing** samples (1–3×, scaled by loss size),
+* refit, and
+* installed the result as the champion **before** walk-forward.
+
+Fitting harder to the bars that just went against you is recency-fitting. What it
+actually costs, measured on held-out bars over 6 paths:
+
+| clean fit | recency-weighted refit | change |
+|---|---|---|
+| 58.3% | 59.4% | +1.1% |
+| 49.2% | 54.6% | +5.4% |
+| 53.0% | 52.8% | −0.3% |
+| 50.3% | 48.8% | −1.5% |
+| 47.6% | 50.6% | +2.9% |
+| 48.6% | 58.0% | +9.4% |
+
+**Mean +2.84%, standard error ±1.51%.** Indistinguishable from zero, with four of
+six paths inside the noise band. The honest conclusion: upweighting recent losses
+neither fixes the losses nor measurably deepens them — it is **noise dressed as a
+correction, run every single night**, which is a nightly opportunity to overfit
+for no measured benefit.
+
+### Fixed
+
+`should_trigger_loss_learning` now derives its target from the trades themselves:
+
+```
+break-even = 0.5 + spread / (2 × mean |gross pips|)
+```
+
+and requires the shortfall to be **statistically real**: the Wilson *upper* bound
+on the observed win rate must sit below that line. Consequences:
+
+| sample | mean move | required | triggered? |
+|---|---|---|---|
+| 9-of-20 | 12.0 pips | 55% | **no** — 65.8% upper bound, this is noise |
+| 9-of-20 | 3.0 pips | 70% | **yes** — 65.8% upper bound is genuinely short |
+| 60-of-100 | 4.0 pips | 65% | no — healthy |
+| 60-of-100 | 2.6 pips | 73% | **yes** — same win rate, thinner payoff |
+
+The same 9-of-20 is judged differently depending on the payoff, which a fixed
+0.95 could never do. And when the mean gross move does not clear the spread at
+all, the retrain is **refused outright** — no win rate rescues arithmetic.
+
+`calculate_loss_learning_rate` is anchored to a fair coin (0.50) instead of 0.95,
+so it no longer sits permanently at its cap. `config.target_win_rate` was dead
+config — nothing read it — and is now documented as such.
+
+Pinned by `tests/test_loss_streaks.py` (15 tests), including the streak
+probabilities above, so that nobody "fixes" consecutive losses by suppressing the
+counter instead of raising the hit rate.
+
+---
+
+## 11. The uploaded strategy, measured
+
+`reference/eurusd_strategy.py` (the project owner's file, kept **unmodified**),
+analysed by `scripts/the_file_edge_study.py`. Seven samples: the 740 real bars
+plus 6 zero-drift random walks of 4,000 bars each.
+
+The file has **no ADX and no cost model**. ADX appears below only as a
+*conditioning* variable — when its signals work, not how they are formed.
+
+### It loses on both kinds of data
+
+| threshold | expiry | trades | gross win% | net win% | net pips |
+|---|---|---|---|---|---|
+| 65 | 1m | 330 | 50.0% | 30.6% | −437 |
+| 65 | 5m | 330 | 47.9% | 38.2% | −481 |
+| 65 | 15m | 330 | 41.5% | 34.5% | −855 |
+| **80** | any | **1** | — | — | −4 |
+
+Pooled over all seven samples: **2,205 trades, 40.6% net win rate, −1.29 pips
+per trade.** The gross rate is 41–50%; the spread removes the rest. The default
+threshold of 80 produces **one trade in 20,000 bars**, which is the score-cliff
+problem from §10 of the file review.
+
+On the real bars alone, expiry 15m is the one positive cell (+67 pips over 116
+trades) — one cell out of seven, on one day. It is not a finding.
+
+### Where its signals win and lose: nothing survives
+
+| condition | best bucket | net win% | vs base | p |
+|---|---|---|---|---|
+| RSI | 30–50 | 41.6% | +1.0% | 0.55 |
+| ADX | 25–35 | 43.5% | +2.9% | 0.18 |
+| ATR | mid | 43.0% | +2.4% | 0.29 |
+| EMA slope | falling | 44.8% | +3.6% | 0.23 |
+| Close in range | low | 44.0% | +2.8% | 0.32 |
+
+**Survives multiple-comparison correction: none.** The base rate is 40.6%, so
+every bucket sits within a few points of it and none is distinguishable from the
+others. Notably, the earlier "ADX < 20 is strongly bullish" result from §10
+**does not appear here** (ADX < 20 is −1.4 points) — further evidence that the §10
+result was one trending session, not a regime effect.
+
+Direction balance is fine: 200 BUY / 130 SELL. It is not blind-long.
+
+### The 19/20 question, answered
+
+Every expiry was searched in-sample across all samples (chronological half for
+tuning, untouched half for testing):
+
+| expiry | trades | blocks of 20 | best block | 19+ blocks | net/trade |
+|---|---|---|---|---|---|
+| 1m | 1,130 | 997 | 13 | 0 | −1.15 |
+| 3m | 1,126 | 993 | 14 | 0 | −1.34 |
+| 5m | 1,123 | 990 | 14 | 0 | −1.41 |
+| 10m | 1,117 | 984 | 16 | 0 | −1.47 |
+| **15m** | 1,115 | 982 | **19** | **1** | −1.51 |
+
+A single 19/20 block appears — at 15-minute expiry, out of **982 overlapping
+windows**, on data where the strategy loses 1.51 pips a trade. On the held-out
+half that same parameter gives: **best 17/20, zero 19+ blocks, −1.97 pips a
+trade.**
+
+So the answer to "I need 19 wins under 20" is:
+
+* a 19/20 block **can be found by searching** — one exists here, in ~6,000 windows
+  of overlapping data, on a strategy that loses money;
+* it **does not survive the search being over.** Held out: 17/20 and losing
+  twice as much per trade;
+* on a fair coin, 19-of-20 occurs with probability **21/2²⁰ ≈ 2.0e-05 per block** —
+  across 982 overlapping windows you would expect it to appear now and then
+  without any edge at all. That is exactly what happened.
+
+The block is a property of having looked at 982 windows, not a property of the
+strategy.
+
+---
+
+## 12. `reference/eurusd_m1.py` — a correct implementation of a losing strategy
+
+The uploaded engine is **the honest version of the 19/20 experiment**, and it is
+noticeably better built than most. Verified by `scripts/verify_eurusd_m1.py`:
+
+| check | result |
+|---|---|
+| Causality (truncation test) | **PASS** — 0 mismatches |
+| `net_pips == gross − spread` | **PASS** — 0 wrong of 229 |
+| Break-even formula | **PASS** — +0.050 / 117.20 → 99.9574% |
+| Intrabar ambiguity | 0 of 229 touched both barriers; resolved **stop-first** (conservative) |
+
+**What it does right**, and it is a genuine list:
+
+* Charges the spread on every trade and reports **net** pips, not gross.
+* Chronological train / held-out split, with boundary trades excluded.
+* **Wilson interval** on the win rate and a **bootstrap CI** on expectancy.
+* Reports worst trade, max drawdown, longest losing run.
+* Explicit `safety` block: no martingale, no averaging down, no adding to a
+  loser, no same-candle re-entry, no live execution.
+* **States its own limitations** — including the one that matters: OHLC cannot
+  reveal intrabar order, so it assumes the stop came first.
+* Warns if `tp <= spread`.
+
+That is the discipline this repository has been asking for. The problem is not
+the code. The problem is the geometry it was asked to test.
+
+### The result, and why every number in it is negative
+
+| mode | split | n | win rate | **needed** | margin | net/trade |
+|---|---|---|---|---|---|---|
+| coinflip | train | 1,031 | 99.81% | 99.96% | −0.15pp | −0.177 |
+| coinflip | held out | 902 | 99.67% | 99.96% | −0.29pp | −0.340 |
+| ema | train | 516 | 99.03% | 99.96% | −0.93pp | −1.086 |
+| ema | held out | 740 | 99.59% | 99.96% | −0.36pp | −0.425 |
+| momentum | train | 731 | 99.59% | 99.96% | −0.37pp | −0.431 |
+| momentum | held out | 1,115 | 99.82% | 99.96% | −0.14pp | −0.160 |
+
+The "margin" column is the whole story. The win rate is 99%+ and **it is never
+enough**, because a 1.25 pip target against a 1.20 pip spread leaves **0.05 pips
+of profit per win** — 4% of the spread. A single 116 pip stop-out erases **2,344
+winning trades**. Break-even requires 99.9574%.
+
+### The control that makes the finding airtight
+
+The same engine, three direction rules. One of them is a **coin flip** — a
+deliberate admission that the signal cannot matter at this geometry.
+
+| mode | trades (train) | avg bars held |
+|---|---|---|
+| coinflip | 1,031 | 8.7 |
+| ema | 516 | 18.0 |
+| momentum | 731 | 11.5 |
+
+The EMA rule is stopped out **twice as often** and holds twice as long, yet
+earns nearly the same negative expectancy. **Direction selection changes how
+often you get stopped, not whether you make money.** That is the cleanest
+demonstration in this repository that at this payoff the win rate is a property
+of the barriers, and the barriers do not touch the spread.
+
+### What would make this engine profitable
+
+Not a better signal. Either:
+
+* **`--tp` well above the spread.** At 1.25 pips against 1.20, profit per win is
+  0.05; at 4 pips it is 2.80, and the break-even win rate falls to 50.6% (the
+  expectation is *unchanged*, but the variance and the tail collapse).
+* **`--spread 0.3`.** Profit per win becomes 0.95 pips, break-even 99.2%, and
+  the same trades turn positive.
+
+Run either and re-read the table; the code does not need to change, which is a
+compliment to the code.
+
+---
+
+## 13. "At least 18 of 20, with no consecutive loss" — measured
+
+Relaxing 19 to 18 changes the *shape* requirement, not the arithmetic.
+
+**Geometry.** On a driftless walk the win rate is ≈ `sl/(tp+sl)`, so 90%
+requires the stop to be **9× the target**. At `--tp 2.5 --sl 22.5 --spread 1.2`
+(coin-flip direction, 20,000 bars):
+
+| split | trades | win rate | blocks ≥18/20 | ≥18 **and** no back-to-back loss | longest losing run | net/trade |
+|---|---|---|---|---|---|---|
+| train | 1,340 | 93.88% | 1,165 | 1,150 | **3** | −0.230p |
+| held out | 1,354 | 93.72% | 1,184 | 1,155 | **3** | −0.269p |
+
+So ≥18/20 blocks are everywhere — and the run still had a **3-loss streak in
+both halves** and 5–7 back-to-back loss pairs. Average win +1.30p, average loss
+−23.70p, break-even win rate **94.80%** against 93.9% achieved: relaxing the
+target moved the shortfall, it did not close it.
+
+**"No consecutive loss" cannot be a property of a strategy that keeps
+trading.** At a 10% per-trade loss probability, the chance of *never* seeing
+two losses in a row is 83.9% over 20 trades, 40.2% over 100, and **0.01% over
+1,000**. At the measured 6.2% loss rate it is still only 2.6% over 1,000
+trades, with the first back-to-back loss expected around trade ~260. It is a
+statement about a short sample, not a designable guarantee.
+
+The only mechanisms that can *enforce* it are: stop trading permanently after
+the first loss (one loss ever, no strategy), or increase size / hold after a
+loss until it recovers — martingale and averaging down, both forbidden by the
+project charter, and both convert a losing streak into a single catastrophic
+loss rather than removing it.
+
+**What is honestly available:** a 90%-shaped payoff (1:9 barriers) whose
+18-of-20 blocks are common, reported *alongside* −0.23 to −0.27 pips/trade,
+a 94.8% break-even rate, and a longest losing run of 3. The number 18 is a
+dial setting, exactly as 19 was; turning it down buys a lower break-even bar
+(99.96% → 94.80%) but not a positive one.
+
+---
+
+## 14. "How can we achieve 17 wins in 20 trades?" — measured
+
+17/20 is an 85% win rate. On a driftless walk the win rate is set by the
+barriers alone, `win% ≈ sl/(tp+sl)`, so 85% requires the stop to be
+**5.67× the target**. Nothing about the signal is involved.
+
+Measured with the uploaded engine (`--tp 3.0 --sl 17.0 --spread 1.2`, 20,000
+bars):
+
+| mode | split | trades | win rate | **break-even** | blocks ≥17/20 | net/trade |
+|---|---|---|---|---|---|---|
+| coinflip | train | 1,360 | 88.53% | 91.00% | 1,099 | −0.494p |
+| coinflip | held out | 1,453 | 89.47% | 91.00% | 1,211 | −0.306p |
+| ema | train | 1,341 | 87.62% | 91.00% | 1,020 | −0.676p |
+| ema | held out | 1,412 | 88.88% | 91.00% | 1,134 | −0.424p |
+| momentum | train | 1,363 | 88.55% | 91.00% | 1,091 | −0.489p |
+| momentum | held out | 1,460 | 90.41% | 91.00% | 1,231 | −0.118p |
+
+So 17-of-20 blocks are not merely achievable, they are the *typical* outcome
+(>80% of rolling windows), for a coin flip as readily as for a signal. The
+17/20 headline is satisfied by construction. The cost column is unchanged in
+sign: average win +1.80p, average loss −18.20p, one loss erases 10.1 wins,
+worst trade −18.2p, max drawdown 234–915 pips, longest losing run 3–5.
+
+### The one real lever at a fixed win-rate target
+
+Break-even is `(sl + spread)/(tp + sl)`, so the gap between the driftless win
+rate and break-even is exactly **`spread/(tp+sl)`**. The ratio fixes the win
+rate; the *absolute size* fixes how much genuine edge you need:
+
+| tp | sl | ratio | driftless | break-even | **edge required** |
+|---|---|---|---|---|---|
+| 3 | 17.0 | 1:5.7 | 85.0% | 91.0% | **+6.0pp** |
+| 4 | 22.7 | 1:5.7 | 85.0% | 89.5% | +4.5pp |
+| 5 | 28.3 | 1:5.7 | 85.0% | 88.6% | +3.6pp |
+| 10 | 56.7 | 1:5.7 | 85.0% | 86.8% | **+1.8pp** |
+
+Same 17/20 shape, same 85%, but at `tp 10 / sl 56.7` the strategy needs only
+**1.8 percentage points** of real directional edge above a coin flip to break
+even, instead of 6.0. That is the honest version of "how to achieve it":
+keep the shape, enlarge the barriers until the spread is a small fraction of
+the trade, and then the remaining gap is small enough that a real edge —
+if one is ever found — could plausibly close it. No edge of even 1.8pp has
+been measured in this repository yet (§10, §11); that, not the barrier ratio,
+is the open problem.
+
+---
+
+## 15. Target locked: 17 of 20 is the floor
+
+Recorded as a project constraint: **no configuration below 17 wins per 20
+trades (85%) will be considered.** Interpreted precisely, because the loose
+reading is unachievable: the floor applies to the overall win rate over a
+stated sample (with its Wilson lower bound reported), **not** to every rolling
+block of 20 — at an 85–90% win rate some blocks always fall below 17, and a
+per-block guarantee would require the martingale class of mechanisms the
+charter forbids.
+
+All three 1:5.7 geometries measured (20,000 bars, spread 1.2, three direction
+modes, train + held out = six cells each):
+
+| geometry | trades/split | win rates across 6 cells | cells ≥85% | break-even | edge required |
+|---|---|---|---|---|---|
+| tp 3 / sl 17 | ~1,400 | 87.6–90.4% | **6 of 6** | 91.00% | +6.0pp |
+| tp 5 / sl 28.3 | ~490 | 84.2–89.4% | 5 of 6 | 88.59% | +3.6pp |
+| tp 10 / sl 56.7 | ~100 | 84.8–89.7% | 5 of 6 | 86.81% | +1.8pp |
+
+Reading: **the small geometry holds the floor most reliably** (more trades,
+tighter intervals — coin-flip Wilson lower bounds 86.5% / 85.8% at tp 5, and
+tp 3 never came close to 85), **but it is the furthest from break-even**. The
+large geometry needs only +1.8pp of genuine edge, yet with only ~100 trades
+per split its win rate is noise-dominated (84.8% in one cell) and cannot
+certify an 85% floor.
+
+So the locked target creates an explicit two-gate acceptance rule going
+forward:
+
+1. **Floor gate:** win rate ≥ 85.0% in *both* train and held-out, n ≥ 400
+   trades per split, Wilson lower bound reported beside the point estimate.
+2. **Survival gate (unchanged):** net expectancy, break-even win rate, worst
+   trade, and max drawdown reported beside any win rate; a configuration
+   that passes gate 1 while losing net pips is recorded as *floor met,
+   expectancy negative* — never as a success.
+
+On current measurements `tp 3 / sl 17` passes gate 1 in all six cells and
+fails gate 2 in all six (−0.12 to −0.68 pips/trade). Closing gate 2 requires
++6.0pp of directional edge at that size, or accepting fewer, larger trades
+at tp 10 where +1.8pp would suffice but the floor cannot yet be certified.
+That tension — floor reliability versus edge required — is now the stated
+shape of the problem.
+
+---
+
+## 16. Supervisor fine-tune: plan, and why the data comes first
+
+Agreed direction: fine-tune the uploaded LLM as a **supervisor** — it sits
+above the barrier engine and answers APPROVE / VETO on each candidate signal,
+seeing only signal-bar information. `scripts/build_supervisor_dataset.py`
+builds the training data with the correct labels: a candidate is APPROVE iff
+taking it would have won **net of spread** under the engine's own rules
+(next-bar-open entry, stop-first, non-overlapping candidates).
+
+Measured on the repo's real candles (740 bars, spread 1.2):
+
+| geometry | labelled trades | train / held out | approve-all net |
+|---|---|---|---|
+| tp 3 / sl 17 | **33** | 16 / 17 | −11.2p / +10.6p |
+| tp 10 / sl 56.7 | **4** | 2 / 2 | +17.6p / +17.6p |
+
+This settles the sequencing: **33 examples cannot fine-tune anything.** A
+model trained on them would memorise 33 trades and report whatever the
+memorisation implies. The dataset is, however, exactly the right shape to
+*e*valuate a supervisor later (does it beat approve-all on held-out trades?).
+
+Blocking requirements before any fine-tune runs:
+
+1. **The model upload.** Not yet received. Needed: full weights
+   (safetensors), `config.json`, and tokenizer files. A GGUF file cannot be
+   fine-tuned (inference-only format). This sandbox has **no GPU**, so CPU
+   LoRA is realistic only for small models (≤ ~1B parameters); a larger model
+   means either a hosted fine-tuning API or accepting evaluation-only here.
+2. **Real training volume.** Months of EUR/USD M1 (≥ ~50k bars → ~2,000+
+   labelled trades at tp 3), split chronologically, never shuffled.
+3. **The two-gate rule still governs the result** (§15): the supervisor is
+   only a success if its approved set holds ≥85% in held-out data *and* has
+   positive net expectancy against the 91.0% break-even (tp 3) — a veto
+   model that merely skips trades has not added edge until both are shown.
+
+---
+
+## 17. NVIDIA supervisor service (24/7) + one-time 19/20 test
+
+Built: `eurusd-proxy-bot/scripts/nvidia_supervisor_service.py`, using the
+repo's existing AI gateway (`fusion/ai_gateway`, NVIDIA NIM provider at
+`integrate.api.nvidia.com/v1`). It does not add a second engine: the
+supervisor only APPROVEs/VETOes candidates from the same barrier engine.
+
+* **24/7 mode** (`--daemon`): every cycle it auto-loads stored credentials
+  (a key connected later takes effect live, no restart), health-checks the
+  gateway, writes `var/nvidia_supervisor_heartbeat.json`, and re-runs the
+  test every N cycles. Verified locally: cycles run, heartbeat written,
+  clean SIGTERM stop. Deploy unit:
+  `eurusd-proxy-bot/deploy/nvidia-supervisor.service`.
+* **One-time 19/20 test** (`--once`, tp 1.25 / sl 116 / spread 1.2), run
+  2026-11-05 in this sandbox. No NVIDIA credential is stored here and
+  NVIDIA hosts are unreachable from the sandbox, so the supervisor ran in
+  the explicitly labelled `NO_NVIDIA_CREDENTIAL` approve-all baseline mode
+  — the number the AI must beat, not an AI result:
+
+| data | held-out n | win rate | break-even | net/trade | worst | max DD | 19+ windows |
+|---|---|---|---|---|---|---|---|
+| synthetic 20k, zero drift | 784 | 99.62% | 99.96% | −0.399p | −117.2p | 319.9p | 761 |
+| real 740 bars | 14 | 100.0% | 99.96% | +0.05p | +0.05p | 0.0p | 0 (n<20, inconclusive) |
+
+Gates on the 20k test: floor-17 **passed**, expectancy **failed** — the same
+shape as every previous 19/20 measurement (§11, §12). When a real NVIDIA
+key is stored on the deployment host, the identical command re-runs with
+the Qwen supervisor voting, and the two rows (baseline vs approved) become
+the comparison that decides whether the AI adds anything.
+
+**Secret wiring (same day):** the gateway originally read only its
+credential file, so an `NVIDIA_API_KEY` added in Secrets would have been
+invisible. The service now checks the environment secret **every cycle**
+and connects it through the gateway's validate-and-store path; the key
+value is never printed or logged. Verified with a throwaway fake key: the
+connection attempt is detected and fails gracefully in this sandbox
+(NVIDIA hosts unreachable here), the fake key is stored nowhere, and the
+service continues in baseline mode. On a host with NVIDIA reachability,
+adding the secret named exactly **`NVIDIA_API_KEY`** is the only step
+needed — the already-running 24/7 service connects on its next cycle.
+
+---
+
+## 18. The genuine 19/20 hunt — final verdict
+
+**Cleanup performed first:** the unfinished multi-interface app scaffold
+(empty directories from an aborted turn) was deleted; generated runtime
+artifacts (heartbeats, test reports, supervisor JSONL) were removed — all
+regenerable by their scripts; the abandoned local llama.cpp build was
+killed. Working tree clean.
+
+**Data (new, genuine):** EUR/USD tick data (bid/ask) from the public
+FX-Data dataset (GitHub, `FX-Data/FX-Data-EURUSD-DS`, branch
+EURUSD-2021), aggregated to **179,843 M1 bars (Jan–Jun 2021)** for the
+hunt and **184,969 bars (Jul–Dec 2021)** held back untouched for
+replication. Real mean spread in the ticks: **0.35 pips**. The hunt
+(`scripts/genuine_19_hunt.py`) charges the harsher 1.2 pips anyway, and
+was also run at 0.4.
+
+**Definition used:** a genuine 19/20 = ≥95% win rate sustained out of
+sample with positive expectancy. At 1:19 barriers that requires beating
+break-even (`95% + spread/(tp+sl)`): +3.0pp of real edge at tp 2/sl 38,
++1.2pp at tp 5/sl 95, +0.6pp at tp 10/sl 190. Five predeclared direction
+rules (EMA trend, momentum, RSI mean-reversion, EMA+momentum, and a
+coin-flip control), causal features, next-bar entry, stop-first,
+non-overlapping trades, chronological held-out half as the only
+evidence. Passing required: win ≥95%, Wilson 95% lower bound **above**
+break-even, net > 0, n ≥ 100.
+
+**Result — no genuine 19/20 exists in this data:**
+
+| sample | best cell | why it fails |
+|---|---|---|
+| H1 held out (~90k bars) | coinflip 5/95: 96.93%, +0.73p | control cell positive = noise scale; Wilson lo 93.8% < 96.2% break-even |
+| H1 held out | ema 10/190: 96.72%, +2.24p | n=61; Wilson lo 88.8% < 95.6% |
+| H2 replication (~92k bars) | meanrev 10/190: 98.15%, +5.10p | n=54; Wilson lo 90.2% < 95.6% — and the same cell was **−5.15p in H1** |
+| both, at real 0.4p spread | — | identical verdict |
+
+Every rule performs like the coin flip; the largest "edges" flip sign
+between independent halves, which is the signature of noise, not signal.
+At the small geometry the test had power (n≈1,250 held out; a real
++3.0pp edge would have cleared the Wilson bar) — it is excluded, not
+merely unproven. At the large geometry, certifying the needed +0.6pp
+would take ≈5,000 trades ≈ 50+ years at ~90 trades/year: a genuine
+19/20 there is not just absent, it is **uncertifiable** on any feasible
+sample.
+
+**What stands as the deliverable instead:** the 17/20 floor
+configuration of §15 (tp 3 / sl 17), which holds ≥85% in all measured
+cells, reported always with its 91.0% break-even and negative
+expectancy; the NVIDIA supervisor service (§17), which will judge any
+future claimed edge — including a fine-tuned Qwen's — by the two-gate
+rule on data it has never seen. If a genuine edge ever appears (new
+data, new rule declared in advance), this hunt is the test it must
+pass, and `genuine_19_hunt.py` runs it in seconds.

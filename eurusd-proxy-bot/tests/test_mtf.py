@@ -9,7 +9,10 @@ from fusion.domain import Candle
 from fusion.features import FEATURE_VERSION, compute_features
 from fusion.mtf import Bias, DOWN, FLAT, UP, bias, bias_series, resample
 
-from .helpers import make_candles
+try:
+    from .helpers import make_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles
 
 UTC = timezone.utc
 

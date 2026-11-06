@@ -6,7 +6,10 @@ from fusion import charter, settle
 from fusion.domain import Candle, Signal
 from fusion.timeutil import UTC, add_minutes
 
-from .helpers import make_candles
+try:
+    from .helpers import make_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles
 
 PAIR = "EUR/USD"
 

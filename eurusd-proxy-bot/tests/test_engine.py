@@ -11,7 +11,10 @@ from fusion.features import compute_features
 from fusion.model import MODE_ADVISORY, MODE_VETO, OnlineLogisticModel
 from fusion.timeutil import floor_minute, now
 
-from .helpers import make_candles
+try:
+    from .helpers import make_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles
 
 
 def engine(**overrides) -> FusionEngine:

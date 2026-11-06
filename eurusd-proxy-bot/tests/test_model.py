@@ -6,7 +6,10 @@ from fusion.features import FEATURE_NAMES, FEATURE_VERSION, compute_features
 from fusion.learning import build_training_samples
 from fusion.model import MODE_VETO, BootstrapEnsemble, OnlineLogisticModel
 
-from .helpers import make_candles, trending_candles
+try:
+    from .helpers import make_candles, trending_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles, trending_candles
 
 
 def training_pairs(count: int = 200, *, trending: bool = True):

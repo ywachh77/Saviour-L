@@ -21,7 +21,10 @@ from fusion.runner import SAVE_STATE_EVERY, FusionBot
 from fusion.store import LocalStore, Store
 from scripts.web_dashboard import DOCS_DIR, OperatorRuntime, _build_scaled_paper_series
 
-from .helpers import make_candles
+try:
+    from .helpers import make_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles
 
 
 def _base_feature_row() -> tuple[Candle, float, dict[str, float]]:

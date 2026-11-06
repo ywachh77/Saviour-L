@@ -16,7 +16,10 @@ from fusion.learning import (
 )
 from fusion.model import MODE_ADVISORY, MODE_VETO, OnlineLogisticModel
 
-from .helpers import make_candles, trending_candles
+try:
+    from .helpers import make_candles, trending_candles
+except ImportError:  # top-level run: unittest discover -s tests
+    from helpers import make_candles, trending_candles
 
 
 class TestSampleBuilder(unittest.TestCase):
