@@ -97,8 +97,11 @@ VWAP_REVERSION_MIN_DEV = 0.15     # scaled units; roughly 1.5 pips on EUR/USD
 # 6. Liquidity-sweep rejection at a micro pivot
 PIVOT_MIN_CLOSE_POSITION = 0.55
 
-# 7. Volatility-expansion breakout (validated on 71,939 real EUR/USD M1 bars:
-#    +0.378 net pips/trade in Train Aug-Sep, +0.382 net pips/trade in OOS Oct)
+# 7. Volatility-expansion breakout. A prior internal benchmark reported
+#    +0.378/+0.382 net pips/trade, but that result is not independently
+#    reproduced: a 373,474-bar 2020 tick-derived test was negative in both
+#    halves at 1/2/3/5-minute holds and at observed/1.2p costs. See
+#    docs/EURUSD_RESEARCH.md. Treat this as an unvalidated prototype, not edge.
 EXPANSION_MIN_CLOSE_POSITION = 0.70
 
 SCALPING_PROTOTYPES = (
@@ -454,11 +457,11 @@ def scalp_expansion(
 ) -> Decision:
     """Follow a volatility-expansion break outside both the Bollinger band and 20-bar range.
 
-    Across 71,939 real EUR/USD M1 bars, fading >=2-sigma stretches lost in both
-    Train (-0.45 gross pips) and Out-of-Sample (-0.86 gross pips), while riding
-    breaks that cleared the 20-bar extreme on a decisive close with EMA trend
-    alignment stayed net positive after charging the 1.2-pip spread in both
-    splits (+0.378 Train, +0.382 OOS).
+    This describes the hypothesis, not an established edge. A prior internal
+    benchmark reported +0.378/+0.382 net pips/trade, but independent tick-derived
+    2020 testing of this exact callable was negative in both halves at 1/2/3/5m
+    holds and both observed and 1.2p costs. See docs/EURUSD_RESEARCH.md. Keep it
+    as an unvalidated prototype; do not interpret a BUY/SELL vote as evidence.
     """
     guard = _cost_guard(features, spread_pips, probability_up)
     if guard is not None:

@@ -1874,7 +1874,7 @@ class OperatorRuntime:
                         "oos_net": 0.338,
                     },
                     {
-                        "variant": "scalp_expansion Prototype (active)",
+                        "variant": "scalp_expansion prior benchmark (not independently reproduced)",
                         "train_wr": 54.86,
                         "train_net": 0.378,
                         "oos_wr": 55.02,
